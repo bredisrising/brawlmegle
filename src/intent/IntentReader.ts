@@ -157,7 +157,7 @@ export class IntentReader {
     // Legs off-screen (upper-body framing) or a limb MediaPipe can't see: don't guess.
     const visible = def.kind === 'arm'
       ? tipPt.visibility > 0.3 && root.visibility > 0.5
-      : body.fullBody && tipPt.visibility > 0.5 && midPt.visibility > 0.5;
+      : body.fullBodyFor > 1000 && tipPt.visibility > 0.5 && midPt.visibility > 0.5;
     // Arms: relative to the shoulder, so leaning and ducking don't look like punches.
     // Legs: height is measured from the usual hip height, so when the hips drop in a duck the knees
     // don't seem to rise.
@@ -207,7 +207,9 @@ export class IntentReader {
         // Loading up (dropping for an uppercut, cocking out for a hook): the strike will start from here.
         s.anchor = clonePair(now);
       }
-      if (visible && outward > cfg.onsetSpeed && disp > cfg.onsetDist && (strikeLike(def, tTip, tMid, disp) || extensionStrike(def, tTip, tExt, disp))) {
+      // A hand dropping fast (back to the lap, or lowering the guard) can't be starting a punch.
+      const dropping = def.kind === 'arm' && vel.tip.y < -1.2;
+      if (visible && !dropping && outward > cfg.onsetSpeed && disp > cfg.onsetDist && (strikeLike(def, tTip, tMid, disp) || extensionStrike(def, tTip, tExt, disp))) {
         Object.assign(s, { phase: 'onset', since: t, peakDisp: disp, peakSpeed: outward, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, anchorTip: { x: tipPt.p.x - tTip.x, y: tipPt.p.y - tTip.y, z: tipPt.p.z } });
         out.push({ kind: 'anticipate', limb: name, t });
       }
@@ -231,7 +233,9 @@ export class IntentReader {
       const lift = Math.max(s.peak.y, s.peakMidRise);
       // Holding a block, small adjustments aren't punches: it takes a bigger motion to strike out of the shell.
       const needed = def.kind === 'arm' && this.guardUp ? cfg.strikeDist * 1.3 : cfg.strikeDist;
-      const isStrike = s.peakDisp >= needed && (def.kind === 'arm' || lift >= this.config.legRise)
+      // Punches don't travel down: an arm straightening as the hand drops (back to the lap) isn't a strike.
+      const goingDown = def.kind === 'arm' && tTip.y < -0.15 && tTip.y < -0.5 * len(tTip);
+      const isStrike = s.peakDisp >= needed && !goingDown && (def.kind === 'arm' || lift >= this.config.legRise)
         && !(def.kind === 'arm' && raisingGuard(body, s.anchorTip, tipPt.p, this.config.guard.radius));
       if (!isStrike) {
         s.phase = 'idle';
@@ -249,9 +253,9 @@ export class IntentReader {
         onsetT: s.since,
         // Straight punch if the elbow straightened a lot, or if the elbow moved but the hand barely moved in the
         // image: that's a fist coming at the camera. Hooks and uppercuts move the hand a lot with the elbow bent.
-        style: def.kind === 'arm' && (s.peakExt > len(s.peak) || s.peakExt > 0.15 || len(s.peak) < 0.6 * s.peakMidTravel)
+        style: def.kind === 'arm' && Math.abs(s.peak.x) <= 0.45 && (s.peakExt > len(s.peak) || s.peakExt > 0.15 || len(s.peak) < 0.6 * s.peakMidTravel)
           ? 'straight'
-          : classify(def.kind, dir, strikeOut, s.peakTip, s.peakMid, s.peakMidOut),
+          : classify(def.kind, dir, strikeOut, s.peakTip, s.peakMid, s.peakMidOut, s.peak, s.peakMidRise),
         height: heightOf(def.kind, s.peakTip, body),
         dir: { out: strikeOut, up: dir.y, fwd: dir.z },
         speed: clamp(0.8 + 0.5 * (speedRatio - 0.6), 0.8, 1.3),
@@ -292,7 +296,7 @@ export class IntentReader {
 
     // Jump: the hips rise above their usual height. A little bounce counts; nobody has to leave the floor.
     // Needs visible hips: when sitting, "hips" are estimated from the shoulders and every bob would count.
-    if (body.fullBody && body.root.y > cfg.jump.rise && body.root.vy > cfg.jump.speed && t - this.lastCore.jump > cfg.coreCooldownMs) {
+    if (body.fullBodyFor > 1000 && body.root.y > cfg.jump.rise && body.root.vy > cfg.jump.speed && t - this.lastCore.jump > cfg.coreCooldownMs) {
       this.lastCore.jump = t;
       out.push({ kind: 'jump', t, power: clamp(body.root.y / (cfg.jump.rise * 3), 0.3, 1) });
     }
@@ -405,11 +409,14 @@ function raisingGuard(body: Body, start: Vec3, end: Vec3, radius: number) {
   return startedLow && endsUp;
 }
 
-function classify(kind: 'arm' | 'leg', dir: Vec3, out: number, tip: Vec3, mid: Vec3, midOut: number): StrikeStyle {
+function classify(kind: 'arm' | 'leg', dir: Vec3, out: number, tip: Vec3, mid: Vec3, midOut: number, travel: Vec3, midRise: number): StrikeStyle {
   // Kick: the foot comes up near knee height. Knee strike: the knee rises with the foot tucked under it.
   if (kind === 'leg') return tip.y > mid.y - 0.3 ? 'kick' : 'knee';
-  if (dir.y > 0.6) return 'upper';
-  // Hook: the hand sweeps sideways AND the elbow flares out. A cross also drifts inward, but its elbow stays tucked.
+  // A big sideways sweep is a hook (or a haymaker), however straight the arm.
+  if (Math.abs(travel.x) > 0.45 && Math.abs(out) > 0.6) return 'hook';
+  // Uppercut: the fist drives up much more than the elbow. A punch at the camera lifts the elbow more.
+  if (dir.y > 0.6 && travel.y > 0.3 && travel.y > 1.5 * midRise) return 'upper';
+  // Smaller sideways swing with the elbow flared: a tight hook. A cross drifts inward but stays tucked.
   if (Math.abs(out) > 0.6 && midOut > 0.05) return 'hook';
   return 'straight';
 }

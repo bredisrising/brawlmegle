@@ -78,6 +78,8 @@ export type Body = {
   scale: number;
   /** Whether hips are visible (full-body framing) or the body unit falls back to shoulder width. */
   fullBody: boolean;
+  /** How long (ms) full-body framing has held steadily. Jumps and kicks wait for this. */
+  fullBodyFor: number;
   /**
    * Elbow angles in degrees (180 = straight) from MediaPipe's 3D world landmarks, and how fast they open.
    * A straight punch at the camera barely moves the wrist in the image, but the elbow still straightens.
@@ -101,6 +103,9 @@ export class PosePreprocessor {
   private unitHome = 0;
   private worldUnitHome = 0;
   private home: { x: number; y: number } | null = null;
+  /** Full-body (hips) mode with hysteresis, so hips at the edge of the frame don't flip it every frame. */
+  private fullBodyMode = false;
+  private fullBodySince = 0;
 
   constructor(config: PreprocessConfig = DEFAULT_PREPROCESS) {
     this.config = config;
@@ -137,6 +142,7 @@ export class PosePreprocessor {
     this.unitHome = 0;
     this.worldUnitHome = 0;
     this.home = null;
+    this.fullBodyMode = false;
   }
 
   /** Returns null for repeated or unusable frames; callers keep the previous Body. */
@@ -161,7 +167,7 @@ export class PosePreprocessor {
     raw = this.fixSwaps(raw);
 
     const { minVisibility, holdMs, maxSpeed } = this.config;
-    const unitGuess = this.unitHome || bodyUnit(raw).size;
+    const unitGuess = this.unitHome || bodyUnit(raw, this.fullBodyMode).size;
     const filtered: Raw[] = raw.map((point, i) => {
       const f = this.filters[i];
       const px = f.x.value;
@@ -182,8 +188,19 @@ export class PosePreprocessor {
     });
 
     // Body unit: torso length (shoulder center to hip center). Falls back to shoulder width when hips are off-screen.
-    const unit = bodyUnit(filtered);
-    const worldUnit = bodyUnit(frame.world).size;
+    // Switch body-measuring mode only when hips are clearly in or out of view, and recalibrate when it does:
+    // the two modes measure slightly differently, and a sudden change would look like a jump.
+    const hipVis = Math.min(filtered[LM.lHip].visibility, filtered[LM.rHip].visibility);
+    const wasFull = this.fullBodyMode;
+    if (!this.fullBodyMode && hipVis > 0.75) (this.fullBodyMode = true), (this.fullBodySince = frame.t);
+    else if (this.fullBodyMode && hipVis < 0.35) this.fullBodyMode = false;
+    if (wasFull !== this.fullBodyMode) {
+      this.unitHome = 0;
+      this.worldUnitHome = 0;
+      this.home = null;
+    }
+    const unit = bodyUnit(filtered, this.fullBodyMode);
+    const worldUnit = bodyUnit(frame.world, this.fullBodyMode).size;
     const k = dt > 0 ? 1 - Math.exp(-dt / this.config.homeSeconds) : 1;
     this.unitHome = this.unitHome ? this.unitHome + k * (unit.size - this.unitHome) : unit.size;
     this.worldUnitHome = this.worldUnitHome ? this.worldUnitHome + k * (worldUnit - this.worldUnitHome) : worldUnit;
@@ -241,7 +258,10 @@ export class PosePreprocessor {
       vy: this.prev && dt > 0 ? (rootY - this.prev.root.y) / dt : 0,
     };
 
-    const body: Body = { t: frame.t, dt, points, root, scale: unit.size / U, fullBody: unit.fullBody, elbow };
+    const body: Body = {
+      t: frame.t, dt, points, root, scale: unit.size / U, fullBody: unit.fullBody,
+      fullBodyFor: this.fullBodyMode ? frame.t - this.fullBodySince : 0, elbow,
+    };
     this.prev = body;
     this.prevRaw = raw;
     return body;
@@ -265,14 +285,13 @@ export class PosePreprocessor {
   }
 }
 
-function bodyUnit(points: { x: number; y: number; visibility: number }[]) {
+function bodyUnit(points: { x: number; y: number; visibility: number }[], useHips: boolean) {
   const ls = points[LM.lShoulder];
   const rs = points[LM.rShoulder];
   const lh = points[LM.lHip];
   const rh = points[LM.rHip];
   const shoulders = { x: (ls.x + rs.x) / 2, y: (ls.y + rs.y) / 2 };
-  const hipsVisible = lh.visibility > 0.5 && rh.visibility > 0.5;
-  if (hipsVisible) {
+  if (useHips) {
     const center = { x: (lh.x + rh.x) / 2, y: (lh.y + rh.y) / 2 };
     return { size: Math.max(1e-4, Math.hypot(shoulders.x - center.x, shoulders.y - center.y)), center, fullBody: true };
   }
