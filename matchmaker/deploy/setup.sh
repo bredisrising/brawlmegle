@@ -179,6 +179,13 @@ server {
     proxy_set_header Host \$host;
     proxy_read_timeout 120s;
   }
+  # The forge (scan -> fighter), running as brawlegle-forge (forge/deploy/setup-forge.sh). 502 until it's installed.
+  location /api/ {
+    proxy_pass http://127.0.0.1:8787;
+    proxy_set_header Host \$host;
+    proxy_read_timeout 120s;
+    client_max_body_size 25m;
+  }
   # Static dev tools (intent tuner, depth test, scan test), each copied to /var/www/brawlegle/<name>/.
   location ~ ^/(tuner|depth|scan)/ {
     root /var/www/brawlegle;

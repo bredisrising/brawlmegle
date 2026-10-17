@@ -2,11 +2,14 @@
  * Brawlegle forge server: scan frames in, fighter out (brief, model sheet, card art; 3D model later).
  * Holds the API keys so the browser never sees them. Matches src/forge/forge.ts:
  *
- *   POST /api/forge         { name, frames: [front, left, right] }  ->  { id }
- *   GET  /api/forge/:id     ->  ForgedFighter (+ sheetUrl, timings, error)
- *   GET  /api/fighters      ->  ready fighters, newest first
+ *   POST /api/forge              { name, username?, frames: [front, left, right] }  ->  { id }
+ *   GET  /api/forge/:id          ->  ForgedFighter (+ sheetUrl, timings, error)
+ *   GET  /api/fighters           ->  ready fighters, newest first
+ *   GET  /api/profiles/:username ->  { username, fighter: latest ready fighter | null, forging: id | null }
  *
- * Fighters are saved under data/<id>/. A dev page for testing likeness is at /.
+ * Usernames are a light "log in": type yours on any laptop and your fighter comes back. Fighters are saved
+ * under FORGE_DATA (default data/) in <id>/. A dev page for testing likeness is at /.
+ * When exposed publicly, set FORGE_ACCESS_KEY (clients send it as x-forge-key) and keep the hourly/daily caps.
  */
 import "./env.js";
 import http from "node:http";
@@ -31,7 +34,13 @@ const ALLOWED_ORIGINS = (
   .filter(Boolean);
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
 const FILES = /^(front|left|right)\.(jpg|png)$|^(sheet|card)\.png$|^(model|rigged)\.glb$/;
-const DATA = new URL("./data/", import.meta.url);
+const DATA = process.env.FORGE_DATA ? new URL(`file://${process.env.FORGE_DATA.replace(/\/?$/, "/")}`) : new URL("./data/", import.meta.url);
+const ACCESS_KEY = process.env.FORGE_ACCESS_KEY ?? "";
+const MAX_PER_HOUR = Number(process.env.FORGE_MAX_PER_HOUR ?? 40);
+const MAX_PER_DAY = Number(process.env.FORGE_MAX_PER_DAY ?? 200);
+const USERNAME = /^[a-z0-9_.-]{1,24}$/;
+/** Usernames are case-insensitive and trimmed. Returns null if it isn't a usable username. */
+const normalizeUsername = (u) => (typeof u === "string" && USERNAME.test(u.trim().toLowerCase()) ? u.trim().toLowerCase() : null);
 const devPage = fs.readFileSync(new URL("./public/index.html", import.meta.url));
 
 /** @type {Map<string, object>} */
@@ -117,7 +126,7 @@ async function handle(req, res) {
   }
   if (req.method === "OPTIONS") {
     res.setHeader("access-control-allow-methods", "GET, POST");
-    res.setHeader("access-control-allow-headers", "content-type");
+    res.setHeader("access-control-allow-headers", "content-type, x-forge-key");
     // Chrome/Edge ask before a public https page (the hosted scan page) talks to this machine's localhost.
     if (req.headers["access-control-request-private-network"] && origin && ALLOWED_ORIGINS.includes(origin)) {
       res.setHeader("access-control-allow-private-network", "true");
@@ -132,6 +141,15 @@ async function handle(req, res) {
   }
   if (req.method === "GET" && url.pathname === "/health") return json(res, 200, { ok: true, models });
 
+  if (req.method === "GET" && parts[0] === "api" && parts[1] === "profiles" && parts.length === 3) {
+    const username = normalizeUsername(decodeURIComponent(parts[2]));
+    if (!username) return json(res, 400, { error: "usernames are 1-24 letters, digits, _ . -" });
+    const mine = [...fighters.values()].filter((f) => f.username === username).sort((a, b) => b.createdAt - a.createdAt);
+    const ready = mine.find((f) => f.status === "ready");
+    const forging = mine.find((f) => f.status === "forging" || f.status === "scanning");
+    return json(res, 200, { username, fighter: ready ? view(ready, base) : null, forging: forging?.id ?? null });
+  }
+
   if (req.method === "GET" && url.pathname === "/api/fighters") {
     const ready = [...fighters.values()].filter((f) => f.status === "ready").sort((a, b) => b.createdAt - a.createdAt);
     return json(res, 200, ready.map((f) => view(f, base)));
@@ -139,8 +157,15 @@ async function handle(req, res) {
 
   if (req.method === "POST" && url.pathname === "/api/forge") {
     if (!req.headers["content-type"]?.startsWith("application/json")) return json(res, 415, { error: "send JSON" });
+    if (ACCESS_KEY && req.headers["x-forge-key"] !== ACCESS_KEY) return json(res, 403, { error: "bad forge key" });
     const active = [...fighters.values()].filter((f) => f.status === "forging").length;
     if (active >= MAX_ACTIVE) return json(res, 429, { error: `${active} forges already running, try again in a minute` });
+    // Every forge spends OpenAI and Tripo credits: cap them.
+    const now = Date.now();
+    const recent = [...fighters.values()].filter((f) => now - f.createdAt < 86_400_000);
+    if (recent.filter((f) => now - f.createdAt < 3_600_000).length >= MAX_PER_HOUR || recent.length >= MAX_PER_DAY) {
+      return json(res, 429, { error: "forge limit reached for now, try again later" });
+    }
     const body = await readJson(req);
     const frames = Array.isArray(body.frames) ? body.frames.map(decodeImage) : [];
     if (frames.length < 1 || frames.length > 3 || frames.includes(null)) {
@@ -149,6 +174,7 @@ async function handle(req, res) {
     const fighter = {
       id: crypto.randomUUID(),
       name: typeof body.name === "string" ? body.name.slice(0, 40) : "",
+      username: normalizeUsername(body.username),
       status: "scanning",
       createdAt: Date.now(),
       timings: {},
