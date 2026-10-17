@@ -19,6 +19,8 @@ export const models = { brief: BRIEF_MODEL, sheet: IMAGE_MODEL, card: CARD_MODEL
 const TRIPO = "https://openapi.tripo3d.ai/v3";
 const TRIPO_MODEL = process.env.FORGE_TRIPO_MODEL ?? "P1-20260311"; // P series: low poly, clean topology
 const FACE_LIMIT = Number(process.env.FORGE_FACE_LIMIT ?? 6000);
+/** v1.0 is Tripo's humanoid (biped) rigger; v3.0-20260909 is newer and opt-in. */
+const RIG_MODEL = process.env.FORGE_RIG_MODEL ?? "v1.0-20240301";
 
 async function tripo(path, init = {}, timeoutMs = 60_000) {
   const res = await fetch(TRIPO + path, {
@@ -78,7 +80,8 @@ export async function makeModel(sheet, onStep) {
   onStep("rig");
   let rigged = null;
   try {
-    const rig = await tripoJson("/animations/rig", { input: gen.task_id, rig_type: "biped", spec: "mixamo", out_format: "glb" });
+    // The rig model must be explicit: Tripo otherwise infers one from the generation and rejects it.
+    const rig = await tripoJson("/animations/rig", { input: gen.task_id, model: RIG_MODEL, rig_type: "biped", spec: "mixamo", out_format: "glb" });
     const rigOut = await tripoWait(rig.task_id);
     rigged = await download(rigOut.model_url);
   } catch (err) {
