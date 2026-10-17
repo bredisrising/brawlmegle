@@ -1,11 +1,17 @@
 import type { ForgedFighter, Phase, PlayerId, PoseFrame } from '../types';
 
-/** Messages to/from the AWS signaling server (WebSocket). It only brokers the handshake. */
+/**
+ * Messages to/from the AWS signaling server (WebSocket). It only brokers the handshake.
+ * `iceServers` carry short-lived TURN credentials, so use them instead of config.iceServers.
+ */
 export type SignalMessage =
+  | { type: 'hello'; id: string } // server -> either, on connect
   | { type: 'host' } // host -> server: open a room
-  | { type: 'room'; code: string } // server -> host: room code to show on screen
+  | { type: 'room'; code: string; iceServers: RTCIceServer[] } // server -> host: room code to show on screen
   | { type: 'join'; code: string } // client -> server
-  | { type: 'peer-joined' } // server -> host
+  | { type: 'joined'; code: string; iceServers: RTCIceServer[] } // server -> client, before the offer
+  | { type: 'peer-joined'; iceServers: RTCIceServer[] } // server -> host: create the connection and send the offer
+  | { type: 'peer-left' } // server -> host: client left signaling (also sent once P2P is up), room is open again
   | { type: 'signal'; data: RTCSessionDescriptionInit | RTCIceCandidateInit } // relayed to the other peer
   | { type: 'error'; message: string };
 

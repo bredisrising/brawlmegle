@@ -20,9 +20,11 @@ const DISCONNECT_GRACE_MS = 3_000;
  * The host creates the offer and both channels; the client answers and receives them.
  *
  * TODO (host):
- *  - host(): ask signaling for a room, wait for peer-joined, createConnection(),
- *    create both channels (attach() them), send the offer
- *  - keep signaling open after connecting so the client can rejoin
+ *  - host(): ask signaling for a room, wait for peer-joined, createConnection() with its
+ *    iceServers, create both channels (attach() them), send the offer
+ *  - keep signaling open after connecting so the client can rejoin (closing it deletes the room)
+ *  - peer-left also fires when the client closes signaling once P2P is up: watch the
+ *    RTCPeerConnection for drops instead, and ignore peer-joined while a match is running
  */
 export class Peer {
   readonly role: Role;
@@ -166,6 +168,8 @@ export class Peer {
     const pc = this.pc;
     try {
       if (msg.type === 'error') throw new Error(msg.message);
+      // Arrives before the offer, so the fresh TURN credentials apply before ICE gathering starts.
+      if (msg.type === 'joined') pc?.setConfiguration({ iceServers: msg.iceServers });
       if (msg.type !== 'signal' || !pc) return;
 
       if ('type' in msg.data) {
