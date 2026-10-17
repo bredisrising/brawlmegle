@@ -24,7 +24,7 @@ const BIND = process.env.FORGE_BIND ?? "127.0.0.1";
 const MAX_ACTIVE = Number(process.env.FORGE_MAX_ACTIVE ?? 3);
 const ALLOWED_ORIGINS = (
   process.env.FORGE_ALLOWED_ORIGINS ??
-  "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173"
+  "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173,https://54-149-60-196.sslip.io"
 )
   .split(",")
   .map((s) => s.trim())
@@ -118,6 +118,10 @@ async function handle(req, res) {
   if (req.method === "OPTIONS") {
     res.setHeader("access-control-allow-methods", "GET, POST");
     res.setHeader("access-control-allow-headers", "content-type");
+    // Chrome/Edge ask before a public https page (the hosted scan page) talks to this machine's localhost.
+    if (req.headers["access-control-request-private-network"] && origin && ALLOWED_ORIGINS.includes(origin)) {
+      res.setHeader("access-control-allow-private-network", "true");
+    }
     res.writeHead(204);
     return res.end();
   }

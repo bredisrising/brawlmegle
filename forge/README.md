@@ -38,7 +38,7 @@ Prompts live in `prompts.js`. They're v1 and the look isn't decided, so tune the
 | `FORGE_BRIEF_MODEL` | `gpt-5.4-mini` |
 | `FORGE_TRIPO_MODEL` / `FORGE_FACE_LIMIT` | `P1-20260311` / `6000` |
 | `FORGE_PORT` / `FORGE_BIND` | `8787` / `127.0.0.1` |
-| `FORGE_ALLOWED_ORIGINS` | the Vite dev and preview origins on localhost |
+| `FORGE_ALLOWED_ORIGINS` | the Vite dev and preview origins on localhost, plus the hosted test pages (https://54-149-60-196.sslip.io) |
 | `FORGE_MAX_ACTIVE` | `3` forges at once |
 
 Only pages from `FORGE_ALLOWED_ORIGINS` can call the API from a browser, so a random website can't spend our credits through it.
