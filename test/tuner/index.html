@@ -10,7 +10,7 @@
   body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 system-ui, sans-serif; }
   header { display: flex; gap: 8px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
   header h1 { font-size: 15px; margin: 0 12px 0 0; }
-  button, label.file { background: #252830; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; cursor: pointer; font: inherit; }
+  button, label.file, select { background: #252830; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; cursor: pointer; font: inherit; }
   button.on { background: #7f1d1d; border-color: #b91c1c; }
   #status { color: var(--dim); margin-left: auto; }
   main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 12px; padding: 12px; }
@@ -78,7 +78,7 @@
       <div class="fightbar"><span>stamina</span><div class="bar"><i id="st1"></i></div><span></span></div>
       <div class="arena"><b id="dot1"></b><b id="dot2"></b></div>
       <div id="phases" class="hint"></div>
-      <div class="row-buttons"><button id="fightReset">Reset fight</button><label><input id="dummyAttacks" type="checkbox"> dummy throws jabs</label><span class="hint">lean in/out to move</span></div>
+      <div class="row-buttons"><button id="fightReset">Reset fight</button><label>opponent <select id="dummyLevel"><option value="off">off (punching bag)</option><option value="easy">easy CPU</option><option value="normal">normal CPU</option><option value="hard">hard CPU</option></select></label><span class="hint">lean in/out to move</span></div>
       <div id="fightLog"></div>
     </div>
     <div class="panel" id="results" hidden><h2>Guided test results</h2><div id="resultsBody"></div></div>
