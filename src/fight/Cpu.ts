@@ -84,7 +84,8 @@ export class Cpu {
   private rng!: () => number;
   private mode: Mode = 'neutral';
   private plan: AttackMove[] = [];
-  private nextAttack = 0;
+  /** -1 until the first think(): timers count from whatever tick it starts on. */
+  private nextAttack = -1;
   private windupUntil = 0;
   private giveUpAt = 0;
   private retreatUntil = 0;
@@ -111,7 +112,7 @@ export class Cpu {
     this.rng = mulberry32(this.seed * 2654435761 + (this.player === 'p1' ? 1 : 2));
     this.mode = 'neutral';
     this.plan = [];
-    this.nextAttack = this.int([60, 120]);
+    this.nextAttack = -1;
     this.windupUntil = this.giveUpAt = this.retreatUntil = this.guardUntil = 0;
     this.holdGuard = false;
     this.reactions = [];
@@ -128,6 +129,7 @@ export class Cpu {
     const d = engine.distance();
     const t = (tick * 1000) / 60;
     if (me.phase === 'ko' || opp.phase === 'ko') return { commands, stance: this.stance(false, 0) };
+    if (this.nextAttack < 0) this.nextAttack = tick + this.int([60, 120]);
 
     this.watch(engine, me, opp, d, tick);
 
