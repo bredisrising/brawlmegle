@@ -12,7 +12,80 @@ const IMAGE_QUALITY = process.env.FORGE_IMAGE_QUALITY ?? "medium";
 /** "high" keeps faces closer to the photos. Only gpt-image-1 models accept it; gpt-image-2 rejects it. */
 const INPUT_FIDELITY = process.env.FORGE_INPUT_FIDELITY ?? "high";
 
-export const models = { brief: BRIEF_MODEL, sheet: IMAGE_MODEL, card: CARD_MODEL, quality: IMAGE_QUALITY };
+export const models = { brief: BRIEF_MODEL, sheet: IMAGE_MODEL, card: CARD_MODEL, quality: IMAGE_QUALITY, threeD: process.env.TRIPO_API_KEY ? "tripo P1 + mixamo rig" : "off (no TRIPO_API_KEY)" };
+
+// --- Tripo (image -> low-poly 3D model -> Mixamo-rigged GLB) ------------------------------------------
+// https://developers.tripo3d.ai/llms.txt. Output URLs expire after 5 minutes, so models are downloaded at once.
+const TRIPO = "https://openapi.tripo3d.ai/v3";
+const TRIPO_MODEL = process.env.FORGE_TRIPO_MODEL ?? "P1-20260311"; // P series: low poly, clean topology
+const FACE_LIMIT = Number(process.env.FORGE_FACE_LIMIT ?? 6000);
+
+async function tripo(path, init = {}, timeoutMs = 60_000) {
+  const res = await fetch(TRIPO + path, {
+    ...init,
+    headers: { authorization: `Bearer ${process.env.TRIPO_API_KEY}`, ...init.headers },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || body.code !== 0) throw new Error(`Tripo ${path} ${res.status}: ${body.message ?? body.msg ?? JSON.stringify(body).slice(0, 200)}`);
+  return body.data;
+}
+
+const tripoJson = (path, payload) =>
+  tripo(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+
+/** Polls a Tripo task until it finishes; returns its output. */
+async function tripoWait(taskId, onProgress, timeoutMs = 300_000) {
+  const start = Date.now();
+  for (;;) {
+    const task = await tripo(`/tasks/${taskId}`);
+    if (task.status === "success") return task.output;
+    if (["failed", "cancelled", "banned", "expired", "unknown"].includes(task.status)) throw new Error(`Tripo task ${task.status}`);
+    onProgress?.(task.progress ?? 0);
+    if (Date.now() - start > timeoutMs) throw new Error("Tripo task timed out");
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+}
+
+async function download(url) {
+  const res = await fetch(url, { signal: AbortSignal.timeout(120_000) });
+  if (!res.ok) throw new Error(`download ${res.status}`);
+  return Buffer.from(await res.arrayBuffer());
+}
+
+/**
+ * Model sheet -> rigged GLB. Returns { model, rigged } as buffers; `rigged` is null if rigging failed, so the
+ * game can still use the static model (or its default fighter).
+ */
+export async function makeModel(sheet, onStep) {
+  const form = new FormData();
+  form.append("file", new Blob([sheet], { type: "image/png" }), "sheet.png");
+  const { file_token } = await tripo("/files", { method: "POST", body: form });
+
+  onStep("model");
+  const gen = await tripoJson("/generation/image-to-model", {
+    input: file_token,
+    model: TRIPO_MODEL,
+    face_limit: FACE_LIMIT,
+    texture: true,
+    pbr: false,
+    texture_version: "v3.5-20260815",
+    texture_quality: "fast",
+  });
+  const genOut = await tripoWait(gen.task_id);
+  const model = await download(genOut.model_url ?? genOut.pbr_model_url);
+
+  onStep("rig");
+  let rigged = null;
+  try {
+    const rig = await tripoJson("/animations/rig", { input: gen.task_id, rig_type: "biped", spec: "mixamo", out_format: "glb" });
+    const rigOut = await tripoWait(rig.task_id);
+    rigged = await download(rigOut.model_url);
+  } catch (err) {
+    console.warn("rig failed, using the static model:", err.message);
+  }
+  return { model, rigged };
+}
 
 async function openai(path, init, timeoutMs) {
   const res = await fetch(API + path, {
@@ -89,13 +162,28 @@ export async function runForge(job, frames, store) {
     const sheet = await timed("sheet", () => editImage(frames, sheetPrompt(job.brief)));
     job.sheetUrl = store.write("sheet.png", sheet);
 
-    // The card and the 3D model both only need the sheet, so they run side by side.
-    // TODO: start the image-to-3D + rig job here once we've picked a provider; until then glbUrl stays empty
-    // and the game falls back to the stock fighter.
+    // The card and the 3D model both only need the sheet, so they run side by side. Without a Tripo key (or if
+    // it fails) glbUrl stays empty and the game uses its default fighter.
     job.step = "model";
     store.save();
-    const card = await timed("card", () => editImage([{ data: sheet, type: "image/png" }], cardPrompt(job.brief), CARD_MODEL));
-    job.cardUrl = store.write("card.png", card);
+    const cardJob = timed("card", () => editImage([{ data: sheet, type: "image/png" }], cardPrompt(job.brief), CARD_MODEL)).then((card) => {
+      job.cardUrl = store.write("card.png", card);
+      store.save();
+    });
+    const modelJob = process.env.TRIPO_API_KEY
+      ? timed("model", () => makeModel(sheet, (step) => ((job.step = step), store.save())))
+          .then(({ model, rigged }) => {
+            job.modelUrl = store.write("model.glb", model);
+            if (rigged) job.glbUrl = store.write("rigged.glb", rigged);
+            else job.glbUrl = job.modelUrl;
+            job.rigged = Boolean(rigged);
+          })
+          .catch((err) => {
+            job.modelError = String(err.message ?? err);
+            console.warn("3D step failed:", job.modelError);
+          })
+      : Promise.resolve();
+    await Promise.all([cardJob, modelJob]);
 
     job.status = "ready";
     delete job.step;

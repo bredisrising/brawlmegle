@@ -8,16 +8,12 @@
  *
  * Fighters are saved under data/<id>/. A dev page for testing likeness is at /.
  */
+import "./env.js";
 import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { runForge, models } from "./pipeline.js";
 
-for (const file of ["../.env", ".env"]) {
-  try {
-    process.loadEnvFile(new URL(file, import.meta.url));
-  } catch {}
-}
 if (!process.env.OPENAI_API_KEY) {
   console.error("OPENAI_API_KEY is missing. Put it in the repo root .env");
   process.exit(1);
@@ -34,7 +30,7 @@ const ALLOWED_ORIGINS = (
   .map((s) => s.trim())
   .filter(Boolean);
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
-const FILES = /^(front|left|right)\.(jpg|png)$|^(sheet|card)\.png$/;
+const FILES = /^(front|left|right)\.(jpg|png)$|^(sheet|card)\.png$|^(model|rigged)\.glb$/;
 const DATA = new URL("./data/", import.meta.url);
 const devPage = fs.readFileSync(new URL("./public/index.html", import.meta.url));
 
@@ -76,7 +72,7 @@ function decodeImage(value) {
 /** Fighter JSON with absolute URLs, so the game can use them directly. */
 function view(fighter, base) {
   const out = { ...fighter };
-  for (const key of ["sheetUrl", "cardUrl", "glbUrl"]) if (out[key]?.startsWith("/")) out[key] = base + out[key];
+  for (const key of ["sheetUrl", "cardUrl", "glbUrl", "modelUrl"]) if (out[key]?.startsWith("/")) out[key] = base + out[key];
   return out;
 }
 
@@ -171,7 +167,8 @@ async function handle(req, res) {
     if (parts.length === 4 && FILES.test(parts[3])) {
       const file = new URL(`${fighter.id}/${parts[3]}`, DATA);
       if (!fs.existsSync(file)) return json(res, 404, { error: "not ready" });
-      res.writeHead(200, { "content-type": parts[3].endsWith(".png") ? "image/png" : "image/jpeg" });
+      const type = parts[3].endsWith(".png") ? "image/png" : parts[3].endsWith(".glb") ? "model/gltf-binary" : "image/jpeg";
+      res.writeHead(200, { "content-type": type });
       return fs.createReadStream(file).pipe(res);
     }
   }
@@ -186,5 +183,5 @@ http
     }),
   )
   .listen(PORT, BIND, () => {
-    console.log(`forge on http://${BIND}:${PORT} (brief ${models.brief}, sheet ${models.sheet}, card ${models.card} @ ${models.quality})`);
+    console.log(`forge on http://${BIND}:${PORT} (brief ${models.brief}, sheet ${models.sheet}, card ${models.card} @ ${models.quality}, 3D ${models.threeD})`);
   });
