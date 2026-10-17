@@ -26,7 +26,7 @@ const LIMBS: Record<LimbName, LimbDef> = {
   legR: { root: LM.rHip, tip: LM.rAnkle, mid: LM.rKnee, side: -1, kind: 'leg' },
 };
 /** How much the middle joint counts next to the tip. */
-const MID_WEIGHT = 0.8;
+const MID_WEIGHT = 1.0;
 /** How much elbow straightening counts (per 90° opened), next to tip travel in body units. */
 const EXT_WEIGHT = 0.6;
 /** Elbow angles from one camera wobble; ignore the first ~15° of opening. */
@@ -54,6 +54,12 @@ type LimbState = {
   peakMidRise: number;
   /** Elbow-opening part of the displacement at the peak. */
   peakExt: number;
+  /** How far the middle joint (elbow/knee) traveled at the peak. */
+  peakMidTravel: number;
+  /** How far the elbow flared outward at the peak (hooks flare, straights stay tucked). */
+  peakMidOut: number;
+  /** Where the hand was (body space) when the motion started. */
+  anchorTip: Vec3;
   history: { t: number; d: Vec3 }[];
   typicalSpeed: number;
   // Debug readouts
@@ -202,25 +208,31 @@ export class IntentReader {
         s.anchor = clonePair(now);
       }
       if (visible && outward > cfg.onsetSpeed && disp > cfg.onsetDist && (strikeLike(def, tTip, tMid, disp) || extensionStrike(def, tTip, tExt, disp))) {
-        Object.assign(s, { phase: 'onset', since: t, peakDisp: disp, peakSpeed: outward, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt });
+        Object.assign(s, { phase: 'onset', since: t, peakDisp: disp, peakSpeed: outward, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, anchorTip: { x: tipPt.p.x - tTip.x, y: tipPt.p.y - tTip.y, z: tipPt.p.z } });
         out.push({ kind: 'anticipate', limb: name, t });
       }
       return;
     }
 
     if (s.phase === 'onset') {
-      if (disp > s.peakDisp) Object.assign(s, { peakDisp: disp, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt });
+      if (disp > s.peakDisp) Object.assign(s, { peakDisp: disp, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side });
       s.peakSpeed = Math.max(s.peakSpeed, outward);
       // Confirm as soon as it has traveled far enough (don't wait for the arm to slow down: that costs most
       // of the punch). Give up if it slows down short of that.
-      // Arms only: a leg needs its full rise to tell a knee from a kick.
-      const farEnough = def.kind === 'arm' && s.peakDisp >= cfg.strikeDist && t - s.since >= 30;
+      // Arms only: a leg needs its full rise to tell a knee from a kick. A hand starting low waits too, to see
+      // whether it's an uppercut or just the guard coming up.
+      const shoulderY = (body.points[LM.lShoulder].p.y + body.points[LM.rShoulder].p.y) / 2;
+      const fromLow = s.anchorTip.y < shoulderY - 0.5;
+      const farEnough = def.kind === 'arm' && !fromLow && s.peakDisp >= cfg.strikeDist && t - s.since >= 30;
       const slowing = outward < s.peakSpeed * 0.35 && t - s.since > 40;
       if (!farEnough && !slowing && t - s.since < cfg.maxWindupMs) return;
 
       // Legs must also lift (knee or foot) above where they usually sit, so stepping isn't kicking.
       const lift = Math.max(s.peak.y, s.peakMidRise);
-      const isStrike = s.peakDisp >= cfg.strikeDist && (def.kind === 'arm' || lift >= this.config.legRise);
+      // Holding a block, small adjustments aren't punches: it takes a bigger motion to strike out of the shell.
+      const needed = def.kind === 'arm' && this.guardUp ? cfg.strikeDist * 1.3 : cfg.strikeDist;
+      const isStrike = s.peakDisp >= needed && (def.kind === 'arm' || lift >= this.config.legRise)
+        && !(def.kind === 'arm' && raisingGuard(body, s.anchorTip, tipPt.p, this.config.guard.radius));
       if (!isStrike) {
         s.phase = 'idle';
         out.push({ kind: 'cancel', limb: name, t });
@@ -235,9 +247,11 @@ export class IntentReader {
         limb: name,
         t,
         onsetT: s.since,
-        // The elbow straightened a lot: a straight punch, even if the hand also rose (punching from a low,
-        // seated rest looks like an uppercut otherwise). Uppercuts and hooks keep the elbow bent.
-        style: s.peakExt > len(s.peak) || s.peakExt > 0.2 ? 'straight' : classify(def.kind, dir, strikeOut, s.peakTip, s.peakMid),
+        // Straight punch if the elbow straightened a lot, or if the elbow moved but the hand barely moved in the
+        // image: that's a fist coming at the camera. Hooks and uppercuts move the hand a lot with the elbow bent.
+        style: def.kind === 'arm' && (s.peakExt > len(s.peak) || s.peakExt > 0.15 || len(s.peak) < 0.6 * s.peakMidTravel)
+          ? 'straight'
+          : classify(def.kind, dir, strikeOut, s.peakTip, s.peakMid, s.peakMidOut),
         height: heightOf(def.kind, s.peakTip, body),
         dir: { out: strikeOut, up: dir.y, fwd: dir.z },
         speed: clamp(0.8 + 0.5 * (speedRatio - 0.6), 0.8, 1.3),
@@ -378,11 +392,25 @@ function windingUp(def: LimbDef, tip: Vec3) {
   return travel > 0.12 && (tip.y < -0.6 * travel || tip.x * def.side > 0.6 * travel);
 }
 
-function classify(kind: 'arm' | 'leg', dir: Vec3, out: number, tip: Vec3, mid: Vec3): StrikeStyle {
+/**
+ * Bringing a hand up from the lap or a relaxed low position into the guard zone (by the face) is putting
+ * your guard up, not an uppercut. Real uppercuts start from guard height.
+ */
+function raisingGuard(body: Body, start: Vec3, end: Vec3, radius: number) {
+  const nose = body.points[LM.nose].p;
+  const shoulderY = (body.points[LM.lShoulder].p.y + body.points[LM.rShoulder].p.y) / 2;
+  const startedLow = start.y < shoulderY - 0.5;
+  // Ends by the face, or anywhere around shoulder height (some people hold their hands lower).
+  const endsUp = Math.hypot(end.x - nose.x, end.y - nose.y) < radius * 1.2 || end.y > shoulderY - 0.25;
+  return startedLow && endsUp;
+}
+
+function classify(kind: 'arm' | 'leg', dir: Vec3, out: number, tip: Vec3, mid: Vec3, midOut: number): StrikeStyle {
   // Kick: the foot comes up near knee height. Knee strike: the knee rises with the foot tucked under it.
   if (kind === 'leg') return tip.y > mid.y - 0.3 ? 'kick' : 'knee';
   if (dir.y > 0.6) return 'upper';
-  if (Math.abs(out) > 0.6) return 'hook';
+  // Hook: the hand sweeps sideways AND the elbow flares out. A cross also drifts inward, but its elbow stays tucked.
+  if (Math.abs(out) > 0.6 && midOut > 0.05) return 'hook';
   return 'straight';
 }
 
@@ -404,7 +432,7 @@ function windupOf(s: LimbState, dir: Vec3) {
 function newLimb(): LimbState {
   return {
     phase: 'idle', rest: null, anchor: null, since: 0, peakDisp: 0, peakSpeed: 0,
-    peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, history: [], typicalSpeed: 4, disp: 0, out: 0,
+    peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, peakMidTravel: 0, peakMidOut: 0, anchorTip: { x: 0, y: 0, z: 0 }, history: [], typicalSpeed: 4, disp: 0, out: 0,
   };
 }
 
