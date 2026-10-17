@@ -101,7 +101,7 @@ describe('fight engine', () => {
 
 describe('resolver', () => {
   const strike = (limb: Intent & { kind: 'strike' } extends infer S ? S extends { limb: infer L } ? L : never : never, style: 'straight' | 'hook' | 'upper' | 'knee' | 'kick'): Intent =>
-    ({ kind: 'strike', limb, t: 0, onsetT: 0, style, height: 'high', dir: { out: 0, up: 0, fwd: 1 }, speed: 1, windup: 1, reach: 0.5 });
+    ({ kind: 'strike', limb, t: 0, onsetT: 0, style, height: 'high', dir: { out: 0, up: 0, fwd: 1 }, speed: 1, windup: 1, reach: 0.5, rawSpeed: 4 });
   const r = new Resolver();
 
   test('legs: knee up close, kick from range', () => {

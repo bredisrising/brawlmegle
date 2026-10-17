@@ -3,6 +3,7 @@
 import type { Intent, IntentConfig } from '../../src/intent/intents';
 import { DEFAULT_INTENT } from '../../src/intent/intents';
 import { runClip } from './clip';
+import type { StyleMatcher } from '../../src/intent/StyleMatcher';
 import { synthesize, type Label, type SynthOptions } from './synth';
 
 export type Score = {
@@ -19,8 +20,8 @@ export type EvalResult = { scores: Score[]; falsePositives: { kind: string; t: n
 
 const MATCH_SLACK_MS = 250;
 
-export function evaluate(frames: Parameters<typeof runClip>[0]['frames'], labels: Label[], config: IntentConfig = DEFAULT_INTENT): EvalResult {
-  const { intents } = runClip({ header: {}, frames }, config);
+export function evaluate(frames: Parameters<typeof runClip>[0]['frames'], labels: Label[], config: IntentConfig = DEFAULT_INTENT, matcher: StyleMatcher | null = null): EvalResult {
+  const { intents } = runClip({ header: {}, frames }, config, matcher);
   const used = new Set<Intent>();
   const scores = new Map<string, Score>();
   const score = (name: string) => {

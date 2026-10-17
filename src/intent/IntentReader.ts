@@ -1,6 +1,7 @@
 import type { AttackMove, Command, PlayerId, PoseFrame, Stance } from '../types';
 import { LM, PosePreprocessor, type Body, type BodyPoint, type Vec3 } from './preprocess';
 import { DEFAULT_INTENT, type Intent, type IntentConfig, type LimbConfig, type LimbName, type StrikeStyle } from './intents';
+import type { StyleMatcher } from './StyleMatcher';
 
 /**
  * PoseFrames -> what the player meant. One per player, runs on the host.
@@ -60,6 +61,8 @@ type LimbState = {
   peakMidOut: number;
   /** Where the hand was (body space) when the motion started. */
   anchorTip: Vec3;
+  /** Elbow angle (degrees) at the peak. */
+  peakElbow: number;
   history: { t: number; d: Vec3 }[];
   typicalSpeed: number;
   // Debug readouts
@@ -99,6 +102,8 @@ export class IntentReader {
   private guardUp = false;
   private stance: Stance;
   private debug: IntentDebug | null = null;
+  /** The player's calibration examples, if any. Decides straight/hook/upper instead of the built-in rules. */
+  private matcher: StyleMatcher | null = null;
 
   constructor(player: PlayerId, config: IntentConfig = DEFAULT_INTENT) {
     this.player = player;
@@ -106,6 +111,11 @@ export class IntentReader {
     this.pre = new PosePreprocessor(config.preprocess);
     this.limbs = Object.fromEntries(LIMB_NAMES.map((n) => [n, newLimb()])) as Record<LimbName, LimbState>;
     this.stance = untracked(player);
+  }
+
+  /** Use (or stop using, with null) a player's calibration examples for telling strikes apart. */
+  setMatcher(matcher: StyleMatcher | null) {
+    this.matcher = matcher;
   }
 
   /** Live tuning. */
@@ -210,14 +220,14 @@ export class IntentReader {
       // A hand dropping fast (back to the lap, or lowering the guard) can't be starting a punch.
       const dropping = def.kind === 'arm' && vel.tip.y < -1.2;
       if (visible && !dropping && outward > cfg.onsetSpeed && disp > cfg.onsetDist && (strikeLike(def, tTip, tMid, disp) || extensionStrike(def, tTip, tExt, disp))) {
-        Object.assign(s, { phase: 'onset', since: t, peakDisp: disp, peakSpeed: outward, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, anchorTip: { x: tipPt.p.x - tTip.x, y: tipPt.p.y - tTip.y, z: tipPt.p.z } });
+        Object.assign(s, { phase: 'onset', since: t, peakDisp: disp, peakSpeed: outward, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: legs ? 0 : body.elbow[side], anchorTip: { x: tipPt.p.x - tTip.x, y: tipPt.p.y - tTip.y, z: tipPt.p.z } });
         out.push({ kind: 'anticipate', limb: name, t });
       }
       return;
     }
 
     if (s.phase === 'onset') {
-      if (disp > s.peakDisp) Object.assign(s, { peakDisp: disp, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side });
+      if (disp > s.peakDisp) Object.assign(s, { peakDisp: disp, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: legs ? 0 : body.elbow[side] });
       s.peakSpeed = Math.max(s.peakSpeed, outward);
       // Confirm as soon as it has traveled far enough (don't wait for the arm to slow down: that costs most
       // of the punch). Give up if it slows down short of that.
@@ -247,21 +257,27 @@ export class IntentReader {
       const strikeOut = dir.x * def.side;
       const speedRatio = s.peakSpeed / s.typicalSpeed;
       s.typicalSpeed += 0.2 * (s.peakSpeed - s.typicalSpeed);
+      const features = def.kind === 'arm' ? strikeFeatures(def, s, root.p) : undefined;
+      const ruleStyle: StrikeStyle = def.kind === 'arm' && Math.abs(s.peak.x) <= 0.45 && (s.peakExt > len(s.peak) || s.peakExt > 0.15 || len(s.peak) < 0.6 * s.peakMidTravel)
+        ? 'straight'
+        : classify(def.kind, dir, strikeOut, s.peakTip, s.peakMid, s.peakMidOut, s.peak, s.peakMidRise);
+      const style = features && this.matcher ? this.matcher.decide(features, ruleStyle) : ruleStyle;
       out.push({
         kind: 'strike',
         limb: name,
         t,
         onsetT: s.since,
-        // Straight punch if the elbow straightened a lot, or if the elbow moved but the hand barely moved in the
-        // image: that's a fist coming at the camera. Hooks and uppercuts move the hand a lot with the elbow bent.
-        style: def.kind === 'arm' && Math.abs(s.peak.x) <= 0.45 && (s.peakExt > len(s.peak) || s.peakExt > 0.15 || len(s.peak) < 0.6 * s.peakMidTravel)
-          ? 'straight'
-          : classify(def.kind, dir, strikeOut, s.peakTip, s.peakMid, s.peakMidOut, s.peak, s.peakMidRise),
+        // The player's own examples win when calibrated. Otherwise: straight if the elbow straightened a lot, or
+        // if the elbow moved but the hand barely moved in the image (a fist coming at the camera); hooks and
+        // uppercuts move the hand a lot with the elbow bent.
+        style,
         height: heightOf(def.kind, s.peakTip, body),
         dir: { out: strikeOut, up: dir.y, fwd: dir.z },
         speed: clamp(0.8 + 0.5 * (speedRatio - 0.6), 0.8, 1.3),
         windup: windupOf(s, dir),
         reach: s.peakDisp,
+        rawSpeed: s.peakSpeed,
+        features,
       });
       s.phase = 'recover';
       s.since = t;
@@ -375,6 +391,24 @@ function toCommands(player: PlayerId, intents: Intent[]): Command[] {
   return commands;
 }
 
+/**
+ * The shape of an arm strike, mirrored so left and right arms compare: hand and elbow travel, how much the
+ * elbow opened, and where the hand started and ended relative to the shoulder.
+ */
+function strikeFeatures(def: LimbDef, s: LimbState, shoulder: Vec3): number[] {
+  const m = def.side;
+  return [
+    // Which arm, softly: same-arm examples count more (left and right look different at an angle).
+    m * 0.3,
+    s.peak.x * m, s.peak.y, s.peak.z,
+    s.peakMidOut, s.peakMidRise,
+    s.peakExt / EXT_WEIGHT,
+    s.peakElbow / 180,
+    (s.anchorTip.x - shoulder.x) * m, s.anchorTip.y - shoulder.y,
+    (s.peakTip.x - shoulder.x) * m, s.peakTip.y - shoulder.y,
+  ];
+}
+
 /** Strikes go forward, up, or across the body. Drops, pull-backs and outward wind-ups aren't strikes. */
 function strikeLike(def: LimbDef, tip: Vec3, mid: Vec3, disp: number) {
   const fwd = tip.z + mid.z;
@@ -451,7 +485,7 @@ function windupOf(s: LimbState, dir: Vec3) {
 function newLimb(): LimbState {
   return {
     phase: 'idle', rest: null, anchor: null, since: 0, peakDisp: 0, peakSpeed: 0,
-    peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, peakMidTravel: 0, peakMidOut: 0, anchorTip: { x: 0, y: 0, z: 0 }, history: [], typicalSpeed: 4, disp: 0, out: 0,
+    peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, peakMidTravel: 0, peakMidOut: 0, anchorTip: { x: 0, y: 0, z: 0 }, peakElbow: 0, history: [], typicalSpeed: 4, disp: 0, out: 0,
   };
 }
 

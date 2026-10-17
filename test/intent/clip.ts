@@ -4,6 +4,7 @@ import type { PoseFrame } from '../../src/types';
 import { IntentReader } from '../../src/intent/IntentReader';
 import type { Intent, IntentConfig } from '../../src/intent/intents';
 import { DEFAULT_INTENT } from '../../src/intent/intents';
+import type { StyleMatcher } from '../../src/intent/StyleMatcher';
 
 export type ClipFrame = PoseFrame | { t: number; missing: true };
 export type Clip = { header: Record<string, unknown>; frames: ClipFrame[] };
@@ -14,8 +15,9 @@ export function loadClip(path: string): Clip {
 }
 
 /** Feeds a clip through a fresh reader at its own timestamps. Returns every intent plus per-frame debug. */
-export function runClip(clip: Clip, config: IntentConfig = DEFAULT_INTENT) {
+export function runClip(clip: Clip, config: IntentConfig = DEFAULT_INTENT, matcher: StyleMatcher | null = null) {
   const reader = new IntentReader('p1', config);
+  reader.setMatcher(matcher);
   const intents: Intent[] = [];
   const trace: { t: number; debug: unknown }[] = [];
   for (const frame of clip.frames) {

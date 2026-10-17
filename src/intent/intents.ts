@@ -25,6 +25,10 @@ export type Intent =
       speed: number; // 0.8–1.3, relative to this player's own typical speed
       windup: number; // 0.8–1.3, how far they loaded up first
       reach: number; // peak displacement from rest, body units
+      /** Peak outward speed in body units per second (raw, not relative). */
+      rawSpeed: number;
+      /** Shape of the motion, for matching against a player's calibration examples (arms only). */
+      features?: number[];
     }
   | { kind: 'jump'; t: number; power: number }
   | { kind: 'duck'; t: number }
