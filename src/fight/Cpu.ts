@@ -183,7 +183,8 @@ export class Cpu {
         break;
       }
       case 'attack':
-        if (me.phase !== 'idle') break;
+        // Still swinging (or just threw this tick, e.g. a punish: the engine starts it on this step).
+        if (me.phase !== 'idle' || commands.some((c) => c.kind === 'attack')) break;
         // Follow-ups come as soon as it's free again, if it can afford them and they can reach.
         if (this.plan.length && me.stamina - MOVES[this.plan[0]].stamina >= STAMINA_FLOOR && d <= reach(this.plan[0]) + MAX_LUNGE) {
           commands.push(this.attack(this.plan.shift()!, d, t));
