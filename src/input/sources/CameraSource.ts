@@ -23,6 +23,38 @@ export class CameraSource implements InputSource {
     return this._latestFrame;
   }
 
+  /** Diagnostics for the tuner: what the camera actually delivers and how long MediaPipe takes. */
+  readonly stats = { width: 0, height: 0, fps: 0, detectMs: 0, timestamps: 'none' as 'capture' | 'callback' | 'none' };
+
+  /** The camera's real settings (it may not grant the 60 fps we ask for). */
+  get settings(): MediaTrackSettings | null {
+    return this.stream?.getVideoTracks()[0]?.getSettings() ?? null;
+  }
+
+  /**
+   * Short exposure (~1/250 s) cuts motion blur on fast punches, if the camera allows manual exposure
+   * (many Windows/Linux webcams do; MacBook cameras usually don't). Needs a bright room.
+   * Returns false if unsupported.
+   */
+  async setShortExposure(on: boolean): Promise<boolean> {
+    const track = this.stream?.getVideoTracks()[0];
+    const caps = (track?.getCapabilities?.() ?? {}) as MediaTrackCapabilities & { exposureMode?: string[]; exposureTime?: { min: number; max: number } };
+    if (!track || !caps.exposureMode?.includes('manual') || !caps.exposureTime) return false;
+    try {
+      if (!on) {
+        await track.applyConstraints({ advanced: [{ exposureMode: 'continuous' } as MediaTrackConstraintSet] });
+        return true;
+      }
+      // Two steps: exposureTime is ignored until manual mode is on. Units are 100 µs, so 40 = 1/250 s.
+      await track.applyConstraints({ advanced: [{ exposureMode: 'manual' } as MediaTrackConstraintSet] });
+      const time = Math.min(Math.max(40, caps.exposureTime.min), caps.exposureTime.max);
+      await track.applyConstraints({ advanced: [{ exposureTime: time } as MediaTrackConstraintSet] });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   get tracking() {
     return this._tracking;
   }
@@ -99,7 +131,10 @@ export class CameraSource implements InputSource {
   private schedule() {
     if (!this.running) return;
     if ('requestVideoFrameCallback' in this.video) {
-      this.frameRequest = this.video.requestVideoFrameCallback((now, meta) => this.detectFrame(meta.captureTime ?? now));
+      this.frameRequest = this.video.requestVideoFrameCallback((now, meta) => {
+        this.stats.timestamps = meta.captureTime === undefined ? 'callback' : 'capture';
+        this.detectFrame(meta.captureTime ?? now);
+      });
     } else {
       this.frameRequest = requestAnimationFrame(this.detectFrame);
     }
@@ -113,7 +148,14 @@ export class CameraSource implements InputSource {
     const now = Math.max(time, this.lastTimestamp + 1);
     this.lastTimestamp = now;
     if (this.video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      const started = performance.now();
       const result = this.landmarker.detectForVideo(this.video, now);
+      const took = performance.now() - started;
+      this.stats.detectMs += 0.1 * (took - this.stats.detectMs);
+      const settings = this.settings;
+      this.stats.width = this.video.videoWidth;
+      this.stats.height = this.video.videoHeight;
+      this.stats.fps = settings?.frameRate ?? 0;
       const selected = selectCenteredPose(result.landmarks);
       const image = selected < 0 ? undefined : result.landmarks[selected];
       const world = selected < 0 ? undefined : result.worldLandmarks[selected];

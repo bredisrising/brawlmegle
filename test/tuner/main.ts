@@ -167,7 +167,10 @@ function draw() {
 
   const out = lastOutput;
   const fps = frameTimes.length;
-  if (camera) $('status').textContent = `${fps} fps from camera · ${out?.stance.tracked ? 'tracking' : 'no body found'}${recording ? ` · recording ${recording.length} frames` : ''}`;
+  if (camera) {
+    const st = camera.stats;
+    $('status').textContent = `${fps} fps tracked (camera ${st.width}×${st.height} @ ${Math.round(st.fps)}) · MediaPipe ${st.detectMs.toFixed(0)} ms/frame · ${out?.stance.tracked ? 'tracking' : 'no body found'}${recording ? ` · recording ${recording.length} frames` : ''}`;
+  }
   const d = out?.debug;
   if (!d) return;
   $('limbs').innerHTML = (Object.keys(d.limbs) as LimbName[]).map((n) => {
@@ -263,6 +266,14 @@ const round = (v: number) => (Math.abs(v) >= 10 ? v.toFixed(0) : v.toFixed(2));
 $('copy').onclick = async () => {
   await navigator.clipboard.writeText(JSON.stringify(config, null, 2));
   $('status').textContent = 'config copied: paste it into DEFAULT_INTENT (src/intent/intents.ts) or send it over';
+};
+$<HTMLInputElement>('exposure').onchange = async (e) => {
+  const on = (e.target as HTMLInputElement).checked;
+  const ok = (await camera?.setShortExposure(on)) ?? false;
+  if (!ok) {
+    (e.target as HTMLInputElement).checked = false;
+    alert("This camera doesn't allow manual exposure. A bright light in front of you helps the same way.");
+  }
 };
 $('reset').onclick = () => {
   config = structuredClone(DEFAULT_INTENT);
