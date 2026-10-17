@@ -31,6 +31,46 @@ const ROOM_RE = /^[A-Za-z0-9_-]{1,32}$/;
 
 const testPage = fs.readFileSync(new URL("./public/index.html", import.meta.url));
 
+// Labeled movement samples from the intent tuner's guided test (pose points only, never video), used to
+// train the move reader. Capped so a misbehaving client can't fill the disk.
+const SAMPLES_DIR = process.env.SAMPLES_DIR ?? "";
+const MAX_SAMPLE_BYTES = 12 * 1024 * 1024;
+const MAX_SAMPLES_BYTES_TOTAL = 2 * 1024 * 1024 * 1024;
+let samplesBytes = 0;
+if (SAMPLES_DIR) {
+  fs.mkdirSync(SAMPLES_DIR, { recursive: true });
+  for (const f of fs.readdirSync(SAMPLES_DIR)) samplesBytes += fs.statSync(`${SAMPLES_DIR}/${f}`).size;
+}
+
+function saveSample(req, res) {
+  const cors = { "access-control-allow-origin": "*", "content-type": "application/json" };
+  if (!SAMPLES_DIR) return res.writeHead(503, cors).end(JSON.stringify({ error: "samples disabled" }));
+  const chunks = [];
+  let size = 0;
+  req.on("data", (c) => {
+    size += c.length;
+    if (size > MAX_SAMPLE_BYTES) req.destroy();
+    else chunks.push(c);
+  });
+  req.on("end", () => {
+    const body = Buffer.concat(chunks);
+    let header;
+    try {
+      header = JSON.parse(body.toString("utf8", 0, Math.min(body.length, 200_000)).split("\n")[0]);
+    } catch {
+      return res.writeHead(400, cors).end(JSON.stringify({ error: "first line must be a JSON header" }));
+    }
+    if (!Array.isArray(header.labels)) return res.writeHead(400, cors).end(JSON.stringify({ error: "header needs labels" }));
+    if (samplesBytes + body.length > MAX_SAMPLES_BYTES_TOTAL) return res.writeHead(507, cors).end(JSON.stringify({ error: "storage full" }));
+    const name = `${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomBytes(3).toString("hex")}.jsonl`;
+    fs.writeFile(`${SAMPLES_DIR}/${name}`, body, (err) => {
+      if (err) return res.writeHead(500, cors).end(JSON.stringify({ error: "write failed" }));
+      samplesBytes += body.length;
+      res.writeHead(201, cors).end(JSON.stringify({ ok: true, name }));
+    });
+  });
+}
+
 /**
  * @typedef {object} Client
  * @property {string} id
@@ -206,7 +246,12 @@ function onMessage(client, raw) {
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url ?? "/", "http://localhost");
-  if (url.pathname === "/health") {
+  if (url.pathname === "/samples" && req.method === "OPTIONS") {
+    res.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-methods": "POST", "access-control-allow-headers": "content-type" });
+    res.end();
+  } else if (url.pathname === "/samples" && req.method === "POST") {
+    saveSample(req, res);
+  } else if (url.pathname === "/health") {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ ok: true, clients: clients.size, waiting: queue.size, rooms: rooms.size, hosted: hosted.size }));
   } else if (url.pathname === "/") {

@@ -117,6 +117,7 @@ $('guided').onclick = async () => {
   setTimeout(() => (prompt.innerHTML = ''), 4000);
   showResults(guided);
   download(guided);
+  void upload(guided);
   guided = null;
 };
 
@@ -153,6 +154,21 @@ function showResults(g: NonNullable<typeof guided>) {
   });
   $('resultsBody').innerHTML = `<p>${hits}/${scored} moves caught.</p><table>${rows.join('')}</table>`;
   $('results').hidden = false;
+}
+
+/** Send the labeled session (pose points only, never video) to our server to train the move reader. */
+async function upload(g: NonNullable<typeof guided>) {
+  const base = location.hostname.endsWith('sslip.io') ? '' : 'https://54-149-60-196.sslip.io';
+  const header = { clip: 'guided test', model: new URLSearchParams(location.search).get('pose') ?? 'full', frames: g.frames.length, labels: g.labels, ua: navigator.userAgent };
+  const note = document.createElement('p');
+  note.className = 'hint';
+  try {
+    const res = await fetch(`${base}/samples`, { method: 'POST', headers: { 'content-type': 'text/plain' }, body: [header, ...g.frames].map((x) => JSON.stringify(x)).join('\n') + '\n' });
+    note.textContent = res.ok ? 'Uploaded to train the move reader. Thanks!' : `Upload failed (${res.status}); the file in Downloads works too.`;
+  } catch {
+    note.textContent = 'Upload failed (offline?); the file in Downloads works too.';
+  }
+  $('resultsBody').append(note);
 }
 
 function download(g: NonNullable<typeof guided>) {

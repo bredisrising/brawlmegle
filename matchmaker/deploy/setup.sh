@@ -44,6 +44,7 @@ SECRET=$(cat /etc/brawlegle/turn-secret)
 (umask 077 && cat > /etc/brawlegle/matchmaker.env <<EOF
 PORT=3000
 BIND=127.0.0.1
+SAMPLES_DIR=/var/lib/brawlegle/samples
 TURN_HOST=$TURN_DOMAIN
 TURN_SECRET=$SECRET
 EOF
@@ -72,6 +73,8 @@ PrivateDevices=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# Writable: /var/lib/brawlegle (training samples from the tuner's guided test).
+StateDirectory=brawlegle
 
 [Install]
 WantedBy=multi-user.target
@@ -167,6 +170,7 @@ server {
   server_name $DOMAIN;
   ssl_certificate $CERT/fullchain.pem;
   ssl_certificate_key $CERT/privkey.pem;
+  client_max_body_size 12m;
   location /ws {
     proxy_pass http://127.0.0.1:3000;
     proxy_http_version 1.1;
