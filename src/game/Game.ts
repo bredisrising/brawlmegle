@@ -2,6 +2,7 @@ import { Renderer } from '../director/Renderer';
 import { Effects } from '../director/Effects';
 import { FighterView } from '../director/FighterView';
 import { FightEngine } from '../fight/FightEngine';
+import { Resolver } from '../fight/Resolver';
 import { IntentReader } from '../intent/IntentReader';
 import { InputHub, createLocalSource, type InputSource } from '../input';
 import { MockSource } from '../input/sources/MockSource';
@@ -37,6 +38,8 @@ export class Game {
   readonly renderer: Renderer;
   readonly input = new InputHub();
   private readonly fight = new FightEngine();
+  /** Intent + fight state -> the move that happens (lunges, knee vs kick, punishing a duck...). */
+  private readonly resolver = new Resolver();
   private readonly effects: Effects;
   private readonly views: Record<PlayerId, FighterView>;
   private readonly intent: Record<PlayerId, IntentReader>;
@@ -191,7 +194,7 @@ export class Game {
     for (const id of PLAYER_IDS) {
       const frame = this.input.latest(id);
       const out = frame ? this.intent[id].update(frame) : null;
-      if (out) commands.push(...out.commands);
+      if (out) commands.push(...this.resolver.resolve(id, out.intents, this.fight));
       stances[id] = out?.stance ?? { player: id, guard: true, advance: 0, lean: { x: 0, y: 0 }, tracked: false };
     }
     if (phase === 'fighting') {

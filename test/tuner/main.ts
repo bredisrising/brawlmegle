@@ -4,7 +4,10 @@
 import { CameraSource } from '../../src/input/sources/CameraSource';
 import { IntentReader, type IntentOutput } from '../../src/intent/IntentReader';
 import { DEFAULT_INTENT, type Intent, type IntentConfig, type LimbName } from '../../src/intent/intents';
-import type { PoseFrame } from '../../src/types';
+import type { Command, FightEvent, PoseFrame, Stance } from '../../src/types';
+import { FightEngine } from '../../src/fight/FightEngine';
+import { Resolver } from '../../src/fight/Resolver';
+import { FIGHT } from '../../src/fight/moves';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const STORAGE_KEY = 'brawlegle.tuner.config';
@@ -51,6 +54,8 @@ function onFrame(frame: PoseFrame, now: number) {
   frameTimes = frameTimes.filter((t) => now - t < 1000);
   const out = reader.update(frame, now);
   lastOutput = out;
+  pendingIntents.push(...out.intents);
+  lastStance = out.stance;
   for (const intent of out.intents) {
     logIntent(intent);
     // Intents are stamped with the frame clock, same as the guided prompts.
@@ -389,3 +394,69 @@ $('reset').onclick = () => {
   buildConfigUI();
 };
 buildConfigUI();
+
+// --- fight a dummy ---------------------------------------------------------------------------------
+// The real resolver + fight engine at 60 Hz: you (p1, from the camera) against a dummy (p2).
+
+const engine = new FightEngine();
+const resolver = new Resolver();
+let pendingIntents: Intent[] = [];
+let lastStance: Stance = { player: 'p1', guard: false, advance: 0, lean: { x: 0, y: 0 }, tracked: false };
+let tick = 0;
+const DUMMY_STANCE: Stance = { player: 'p2', guard: false, advance: 0, lean: { x: 0, y: 0 }, tracked: true };
+const lastMove: { p1?: Command; p2?: Command } = {};
+
+setInterval(() => {
+  tick++;
+  const commands = resolver.resolve('p1', pendingIntents, engine);
+  pendingIntents = [];
+  for (const c of commands) if (c.kind === 'attack') lastMove.p1 = c;
+  // The dummy throws a jab every ~2.5 s if enabled (in range or not: it lunges like anyone else).
+  if ($<HTMLInputElement>('dummyAttacks').checked && tick % 150 === 0 && engine.state('p2').phase === 'idle') {
+    const jab: Command = { kind: 'attack', player: 'p2', t: 0, move: 'jab', hand: 'L', height: 'head', speed: 1, windup: 1, lunge: Math.max(0, engine.distance() - 0.75) };
+    commands.push(jab);
+    lastMove.p2 = jab;
+  }
+  for (const event of engine.step(commands, { p1: lastStance, p2: DUMMY_STANCE })) logFight(event);
+  if (tick % 4 === 0) drawFight();
+}, 1000 / 60);
+
+function logFight(ev: FightEvent) {
+  const who = ev.attacker === 'p1' ? 'you' : 'dummy';
+  let text: string | null = null;
+  if (ev.type === 'startup') {
+    const c = ev.attacker === 'p1' ? lastMove.p1 : lastMove.p2;
+    const lunge = c && c.kind === 'attack' && c.lunge ? ` (lunged ${c.lunge.toFixed(2)} m)` : '';
+    text = `${who}: ${ev.move.toUpperCase()}${lunge}`;
+  } else if (ev.type === 'hit' || ev.type === 'counter') text = `  → ${ev.type === 'counter' ? 'COUNTER ' : ''}HIT ${ev.damage}`;
+  else if (ev.type === 'blocked') text = `  → blocked (${ev.damage} chip)`;
+  else if (ev.type === 'whiff') text = '  → missed';
+  else if (ev.type === 'ko') text = ev.attacker === 'p1' ? 'K.O.! you win' : 'K.O.! the dummy wins';
+  if (!text) return;
+  const row = document.createElement('div');
+  row.className = ev.type;
+  row.textContent = text;
+  const log = $('fightLog');
+  log.prepend(row);
+  while (log.childElementCount > 60) log.lastElementChild?.remove();
+}
+
+function drawFight() {
+  const p1 = engine.state('p1');
+  const p2 = engine.state('p2');
+  ($('hp1') as HTMLElement).style.width = `${p1.hp}%`;
+  ($('hp2') as HTMLElement).style.width = `${p2.hp}%`;
+  $('hpn1').textContent = String(Math.round(p1.hp));
+  $('hpn2').textContent = String(Math.round(p2.hp));
+  ($('st1') as HTMLElement).style.width = `${(p1.stamina / FIGHT.maxStamina) * 100}%`;
+  const pos = (x: number) => `${((x + FIGHT.arenaHalfWidth) / (2 * FIGHT.arenaHalfWidth)) * 100}%`;
+  ($('dot1') as HTMLElement).style.left = pos(p1.x);
+  ($('dot2') as HTMLElement).style.left = pos(p2.x);
+  const evade = engine.evading('p1');
+  $('phases').textContent = `distance ${engine.distance().toFixed(2)} m · you: ${p1.phase}${p1.move ? ` ${p1.move}` : ''}${lastStance.guard ? ' · guard up' : ''}${evade ? ` · ${evade}` : ''} · dummy: ${p2.phase}${p2.move ? ` ${p2.move}` : ''}`;
+}
+
+$('fightReset').onclick = () => {
+  engine.reset();
+  $('fightLog').textContent = '';
+};

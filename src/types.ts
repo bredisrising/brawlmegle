@@ -35,7 +35,7 @@ export type PoseFrame = {
 // ---------------------------------------------------------------------------
 
 export type Hand = 'L' | 'R';
-export type AttackMove = 'jab' | 'cross' | 'hook' | 'uppercut';
+export type AttackMove = 'jab' | 'cross' | 'hook' | 'uppercut' | 'knee' | 'kick';
 export type DefendMove = 'block' | 'slip' | 'duck';
 
 export type Command =
@@ -49,6 +49,7 @@ export type Command =
       height: 'head' | 'body';
       speed: number; // 0.8–1.3, relative to this player's calibrated max
       windup: number; // 0.8–1.3
+      lunge?: number; // meters to step in during startup (the resolver adds it when the strike starts out of range)
     }
   | { kind: 'defend'; player: PlayerId; t: number; move: DefendMove; dir?: Hand };
 

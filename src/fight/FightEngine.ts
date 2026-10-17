@@ -1,25 +1,260 @@
-import type { Command, FightEvent, FighterState, PlayerId, Stance } from '../types';
+import { PLAYER_IDS, opponentOf } from '../types';
+import type { AttackMove, Command, FightEvent, FighterState, PlayerId, Stance } from '../types';
+import { FIGHT, MOVES, hitstopFrames, hitstunFrames, type MoveSpec } from './moves';
 
 /**
  * Pure TypeScript fight rules: no Three.js, no React, no randomness, fixed 60 Hz tick.
  * Same commands in -> same fight out, so it's testable and K.O. replays come free.
  *
- * TODO: see SPEC.md "Fight engine" (frame data, range bands, defense, stamina, hit-stop).
+ * The engine decides outcomes (range, timing, blocks, evasion, counters, damage). It never looks at
+ * poses: the intent reader says what a player meant, the resolver picks the move, this decides what happens.
  */
+
+type AttackCommand = Extract<Command, { kind: 'attack' }>;
+type Attack = { move: AttackMove; spec: MoveSpec; startup: number; scale: number; height: 'head' | 'body'; lunge: number; done: boolean };
+type Fighter = {
+  x: number;
+  hp: number;
+  stamina: number;
+  phase: FighterState['phase'];
+  frame: number;
+  attack: Attack | null;
+  /** Frames of hitstun/blockstun left. */
+  stun: number;
+  evade: { kind: 'slip' | 'duck'; frames: number } | null;
+  buffered: { command: AttackCommand; frames: number } | null;
+  sinceAttack: number; // seconds
+};
+
+const DT = 1 / 60;
+
 export class FightEngine {
-  private readonly states: Record<PlayerId, FighterState> = {
-    p1: { x: -0.5, hp: 100, stamina: 100, phase: 'idle', frame: 0 },
-    p2: { x: 0.5, hp: 100, stamina: 100, phase: 'idle', frame: 0 },
-  };
+  private fighters: Record<PlayerId, Fighter> = { p1: fresh(-0.5), p2: fresh(0.5) };
+  /** Global freeze after a hit: both fighters stop for a few frames so the impact lands. */
+  private hitstop = 0;
+  private tick = 0;
 
   /** Advance one 60 Hz tick. */
-  step(_commands: Command[], _stances: Record<PlayerId, Stance>): FightEvent[] {
-    return [];
+  step(commands: Command[], stances: Record<PlayerId, Stance>): FightEvent[] {
+    const events: FightEvent[] = [];
+    this.tick++;
+    for (const c of commands) this.command(c, events);
+    if (this.hitstop > 0) {
+      this.hitstop--;
+      return events;
+    }
+    for (const id of PLAYER_IDS) this.advance(id, events);
+    for (const id of PLAYER_IDS) this.resolve(id, stances, events);
+    this.move(stances);
+    return events;
   }
 
   state(player: PlayerId): Readonly<FighterState> {
-    return this.states[player];
+    const f = this.fighters[player];
+    return { x: f.x, hp: f.hp, stamina: f.stamina, phase: f.phase, move: f.attack?.move, frame: f.frame };
   }
 
-  reset(): void {}
+  /** Center-to-center distance on the fight line (m). */
+  distance(): number {
+    return Math.abs(this.fighters.p2.x - this.fighters.p1.x);
+  }
+
+  /** Whether a player is evading right now (for the resolver and the director). */
+  evading(player: PlayerId): 'slip' | 'duck' | null {
+    return this.fighters[player].evade?.kind ?? null;
+  }
+
+  reset(): void {
+    this.fighters = { p1: fresh(-0.5), p2: fresh(0.5) };
+    this.hitstop = 0;
+    this.tick = 0;
+  }
+
+  private get now() {
+    return (this.tick * 1000) / 60;
+  }
+
+  private command(c: Command, events: FightEvent[]) {
+    const f = this.fighters[c.player];
+    if (f.phase === 'ko') return;
+    if (c.kind === 'attack') {
+      if (f.phase === 'idle') this.start(c.player, c, events);
+      else f.buffered = { command: c, frames: FIGHT.bufferFrames };
+    } else if (c.kind === 'defend' && (c.move === 'slip' || c.move === 'duck')) {
+      if (f.phase === 'idle' || f.phase === 'recovery') f.evade = { kind: c.move, frames: FIGHT.evadeFrames };
+    }
+    // Blocking comes from Stance.guard every tick; 'anticipate' is for the director.
+  }
+
+  private start(id: PlayerId, c: AttackCommand, events: FightEvent[]) {
+    const f = this.fighters[id];
+    const spec = MOVES[c.move];
+    const gassed = f.stamina < FIGHT.gassedBelow;
+    f.attack = {
+      move: c.move,
+      spec,
+      startup: spec.startup + (gassed ? FIGHT.gassedStartup : 0),
+      scale: c.speed * c.windup * (gassed ? FIGHT.gassedDamage : 1),
+      height: c.height,
+      lunge: Math.max(0, c.lunge ?? 0),
+      done: false,
+    };
+    f.phase = 'startup';
+    f.frame = 0;
+    f.evade = null;
+    f.buffered = null;
+    f.stamina = Math.max(0, f.stamina - spec.stamina);
+    f.sinceAttack = 0;
+    events.push({ t: this.now, type: 'startup', attacker: id, move: c.move });
+  }
+
+  private advance(id: PlayerId, events: FightEvent[]) {
+    const f = this.fighters[id];
+    if (f.phase === 'ko') return;
+    f.sinceAttack += DT;
+    if (f.sinceAttack > FIGHT.staminaRegenDelay) f.stamina = Math.min(FIGHT.maxStamina, f.stamina + FIGHT.staminaRegen * DT);
+    if (f.evade && --f.evade.frames <= 0) f.evade = null;
+    if (f.buffered) {
+      if (f.phase === 'idle') this.start(id, f.buffered.command, events);
+      else if (--f.buffered.frames <= 0) f.buffered = null;
+    }
+    f.frame++;
+
+    switch (f.phase) {
+      case 'hitstun':
+      case 'blockstun':
+        if (--f.stun <= 0) this.idle(f);
+        break;
+      case 'startup': {
+        const a = f.attack!;
+        // Lunge: step in over the startup so a punch thrown from too far still arrives.
+        if (a.lunge > 0) this.shift(id, a.lunge / a.startup);
+        if (f.frame >= a.startup) {
+          f.phase = 'active';
+          f.frame = 0;
+        }
+        break;
+      }
+      case 'active':
+        if (f.frame >= f.attack!.spec.active) {
+          if (!f.attack!.done) {
+            f.stamina = Math.max(0, f.stamina - FIGHT.whiffCost);
+            events.push({ t: this.now, type: 'whiff', attacker: id, move: f.attack!.move });
+          }
+          f.phase = 'recovery';
+          f.frame = 0;
+        }
+        break;
+      case 'recovery':
+        if (f.frame >= f.attack!.spec.recovery) this.idle(f);
+        break;
+    }
+  }
+
+  /** An active attack meets the defender: evaded, blocked, or a hit (maybe a counter). */
+  private resolve(id: PlayerId, stances: Record<PlayerId, Stance>, events: FightEvent[]) {
+    const f = this.fighters[id];
+    const a = f.attack;
+    if (f.phase !== 'active' || !a || a.done) return;
+    if (this.distance() > a.spec.range) return; // may still come into range; otherwise it whiffs
+    const defenderId = opponentOf(id);
+    const g = this.fighters[defenderId];
+    if (g.phase === 'ko') return;
+    a.done = true;
+
+    const evade = g.evade?.kind;
+    const ducked = evade === 'duck' && a.height === 'head' && !a.spec.beatsDuck;
+    const slipped = evade === 'slip' && a.spec.straight;
+    if (ducked || slipped) {
+      // Missed clean: the attacker eats the whiff penalty and is open in recovery (a counter window).
+      f.stamina = Math.max(0, f.stamina - FIGHT.whiffCost);
+      events.push({ t: this.now, type: 'whiff', attacker: id, move: a.move });
+      return;
+    }
+
+    // You can block while free or already blocking, not mid-attack or while reeling from a hit.
+    const canBlock = g.phase === 'idle' || g.phase === 'blockstun';
+    if (stances[defenderId]?.guard && canBlock) {
+      const chip = Math.max(1, Math.round(a.spec.chip * a.scale));
+      g.hp = Math.max(0, g.hp - chip);
+      g.phase = 'blockstun';
+      g.stun = FIGHT.blockstun;
+      g.frame = 0;
+      this.hitstop = 3;
+      events.push({ t: this.now, type: 'blocked', attacker: id, move: a.move, damage: chip, hitstopFrames: 3 });
+      this.knockback(defenderId, chip);
+      if (g.hp <= 0) this.ko(defenderId, id, a.move, events);
+      return;
+    }
+
+    // Caught mid-attack, or ducking into an uppercut: counter hit.
+    const counter = g.phase === 'startup' || g.phase === 'recovery' || (evade === 'duck' && a.spec.beatsDuck);
+    const damage = Math.round(a.spec.damage * a.scale * (counter ? FIGHT.counterMultiplier : 1));
+    g.hp = Math.max(0, g.hp - damage);
+    g.attack = null;
+    g.buffered = null;
+    g.evade = null;
+    g.phase = 'hitstun';
+    g.stun = hitstunFrames(damage);
+    g.frame = 0;
+    this.hitstop = hitstopFrames(damage);
+    events.push({ t: this.now, type: counter ? 'counter' : 'hit', attacker: id, move: a.move, damage, hitstopFrames: this.hitstop });
+    this.knockback(defenderId, damage);
+    if (g.hp <= 0) this.ko(defenderId, id, a.move, events);
+  }
+
+  private ko(loser: PlayerId, winner: PlayerId, move: AttackMove, events: FightEvent[]) {
+    const g = this.fighters[loser];
+    g.phase = 'ko';
+    g.attack = null;
+    events.push({ t: this.now, type: 'ko', attacker: winner, move });
+  }
+
+  /**
+   * Movement is semi-automatic: leaning in or out (Stance.advance) walks; with no lean, fighters drift to a
+   * comfortable distance. Only free fighters move; attacks move through their lunge instead.
+   */
+  private move(stances: Record<PlayerId, Stance>) {
+    for (const id of PLAYER_IDS) {
+      const f = this.fighters[id];
+      if (f.phase !== 'idle') continue;
+      const stance = stances[id];
+      const lean = stance?.tracked ? stance.advance : 0;
+      const speed = Math.abs(lean) > 0.1
+        ? FIGHT.walkSpeed * lean
+        : clamp((this.distance() - FIGHT.preferredDistance) * 2, -1, 1) * FIGHT.driftSpeed;
+      this.shift(id, speed * DT);
+    }
+  }
+
+  /** Move a fighter toward (+) or away from (-) the opponent, keeping spacing and arena bounds. */
+  private shift(id: PlayerId, amount: number) {
+    const f = this.fighters[id];
+    const other = this.fighters[opponentOf(id)];
+    const toward = Math.sign(other.x - f.x) || (id === 'p1' ? 1 : -1);
+    let x = f.x + toward * amount;
+    // Don't walk through the opponent.
+    if (Math.abs(other.x - x) < FIGHT.minDistance) x = other.x - toward * FIGHT.minDistance;
+    f.x = clamp(x, -FIGHT.arenaHalfWidth, FIGHT.arenaHalfWidth);
+  }
+
+  private knockback(id: PlayerId, damage: number) {
+    this.shift(id, -FIGHT.knockbackPerDamage * damage);
+  }
+
+  private idle(f: Fighter) {
+    f.phase = 'idle';
+    f.frame = 0;
+    f.attack = null;
+    f.stun = 0;
+  }
 }
+
+function fresh(x: number): Fighter {
+  return {
+    x, hp: FIGHT.maxHp, stamina: FIGHT.maxStamina, phase: 'idle', frame: 0,
+    attack: null, stun: 0, evade: null, buffered: null, sinceAttack: 10,
+  };
+}
+
+const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
