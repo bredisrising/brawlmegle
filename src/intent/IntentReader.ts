@@ -55,6 +55,8 @@ type LimbState = {
   /** Tip and middle joint (body space) at the peak. */
   peakTip: Vec3;
   peakMid: Vec3;
+  /** When the reach last grew (ms). */
+  grewAt: number;
   /** Middle-joint (elbow/knee) rise from the anchor at the peak. */
   peakMidRise: number;
   /** Elbow-opening part of the displacement at the peak. */
@@ -224,14 +226,14 @@ export class IntentReader {
       // A hand dropping fast (back to the lap, or lowering the guard) can't be starting a punch.
       const dropping = def.kind === 'arm' && vel.tip.y < -1.2;
       if (visible && !dropping && outward > cfg.onsetSpeed && disp > cfg.onsetDist && (strikeLike(def, tTip, tMid, disp) || extensionStrike(def, tTip, tExt, disp))) {
-        Object.assign(s, { phase: 'onset', since: t, peakDisp: disp, peakSpeed: outward, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: legs ? 0 : body.elbow[side], anchorTip: { x: tipPt.p.x - tTip.x, y: tipPt.p.y - tTip.y, z: tipPt.p.z } });
+        Object.assign(s, { phase: 'onset', since: t, grewAt: t, peakDisp: disp, peakSpeed: outward, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: legs ? 0 : body.elbow[side], anchorTip: { x: tipPt.p.x - tTip.x, y: tipPt.p.y - tTip.y, z: tipPt.p.z } });
         out.push({ kind: 'anticipate', limb: name, t });
       }
       return;
     }
 
     if (s.phase === 'onset') {
-      if (disp > s.peakDisp) Object.assign(s, { peakDisp: disp, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: legs ? 0 : body.elbow[side] });
+      if (disp > s.peakDisp) Object.assign(s, { grewAt: t, peakDisp: disp, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: legs ? 0 : body.elbow[side] });
       s.peakSpeed = Math.max(s.peakSpeed, outward);
       // Confirm as soon as it has traveled far enough (don't wait for the arm to slow down: that costs most
       // of the punch). Give up if it slows down short of that.
@@ -239,22 +241,26 @@ export class IntentReader {
       // whether it's an uppercut or just the guard coming up.
       const shoulderY = (body.points[LM.lShoulder].p.y + body.points[LM.rShoulder].p.y) / 2;
       const fromLow = s.anchorTip.y < shoulderY - 0.8;
-      const farEnough = def.kind === 'arm' && !fromLow && s.peakDisp >= cfg.strikeDist && t - s.since >= 30;
-      const slowing = outward < s.peakSpeed * 0.35 && t - s.since > 40;
+      // Holding a block, small adjustments aren't punches: it takes a bigger motion to strike out of the shell.
+      const needed = def.kind === 'arm' && this.guardUp ? cfg.strikeDist * 1.3 : cfg.strikeDist;
+      const farEnough = def.kind === 'arm' && !fromLow && s.peakDisp >= needed && t - s.since >= 30;
+      // Peaked: the reach hasn't grown for 60 ms. (Not "the speed dropped": the fast signal wobbles mid-punch,
+      // and judging then cuts the punch short.)
+      const slowing = t - s.grewAt >= 60;
       if (!farEnough && !slowing && t - s.since < cfg.maxWindupMs) return;
 
       // Legs must also lift (knee or foot) above where they usually sit, so stepping isn't kicking.
       const lift = Math.max(s.peak.y, s.peakMidRise);
-      // Holding a block, small adjustments aren't punches: it takes a bigger motion to strike out of the shell.
-      const needed = def.kind === 'arm' && this.guardUp ? cfg.strikeDist * 1.3 : cfg.strikeDist;
       // Punches don't travel down: an arm straightening as the hand drops (back to the lap) isn't a strike.
       const goingDown = def.kind === 'arm' && tTip.y < -0.15 && tTip.y < -0.5 * len(tTip);
-      const isStrike = s.peakDisp >= needed && !goingDown && (def.kind === 'arm' || lift >= this.config.legRise)
-        && !(def.kind === 'arm' && raisingGuard(body, s.anchorTip, tipPt.p, this.config.guard.radius))
-        && !(def.kind === 'arm' && bothHandsUp(body, name, tTip));
-      if (!isStrike) {
+      const reason = s.peakDisp < needed || (def.kind === 'leg' && lift < this.config.legRise) ? 'too small'
+        : goingDown ? 'going down'
+        : def.kind === 'arm' && raisingGuard(body, s.anchorTip, tipPt.p, this.config.guard.radius) ? 'raising guard'
+        : def.kind === 'arm' && bothHandsUp(body, name, tTip) ? 'both hands up'
+        : null;
+      if (reason) {
         s.phase = 'idle';
-        out.push({ kind: 'cancel', limb: name, t });
+        out.push({ kind: 'cancel', limb: name, t, reason });
         return;
       }
       const dir = normalize(s.peak);
@@ -490,7 +496,7 @@ function windupOf(s: LimbState, dir: Vec3) {
 
 function newLimb(): LimbState {
   return {
-    phase: 'idle', rest: null, anchor: null, since: 0, peakDisp: 0, peakSpeed: 0,
+    phase: 'idle', rest: null, anchor: null, since: 0, grewAt: 0, peakDisp: 0, peakSpeed: 0,
     peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, peakMidTravel: 0, peakMidOut: 0, anchorTip: { x: 0, y: 0, z: 0 }, peakElbow: 0, history: [], typicalSpeed: 4, disp: 0, out: 0,
   };
 }

@@ -235,7 +235,7 @@ function describe(intent: Intent): string | null {
     case 'dodge': return `DODGE ${intent.dir === 'L' ? 'LEFT' : 'RIGHT'}`;
     case 'guard': return intent.up ? 'guard up' : 'guard down';
     case 'anticipate': return `… ${LIMB_LABEL[intent.limb]} winding up`;
-    case 'cancel': return `× ${LIMB_LABEL[intent.limb]} wind-up dropped`;
+    case 'cancel': return `× ${LIMB_LABEL[intent.limb]} wind-up dropped${intent.reason ? ` (${intent.reason})` : ''}`;
   }
 }
 
