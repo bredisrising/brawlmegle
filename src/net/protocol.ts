@@ -22,6 +22,12 @@ export type HostMessage =
   | { type: 'welcome'; player: PlayerId }
   | { type: 'roster'; fighters: ForgedFighter[] } // saved fighters for 'Choose existing'
   | { type: 'phase'; phase: Phase; countdown: number | null }
-  | { type: 'fighter'; fighter: ForgedFighter };
+  | { type: 'fighter'; fighter: ForgedFighter }; // P2's forge progress; sent with status 'ready' once P2's fighter is set (scan, masked or pick)
+
+/**
+ * Wire envelope, not a game message: Peer splits control messages bigger than one
+ * data-channel message (scan JPEGs) into these and reassembles them on the other side.
+ */
+export type ChunkMessage = { type: 'chunk'; id: number; index: number; count: number; data: string };
 
 export const PROTOCOL_VERSION = 1;

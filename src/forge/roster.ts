@@ -10,8 +10,9 @@ import type { ForgedFighter } from '../types';
 
 const KEY = 'brawlegle.roster';
 
-/** Pre-forged opponents so a judge always has someone to pick. TODO: real GLBs + card art. */
+/** Built-in fighters are available without scanning or saving to localStorage. */
 const HOUSE_FIGHTERS: ForgedFighter[] = [
+  { id: 'default', name: 'default', status: 'ready', glbUrl: `${import.meta.env.BASE_URL}models/default.glb` },
   { id: 'house-1', name: 'Kid Haymaker', status: 'ready' },
   { id: 'house-2', name: 'Big Tuna', status: 'ready' },
   { id: 'house-3', name: 'Sweet Science', status: 'ready' },

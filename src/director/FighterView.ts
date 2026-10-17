@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import type { FightEvent, FighterState, PlayerId, PoseFrame } from '../types';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import type { FightEvent, FighterState, ForgedFighter, PlayerId, PoseFrame } from '../types';
 import { FIGHTER_SPACING, PLAYER_COLORS } from '../game/constants';
 import { BONES, GUARD_POSE, JOINTS, copyPose, createPose, type JointName, type Pose } from './pose';
 
@@ -9,7 +10,7 @@ import { BONES, GUARD_POSE, JOINTS, copyPose, createPose, type JointName, type P
  * It never decides anything; it only shows what the engine decided.
  *
  * TODO:
- *  - swap the placeholder for the forged GLB (Mixamo bones) + AnimationMixer
+ *  - animate loaded GLBs (Mixamo bones) with AnimationMixer
  *  - layers: locomotion, action clips, live pose (~30% in idle/guard)
  *  - stepped animation (~12 fps poses), IK fist onto target at contact
  *  - reactions from FightEvents: head rock, knockback, hit flash
@@ -22,6 +23,9 @@ export class FighterView {
 
   private readonly joints = new Map<JointName, THREE.Mesh>();
   private readonly bones: THREE.LineSegments;
+  private readonly placeholder = new THREE.Group();
+  private model: THREE.Group | null = null;
+  private loadVersion = 0;
 
   constructor(id: PlayerId) {
     this.id = id;
@@ -37,14 +41,40 @@ export class FighterView {
       const mesh = new THREE.Mesh(new THREE.SphereGeometry(r, 16, 12), material);
       mesh.castShadow = true;
       this.joints.set(j, mesh);
-      this.root.add(mesh);
+      this.placeholder.add(mesh);
     }
     this.bones = new THREE.LineSegments(
       new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(BONES.length * 6, 3)),
       new THREE.LineBasicMaterial({ color: PLAYER_COLORS[id] }),
     );
-    this.root.add(this.bones);
+    this.placeholder.add(this.bones);
+    this.root.add(this.placeholder);
     this.applyPose(copyPose(this.pose, GUARD_POSE));
+  }
+
+  /** Load a selected avatar; fighters without a model keep the joint placeholder. */
+  async setFighter(fighter: ForgedFighter) {
+    const version = ++this.loadVersion;
+    const model = fighter.glbUrl ? (await new GLTFLoader().loadAsync(fighter.glbUrl)).scene : null;
+    if (version !== this.loadVersion) {
+      if (model) disposeObject(model);
+      return;
+    }
+    if (this.model) {
+      this.model.removeFromParent();
+      disposeObject(this.model);
+    }
+    this.model = model;
+    this.placeholder.visible = model === null;
+    if (model) {
+      model.traverse((object) => {
+        if (object instanceof THREE.Mesh) {
+          object.castShadow = true;
+          object.receiveShadow = true;
+        }
+      });
+      this.root.add(model);
+    }
   }
 
   setVisible(visible: boolean) {
@@ -63,6 +93,8 @@ export class FighterView {
   }
 
   dispose() {
+    ++this.loadVersion;
+    disposeObject(this.root);
     this.root.removeFromParent();
   }
 
@@ -75,4 +107,23 @@ export class FighterView {
     });
     attr.needsUpdate = true;
   }
+}
+
+function disposeObject(root: THREE.Object3D) {
+  const geometries = new Set<THREE.BufferGeometry>();
+  const materials = new Set<THREE.Material>();
+  const textures = new Set<THREE.Texture>();
+  root.traverse((object) => {
+    if (!(object instanceof THREE.Mesh || object instanceof THREE.LineSegments)) return;
+    geometries.add(object.geometry);
+    for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
+      materials.add(material);
+      for (const value of Object.values(material)) {
+        if (value instanceof THREE.Texture) textures.add(value);
+      }
+    }
+  });
+  for (const geometry of geometries) geometry.dispose();
+  for (const material of materials) material.dispose();
+  for (const texture of textures) texture.dispose();
 }

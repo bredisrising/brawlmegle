@@ -91,7 +91,7 @@ export type ForgedFighter = {
   name: string; // typed in by the player before the scan
   status: 'scanning' | 'forging' | 'ready' | 'failed';
   step?: 'brief' | 'sheet' | 'model' | 'cleanup' | 'rig';
-  glbUrl?: string; // rigged, Mixamo bone names, 1 m tall
+  glbUrl?: string; // 1 m tall; forged models use Mixamo bones, static test models may be unrigged
   cardUrl?: string; // VS card art
   brief?: Record<string, unknown>; // see SPEC.md "Prompts" for the shape
 };

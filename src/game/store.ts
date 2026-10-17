@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { PLAYER_IDS, type Phase, type PlayerId, type PlayerStatus, type Role } from '../types';
+import { PLAYER_IDS, type ForgedFighter, type Phase, type PlayerId, type PlayerStatus, type Role } from '../types';
 import { MAX_HP, PLAYER_NAMES } from './constants';
 
 /** Popup style. Game maps FightEvents onto these. */
@@ -36,6 +36,10 @@ export interface GameState {
   role: Role | null;
   /** Room code from the signaling server (host shows it, client typed it). */
   roomCode: string | null;
+  /** P2P link to the other laptop. null = not connected (title screen, or offline dev). */
+  connection: 'open' | 'reconnecting' | null;
+  /** Client only: the host's memory card, received over P2P for "Choose existing". */
+  roster: ForgedFighter[] | null;
   phase: Phase;
   /** 3, 2, 1, then 0 = "FIGHT!"; null when hidden. */
   countdown: number | null;
@@ -58,6 +62,8 @@ export const useGameStore = create<GameState>(() => ({
   screen: 'title',
   role: null,
   roomCode: null,
+  connection: null,
+  roster: null,
   phase: 'lobby',
   countdown: null,
   winner: null,

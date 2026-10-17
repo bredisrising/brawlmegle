@@ -132,15 +132,20 @@ function NameStep() {
 
 function RosterStep() {
   const game = useGame();
-  const [fighters, setFighters] = useState<ForgedFighter[] | null>(null);
+  // A connected client shows the host's memory card (sent over P2P); only the host keeps fighters.
+  const fromHost = useGameStore((s) => s.role === 'client' && s.connection !== null);
+  const hostRoster = useGameStore((s) => s.roster);
+  const [localRoster, setLocalRoster] = useState<ForgedFighter[] | null>(null);
+  const fighters = fromHost ? hostRoster : localRoster;
 
   useEffect(() => {
+    if (fromHost) return;
     let alive = true;
-    listFighters().then((list) => alive && setFighters(list));
+    listFighters().then((list) => alive && setLocalRoster(list));
     return () => {
       alive = false;
     };
-  }, []);
+  }, [fromHost]);
 
   return (
     <>

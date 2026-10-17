@@ -15,6 +15,7 @@ import {
   type Command, type FightEvent, type ForgedFighter, type PlayerId, type Stance,
 } from '../types';
 import { COUNTDOWN_FROM, KO_FREEZE, MAX_HP, PLAYER_NAMES, SIM_DT } from './constants';
+import { ClientSession } from './ClientSession';
 import { localPlayerId, pushPopup, updatePlayer, useGameStore } from './store';
 
 /** What the player picked on the avatar screen. */
@@ -30,7 +31,7 @@ export type FighterChoice =
  *
  *   lobby --(both ready)--> countdown --> fighting --(K.O.)--> ko --(rematch)--> countdown
  *
- * Only the host runs this. A client laptop just scans + streams (see net/).
+ * Only the host runs the fight. A client laptop hands off to ClientSession, which just scans + streams.
  */
 export class Game {
   readonly renderer: Renderer;
@@ -40,6 +41,7 @@ export class Game {
   private readonly views: Record<PlayerId, FighterView>;
   private readonly intent: Record<PlayerId, IntentReader>;
   private peer: Peer | null = null;
+  private client: ClientSession | null = null;
   private accumulator = 0;
   private phaseTimer = 0;
 
@@ -66,8 +68,13 @@ export class Game {
 
   /** Title screen: "Connect" with a room code. */
   async join(code: string) {
-    this.peer = new Peer('client', new Signaling(config.signalUrl));
-    await this.peer.join(code);
+    if (config.signalUrl) {
+      const client = new ClientSession(code);
+      await client.connect();
+      this.client = client;
+    } else {
+      console.warn('VITE_SIGNAL_URL not set: the client flow runs offline on this laptop');
+    }
     useGameStore.setState({ role: 'client', roomCode: code, screen: 'avatar' });
   }
 
@@ -75,8 +82,9 @@ export class Game {
   async chooseFighter(choice: FighterChoice) {
     const { role } = useGameStore.getState();
     useGameStore.setState({ screen: role === 'client' ? 'client' : 'game' });
-    // TODO (client): send profile + scan frames to the host and stream poses over P2P,
-    // instead of forging here. Runs locally for now so the flow can be tested on one laptop.
+    // A connected client only scans + streams; the host forges and runs the fight.
+    if (this.client) return this.client.choose(choice);
+    // Host, or a client with no signaling server (offline dev): set the player up here.
     await this.setupPlayer(localPlayerId(role), choice);
   }
 
@@ -105,7 +113,7 @@ export class Game {
       } else {
         fighter = choice.fighter;
       }
-      // TODO: load fighter.glbUrl into the FighterView instead of the placeholder.
+      await this.views[id].setFighter(fighter);
 
       this.views[id].setVisible(true);
       this.effects.burst(this.views[id].root.position, 'spawn');
@@ -133,6 +141,7 @@ export class Game {
   dispose() {
     window.removeEventListener('keydown', this.onDebugKey);
     this.peer?.close();
+    this.client?.dispose();
     for (const id of PLAYER_IDS) this.input.unassign(id);
     for (const v of Object.values(this.views)) v.dispose();
     this.effects.dispose();
