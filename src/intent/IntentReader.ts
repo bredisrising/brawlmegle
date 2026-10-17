@@ -1,163 +1,389 @@
-import type { AttackMove, Command, Hand, PlayerId, PoseFrame, Stance } from '../types';
+import type { AttackMove, Command, PlayerId, PoseFrame, Stance } from '../types';
+import { LM, PosePreprocessor, type Body, type BodyPoint, type Vec3 } from './preprocess';
+import { DEFAULT_INTENT, type Intent, type IntentConfig, type LimbConfig, type LimbName, type StrikeStyle } from './intents';
 
-const VISIBILITY = 0.35;
-const STALE_AFTER_MS = 300;
-const ATTACK_COOLDOWN_MS = 350;
+/**
+ * PoseFrames -> what the player meant. One per player, runs on the host.
+ * The camera reports intent; it never decides a hit.
+ *
+ * Every limb is watched the same way: a fast burst away from its resting position is a strike, whatever
+ * the technique. The direction only adds detail (straight, hook, upper, knee, kick); the resolver
+ * decides what it becomes in the fight. Depth from one camera is noisy, so it counts for less than
+ * image-plane motion.
+ */
 
-type Point = { x: number; y: number; z: number };
-type HandState = { extension: number; elbowAngle: number; wrist: Point; t: number };
+/**
+ * Each limb is tracked by two points relative to its root: the tip (wrist/ankle) and the middle joint
+ * (elbow/knee). Facing the camera, a straight punch barely moves the wrist in the image, but the elbow
+ * rises and swings in by ~20 cm, so watching both catches it.
+ */
+type LimbDef = { root: number; tip: number; mid: number; side: 1 | -1; kind: 'arm' | 'leg' };
+const LIMBS: Record<LimbName, LimbDef> = {
+  // The person's left appears on the image right (+x), so "outward" for the left side is +x.
+  armL: { root: LM.lShoulder, tip: LM.lWrist, mid: LM.lElbow, side: 1, kind: 'arm' },
+  armR: { root: LM.rShoulder, tip: LM.rWrist, mid: LM.rElbow, side: -1, kind: 'arm' },
+  legL: { root: LM.lHip, tip: LM.lAnkle, mid: LM.lKnee, side: 1, kind: 'leg' },
+  legR: { root: LM.rHip, tip: LM.rAnkle, mid: LM.rKnee, side: -1, kind: 'leg' },
+};
+/** How much the middle joint counts next to the tip. */
+const MID_WEIGHT = 0.8;
+const LIMB_NAMES = Object.keys(LIMBS) as LimbName[];
 
-/** Turns camera landmarks into the lightweight attack and defense commands used by FightEngine. */
+type Pair = { tip: Vec3; mid: Vec3 };
+type LimbState = {
+  phase: 'idle' | 'onset' | 'recover';
+  /** Usual position (guard or relaxed); "back near rest" means ready to strike again. */
+  rest: Pair | null;
+  /** Where the limb last paused. Strikes are measured from here, so a cocked-back hook or a dropped
+   * uppercut counts from where it actually started. */
+  anchor: Pair | null;
+  since: number;
+  peakDisp: number;
+  peakSpeed: number;
+  /** Tip travel from the anchor at the peak. */
+  peak: Vec3;
+  /** Tip and middle joint (body space) at the peak. */
+  peakTip: Vec3;
+  peakMid: Vec3;
+  /** Middle-joint (elbow/knee) rise from the anchor at the peak. */
+  peakMidRise: number;
+  history: { t: number; d: Vec3 }[];
+  typicalSpeed: number;
+  // Debug readouts
+  disp: number;
+  out: number;
+};
+
+export type IntentDebug = {
+  limbs: Record<LimbName, { phase: LimbState['phase']; disp: number; out: number }>;
+  headDrop: number;
+  lean: number;
+  rootY: number;
+  rootVy: number;
+  scale: number;
+  guard: boolean;
+};
+
+export type IntentOutput = {
+  commands: Command[];
+  stance: Stance;
+  intents: Intent[];
+  /** Latest preprocessed body (null until tracking starts), for overlays and the tuner. */
+  body: Body | null;
+  debug: IntentDebug | null;
+};
+
 export class IntentReader {
   readonly player: PlayerId;
-  private lastFrameTime = -1;
-  private readonly hands: Record<Hand, HandState | null> = { L: null, R: null };
-  private readonly lastAttack: Record<Hand, number> = { L: -Infinity, R: -Infinity };
+  private config: IntentConfig;
+  private readonly pre: PosePreprocessor;
+  private readonly limbs: Record<LimbName, LimbState>;
+  private body: Body | null = null;
+  private lastNewFrameAt = -Infinity;
+  private headRest: { x: number; y: number } | null = null;
+  private lastCore: Record<'jump' | 'duck' | 'dodge', number> = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
   private guardSince: number | null = null;
-  private blocking = false;
-  private headHistory: { point: Point; t: number }[] = [];
-  private torsoWidth: number | null = null;
+  private guardUp = false;
   private stance: Stance;
+  private debug: IntentDebug | null = null;
 
-  constructor(player: PlayerId) {
+  constructor(player: PlayerId, config: IntentConfig = DEFAULT_INTENT) {
     this.player = player;
-    this.stance = { player, guard: true, advance: 0, lean: { x: 0, y: 0 }, tracked: false };
+    this.config = config;
+    this.pre = new PosePreprocessor(config.preprocess);
+    this.limbs = Object.fromEntries(LIMB_NAMES.map((n) => [n, newLimb()])) as Record<LimbName, LimbState>;
+    this.stance = untracked(player);
   }
 
-  update(frame: PoseFrame): { commands: Command[]; stance: Stance } {
-    const age = performance.now() - frame.t;
-    if (age > STALE_AFTER_MS || !hasVisibleBody(frame)) {
-      this.stance = { player: this.player, guard: true, advance: 0, lean: { x: 0, y: 0 }, tracked: false };
-      this.blocking = false;
-      this.guardSince = null;
-      return { commands: [], stance: this.stance };
+  /** Live tuning. */
+  setConfig(config: IntentConfig) {
+    this.config = config;
+    this.pre.setConfig(config.preprocess);
+  }
+
+  reset() {
+    this.pre.reset();
+    for (const n of LIMB_NAMES) this.limbs[n] = newLimb();
+    this.body = null;
+    this.headRest = null;
+    this.guardSince = null;
+    this.guardUp = false;
+    this.stance = untracked(this.player);
+  }
+
+  /**
+   * Call every tick with the latest frame. Repeated frames return no new intents.
+   * `now` is the host clock, used only to notice a lost player (remote frames carry the other laptop's clock).
+   */
+  update(frame: PoseFrame | null, now: number = performance.now()): IntentOutput {
+    const body = frame ? this.pre.process(frame) : null;
+    if (body) this.lastNewFrameAt = now;
+    if (now - this.lastNewFrameAt > this.config.staleMs) {
+      if (this.body) this.reset();
+      return { commands: [], stance: this.stance, intents: [], body: null, debug: null };
     }
+    if (!body) return { commands: [], stance: this.stance, intents: [], body: this.body, debug: this.debug };
+    this.body = body;
 
-    // Game ticks at 60 Hz while cameras usually produce ~30 frames per second.
-    // Reuse the last stance between camera frames, but never emit duplicate attacks.
-    if (frame.t <= this.lastFrameTime) return { commands: [], stance: this.stance };
-    this.lastFrameTime = frame.t;
+    const intents: Intent[] = [];
+    for (const name of LIMB_NAMES) this.updateLimb(name, body, intents);
+    this.updateCore(body, intents);
+    return { commands: toCommands(this.player, intents), stance: this.stance, intents, body, debug: this.debug };
+  }
 
-    const points = frame.image.map((p) => ({ x: p.x, y: p.y, z: p.z }));
-    const visible = (i: number) => frame.image[i]?.visibility >= VISIBILITY;
-    const nose = points[0];
-    const leftShoulder = points[11];
-    const rightShoulder = points[12];
-    const leftHip = points[23];
-    const rightHip = points[24];
-    const shoulderWidth = distance2(leftShoulder, rightShoulder);
-    const armLength = mean([
-      distance2(points[11], points[13]) + distance2(points[13], points[15]),
-      distance2(points[12], points[14]) + distance2(points[14], points[16]),
-    ]) / 2;
-    const scale = Math.max(armLength, 0.001);
-    const commands: Command[] = [];
+  private updateLimb(name: LimbName, body: Body, out: Intent[]) {
+    const def = LIMBS[name];
+    const cfg: LimbConfig = def.kind === 'arm' ? this.config.arm : this.config.leg;
+    const s = this.limbs[name];
+    const wz = this.config.depthWeight;
+    const t = body.t;
 
-    const nowHead = { ...nose };
-    this.headHistory.push({ point: nowHead, t: frame.t });
-    this.headHistory = this.headHistory.filter((sample) => frame.t - sample.t <= 300);
-    const oldHead = this.headHistory[0];
-    const headDx = oldHead ? (nose.x - oldHead.point.x) / scale : 0;
-    const headDrop = oldHead ? (nose.y - oldHead.point.y) / scale : 0;
-    if (oldHead && frame.t - oldHead.t <= 250 && Math.abs(headDx) > 0.35) {
-      commands.push({ kind: 'defend', player: this.player, t: frame.t, move: 'slip', dir: headDx < 0 ? 'L' : 'R' });
-      this.headHistory = [{ point: nowHead, t: frame.t }];
-    } else if (oldHead && frame.t - oldHead.t <= 250 && headDrop > 0.35) {
-      commands.push({ kind: 'defend', player: this.player, t: frame.t, move: 'duck' });
-      this.headHistory = [{ point: nowHead, t: frame.t }];
-    }
+    const root = body.points[def.root];
+    const tipPt = body.points[def.tip];
+    const midPt = body.points[def.mid];
+    // Legs off-screen (upper-body framing) or a limb MediaPipe can't see: don't guess.
+    const visible = def.kind === 'arm'
+      ? tipPt.visibility > 0.3 && root.visibility > 0.5
+      : body.fullBody && tipPt.visibility > 0.5 && midPt.visibility > 0.5;
+    // Arms: relative to the shoulder, so leaning and ducking don't look like punches.
+    // Legs: height is measured from the usual hip height, so when the hips drop in a duck the knees
+    // don't seem to rise.
+    const legs = def.kind === 'leg';
+    const relOf = (p: BodyPoint): Vec3 => ({
+      x: p.p.x - root.p.x,
+      y: legs ? p.p.y + body.root.y : p.p.y - root.p.y,
+      z: (p.p.z - root.p.z) * wz,
+    });
+    const velOf = (p: BodyPoint): Vec3 => ({
+      x: p.v.x - root.v.x,
+      y: legs ? p.v.y + body.root.vy : p.v.y - root.v.y,
+      z: (p.v.z - root.v.z) * wz,
+    });
+    const now: Pair = { tip: relOf(tipPt), mid: relOf(midPt) };
+    const vel: Pair = { tip: velOf(tipPt), mid: velOf(midPt) };
+    if (!s.rest) s.rest = clonePair(now);
+    if (!s.anchor) s.anchor = clonePair(now);
 
-    const bothNearFace = visible(15) && visible(16)
-      && distance2(points[15], nose) < scale * 0.55
-      && distance2(points[16], nose) < scale * 0.55;
-    if (bothNearFace) {
-      this.guardSince ??= frame.t;
-      if (!this.blocking && frame.t - this.guardSince >= 120) {
-        commands.push({ kind: 'defend', player: this.player, t: frame.t, move: 'block' });
-        this.blocking = true;
+    // Travel since the last pause, tip and middle joint together.
+    const tTip = sub(now.tip, s.anchor.tip);
+    const tMid = sub(now.mid, s.anchor.mid);
+    const disp = Math.hypot(len(tTip), MID_WEIGHT * len(tMid));
+    const outward = disp > 1e-3 ? (dot(vel.tip, tTip) + MID_WEIGHT * MID_WEIGHT * dot(vel.mid, tMid)) / disp : 0;
+    const speed = Math.hypot(len(vel.tip), MID_WEIGHT * len(vel.mid));
+    const restDisp = Math.hypot(len(sub(now.tip, s.rest.tip)), MID_WEIGHT * len(sub(now.mid, s.rest.mid)));
+    s.disp = disp;
+    s.out = outward;
+    s.history.push({ t, d: sub(now.tip, s.rest.tip) });
+    while (s.history.length && t - s.history[0].t > 500) s.history.shift();
+
+    if (s.phase === 'idle') {
+      if (speed < cfg.quietSpeed) {
+        // Paused: strikes start from here. Rest recalibrates slowly toward wherever the limb usually sits.
+        s.anchor = clonePair(now);
+        const k = 1 - Math.exp(-body.dt / this.config.restSeconds);
+        s.rest = lerpPair(s.rest, now, k);
       }
-    } else {
-      this.guardSince = null;
-      this.blocking = false;
-    }
-
-    for (const hand of ['L', 'R'] as const) {
-      const shoulderIndex = hand === 'L' ? 11 : 12;
-      const elbowIndex = hand === 'L' ? 13 : 14;
-      const wristIndex = hand === 'L' ? 15 : 16;
-      if (![shoulderIndex, elbowIndex, wristIndex].every(visible)) continue;
-      const shoulder = points[shoulderIndex];
-      const elbow = points[elbowIndex];
-      const wrist = points[wristIndex];
-      const extension = distance2(shoulder, wrist) / scale;
-      const angle = elbowAngle(shoulder, elbow, wrist);
-      const previous = this.hands[hand];
-
-      const rise = previous ? (previous.wrist.y - wrist.y) / scale : 0;
-      const sweep = previous ? Math.abs(wrist.x - previous.wrist.x) / scale : 0;
-      const hook = angle >= 70 && angle <= 125 && sweep > 0.35;
-      const uppercut = rise > 0.3 && wrist.y < midpoint(leftShoulder, rightShoulder).y;
-      if (previous && frame.t - previous.t <= 250 && previous.extension < 0.62 && extension > 0.82
-        && (angle > 145 || hook || uppercut) && frame.t - this.lastAttack[hand] >= ATTACK_COOLDOWN_MS) {
-        let move: AttackMove = hand === 'L' ? 'jab' : 'cross';
-        if (hook) move = 'hook';
-        else if (uppercut) move = 'uppercut';
-
-        const dt = Math.max(0.001, (frame.t - previous.t) / 1000);
-        const wristSpeed = distance2(previous.wrist, wrist) / scale / dt;
-        commands.push({
-          kind: 'attack', player: this.player, t: frame.t, move, hand,
-          height: wrist.y < nose.y + scale * 0.1 ? 'head' : 'body',
-          speed: clamp(0.8 + wristSpeed / 12, 0.8, 1.3),
-          windup: clamp(0.8 + Math.max(0, 0.62 - previous.extension), 0.8, 1.3),
-        });
-        this.lastAttack[hand] = frame.t;
+      if (visible && outward > cfg.onsetSpeed && disp > cfg.onsetDist && strikeLike(def, tTip, tMid, disp)) {
+        Object.assign(s, { phase: 'onset', since: t, peakDisp: disp, peakSpeed: outward, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y });
+        out.push({ kind: 'anticipate', limb: name, t });
       }
-      this.hands[hand] = { extension, elbowAngle: angle, wrist: { ...wrist }, t: frame.t };
+      return;
     }
 
-    const hipCenter = midpoint(leftHip, rightHip);
-    const shoulderCenter = midpoint(leftShoulder, rightShoulder);
-    this.torsoWidth ??= shoulderWidth;
-    const relativeWidth = shoulderWidth / Math.max(this.torsoWidth, 0.001);
-    const advance = relativeWidth > 1.12 ? clamp((relativeWidth - 1.12) * 5, 0, 1)
-      : relativeWidth < 0.9 ? clamp((relativeWidth - 0.9) * 5, -1, 0) : 0;
+    if (s.phase === 'onset') {
+      if (disp > s.peakDisp) Object.assign(s, { peakDisp: disp, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y });
+      s.peakSpeed = Math.max(s.peakSpeed, outward);
+      const slowing = outward < s.peakSpeed * 0.35 && t - s.since > 40;
+      if (!slowing && t - s.since < cfg.maxWindupMs) return;
+
+      // Legs must also lift (knee or foot) above where they usually sit, so stepping isn't kicking.
+      const lift = Math.max(s.peak.y, s.peakMidRise);
+      const isStrike = s.peakDisp >= cfg.strikeDist && (def.kind === 'arm' || lift >= this.config.legRise);
+      if (!isStrike) {
+        s.phase = 'idle';
+        out.push({ kind: 'cancel', limb: name, t });
+        return;
+      }
+      const dir = normalize(s.peak);
+      const strikeOut = dir.x * def.side;
+      const speedRatio = s.peakSpeed / s.typicalSpeed;
+      s.typicalSpeed += 0.2 * (s.peakSpeed - s.typicalSpeed);
+      out.push({
+        kind: 'strike',
+        limb: name,
+        t,
+        onsetT: s.since,
+        style: classify(def.kind, dir, strikeOut, s.peakTip, s.peakMid),
+        height: heightOf(def.kind, s.peakTip, body),
+        dir: { out: strikeOut, up: dir.y, fwd: dir.z },
+        speed: clamp(0.8 + 0.5 * (speedRatio - 0.6), 0.8, 1.3),
+        windup: windupOf(s, dir),
+        reach: s.peakDisp,
+      });
+      s.phase = 'recover';
+      s.since = t;
+      return;
+    }
+
+    // Recover: ready again once the limb comes back near rest (or after a timeout).
+    if (restDisp < cfg.returnDist || t - s.since > cfg.recoverMs) {
+      s.phase = 'idle';
+      s.anchor = clonePair(now);
+    }
+  }
+
+  private updateCore(body: Body, out: Intent[]) {
+    const cfg = this.config;
+    const t = body.t;
+    const nose = body.points[LM.nose];
+    const quiet = Math.hypot(nose.v.x, nose.v.y) < 0.6 && Math.abs(body.root.vy) < 0.4;
+    if (!this.headRest) this.headRest = { x: nose.p.x, y: nose.p.y };
+    if (quiet) {
+      const k = 1 - Math.exp(-body.dt / cfg.restSeconds);
+      this.headRest.x += k * (nose.p.x - this.headRest.x);
+      this.headRest.y += k * (nose.p.y - this.headRest.y);
+    }
+
+    // Duck: the head drops, by bending the knees (hips drop) or the waist (head drops toward the hips).
+    const headDrop = this.headRest.y - nose.p.y - body.root.y;
+    const dropSpeed = -(nose.v.y + body.root.vy);
+    if (headDrop > cfg.duck.drop && dropSpeed > cfg.duck.speed && t - this.lastCore.duck > cfg.coreCooldownMs) {
+      this.lastCore.duck = t;
+      out.push({ kind: 'duck', t });
+    }
+
+    // Jump: the hips rise above their usual height. A little bounce counts; nobody has to leave the floor.
+    if (body.root.y > cfg.jump.rise && body.root.vy > cfg.jump.speed && t - this.lastCore.jump > cfg.coreCooldownMs) {
+      this.lastCore.jump = t;
+      out.push({ kind: 'jump', t, power: clamp(body.root.y / (cfg.jump.rise * 3), 0.3, 1) });
+    }
+
+    // Dodge: the head leans sideways relative to the hips.
+    const lean = nose.p.x - this.headRest.x;
+    if (Math.abs(lean) > cfg.dodge.shift && Math.sign(nose.v.x) === Math.sign(lean) && Math.abs(nose.v.x) > cfg.dodge.speed
+      && t - this.lastCore.dodge > cfg.coreCooldownMs) {
+      this.lastCore.dodge = t;
+      out.push({ kind: 'dodge', t, dir: lean > 0 ? 'L' : 'R' });
+    }
+
+    // Guard: both wrists up near the face.
+    const lw = body.points[LM.lWrist].p;
+    const rw = body.points[LM.rWrist].p;
+    // Hysteresis: up inside the radius, down only once a hand is clearly away, so it doesn't flicker.
+    const radius = this.guardUp ? cfg.guard.radius * 1.35 : cfg.guard.radius;
+    const near = (w: Vec3) => Math.hypot(w.x - nose.p.x, w.y - nose.p.y) < radius;
+    const striking = this.limbs.armL.phase === 'onset' || this.limbs.armR.phase === 'onset';
+    const inGuard = near(lw) && near(rw) && !striking;
+    if (inGuard === this.guardUp) this.guardSince = null;
+    else {
+      this.guardSince ??= t;
+      if (t - this.guardSince >= cfg.guard.holdMs) {
+        this.guardUp = inGuard;
+        this.guardSince = null;
+        out.push({ kind: 'guard', t, up: inGuard });
+      }
+    }
+
+    const advance = body.scale > 1 + cfg.advance.in ? clamp((body.scale - 1 - cfg.advance.in) * 6, 0, 1)
+      : body.scale < 1 - cfg.advance.out ? -clamp((1 - cfg.advance.out - body.scale) * 6, 0, 1) : 0;
     this.stance = {
       player: this.player,
-      guard: bothNearFace || this.blocking,
+      guard: this.guardUp,
       advance,
-      lean: { x: clamp((nose.x - hipCenter.x) / scale, -1, 1), y: clamp((nose.y - shoulderCenter.y) / scale, -1, 1) },
+      lean: { x: clamp(lean / 0.5, -1, 1), y: clamp(-headDrop / 0.5, -1, 1) },
       tracked: true,
     };
-    return { commands, stance: this.stance };
+    this.debug = {
+      limbs: Object.fromEntries(LIMB_NAMES.map((n) => [n, { phase: this.limbs[n].phase, disp: this.limbs[n].disp, out: this.limbs[n].out }])) as IntentDebug['limbs'],
+      headDrop,
+      lean,
+      rootY: body.root.y,
+      rootVy: body.root.vy,
+      scale: body.scale,
+      guard: this.guardUp,
+    };
   }
 }
 
-function hasVisibleBody(frame: PoseFrame) {
-  return [0, 11, 12, 13, 14, 15, 16, 23, 24].every((i) => (frame.image[i]?.visibility ?? 0) >= VISIBILITY);
+/** Temporary bridge to the current FightEngine commands, until the resolver picks moves from context. */
+function toCommands(player: PlayerId, intents: Intent[]): Command[] {
+  const commands: Command[] = [];
+  for (const intent of intents) {
+    if (intent.kind === 'anticipate' && (intent.limb === 'armL' || intent.limb === 'armR')) {
+      commands.push({ kind: 'anticipate', player, t: intent.t, hand: intent.limb === 'armL' ? 'L' : 'R' });
+    } else if (intent.kind === 'strike' && (intent.limb === 'armL' || intent.limb === 'armR')) {
+      const hand = intent.limb === 'armL' ? 'L' : 'R';
+      const move: AttackMove = intent.style === 'hook' ? 'hook' : intent.style === 'upper' ? 'uppercut' : hand === 'L' ? 'jab' : 'cross';
+      commands.push({
+        kind: 'attack', player, t: intent.t, move, hand,
+        height: intent.height === 'high' ? 'head' : 'body',
+        speed: intent.speed,
+        windup: intent.windup,
+      });
+    } else if (intent.kind === 'duck') {
+      commands.push({ kind: 'defend', player, t: intent.t, move: 'duck' });
+    } else if (intent.kind === 'dodge') {
+      commands.push({ kind: 'defend', player, t: intent.t, move: 'slip', dir: intent.dir });
+    } else if (intent.kind === 'guard' && intent.up) {
+      commands.push({ kind: 'defend', player, t: intent.t, move: 'block' });
+    }
+  }
+  return commands;
 }
 
-function distance2(a: Point, b: Point) {
-  return Math.hypot(a.x - b.x, a.y - b.y);
+/** Strikes go forward, up, or across the body. Drops, pull-backs and outward wind-ups aren't strikes. */
+function strikeLike(def: LimbDef, tip: Vec3, mid: Vec3, disp: number) {
+  const fwd = tip.z + mid.z;
+  const up = tip.y + 0.5 * mid.y;
+  const inward = -(tip.x + 0.5 * mid.x) * def.side;
+  return Math.max(fwd, up, inward) > 0.35 * disp;
 }
 
-function midpoint(a: Point, b: Point): Point {
-  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 };
+function classify(kind: 'arm' | 'leg', dir: Vec3, out: number, tip: Vec3, mid: Vec3): StrikeStyle {
+  // Kick: the foot comes up near knee height. Knee strike: the knee rises with the foot tucked under it.
+  if (kind === 'leg') return tip.y > mid.y - 0.3 ? 'kick' : 'knee';
+  if (dir.y > 0.6) return 'upper';
+  if (Math.abs(out) > 0.6) return 'hook';
+  return 'straight';
 }
 
-function mean(values: number[]) {
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
+function heightOf(kind: 'arm' | 'leg', end: Vec3, body: Body): 'high' | 'mid' | 'low' {
+  if (kind === 'arm') {
+    const shoulderY = (body.points[LM.lShoulder].p.y + body.points[LM.rShoulder].p.y) / 2;
+    return end.y > shoulderY - 0.1 ? 'high' : 'mid';
+  }
+  return end.y > -0.35 ? 'high' : end.y > -0.75 ? 'mid' : 'low';
 }
 
-function elbowAngle(shoulder: Point, elbow: Point, wrist: Point) {
-  const ax = shoulder.x - elbow.x;
-  const ay = shoulder.y - elbow.y;
-  const bx = wrist.x - elbow.x;
-  const by = wrist.y - elbow.y;
-  const denom = Math.max(0.000001, Math.hypot(ax, ay) * Math.hypot(bx, by));
-  return Math.acos(clamp((ax * bx + ay * by) / denom, -1, 1)) * 180 / Math.PI;
+/** How far the limb pulled back (against the strike direction) just before it started. */
+function windupOf(s: LimbState, dir: Vec3) {
+  let back = 0;
+  for (const h of s.history) if (h.t <= s.since) back = Math.max(back, -dot(h.d, dir));
+  return clamp(0.8 + back * 1.25, 0.8, 1.3);
 }
 
-function clamp(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, value));
+function newLimb(): LimbState {
+  return {
+    phase: 'idle', rest: null, anchor: null, since: 0, peakDisp: 0, peakSpeed: 0,
+    peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, history: [], typicalSpeed: 4, disp: 0, out: 0,
+  };
 }
+
+const clonePair = (p: Pair): Pair => ({ tip: { ...p.tip }, mid: { ...p.mid } });
+const lerpPair = (a: Pair, b: Pair, k: number): Pair => ({
+  tip: { x: a.tip.x + k * (b.tip.x - a.tip.x), y: a.tip.y + k * (b.tip.y - a.tip.y), z: a.tip.z + k * (b.tip.z - a.tip.z) },
+  mid: { x: a.mid.x + k * (b.mid.x - a.mid.x), y: a.mid.y + k * (b.mid.y - a.mid.y), z: a.mid.z + k * (b.mid.z - a.mid.z) },
+});
+
+function untracked(player: PlayerId): Stance {
+  return { player, guard: false, advance: 0, lean: { x: 0, y: 0 }, tracked: false };
+}
+
+const sub = (a: Vec3, b: Vec3): Vec3 => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });
+const dot = (a: Vec3, b: Vec3) => a.x * b.x + a.y * b.y + a.z * b.z;
+const len = (a: Vec3) => Math.hypot(a.x, a.y, a.z);
+const normalize = (a: Vec3): Vec3 => {
+  const l = len(a) || 1;
+  return { x: a.x / l, y: a.y / l, z: a.z / l };
+};
+const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));

@@ -27,6 +27,7 @@ export type PoseFrame = {
   t: number; // performance.now() in ms, on the machine that tracked it
   image: Landmark[]; // 33 MediaPipe landmarks, normalized image coords
   world: Landmark[]; // 33 world landmarks, meters, hip-centered
+  aspect?: number; // video width / height. Image x and y are normalized separately, so distances need it.
 };
 
 // ---------------------------------------------------------------------------
