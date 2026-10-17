@@ -5,15 +5,16 @@
 import { CameraSource } from '../../src/input/sources/CameraSource';
 import type { PoseFrame } from '../../src/types';
 import type { DepthMsg, DeviceChoice, ErrorMsg, FrameMsg, InitMsg, ReadyMsg } from './depthWorker';
-import { samplePoints, towardSignal } from './signal';
+import { TowardSignal, samplePoints, type SampleSpec } from './signal';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const params = new URLSearchParams(location.search);
 const RES = Number(params.get('res') ?? 252);
 const EVERY = Math.max(1, Number(params.get('every') ?? 2));
 const DEVICE = (params.get('device') ?? 'auto') as DeviceChoice;
-/** Patch half-size, fraction of image width (~3 px at 252). */
-const PATCH = 0.012;
+/** ?bench=1: no camera or MediaPipe, just run the depth model back to back on a synthetic frame. */
+const BENCH = params.get('bench') === '1';
+const DTYPE = (params.get('dtype') ?? undefined) as InitMsg['dtype'];
 const WINDOW_MS = 8000;
 const BONES: [number, number][] = [[11, 12], [11, 13], [13, 15], [12, 14], [14, 16], [11, 23], [12, 24], [0, 11], [0, 12]];
 
@@ -37,7 +38,8 @@ let busy = false;
 let frameN = 0;
 let lastFrame: PoseFrame | null = null;
 let lastDepth: DepthMsg | null = null;
-let lastPoints: Record<string, [number, number]> | null = null;
+let lastPoints: Record<string, SampleSpec> | null = null;
+const signal = new TowardSignal();
 let overlay = params.get('overlay') === '1';
 let recording: Entry[] | null = null;
 let workerError = '';
@@ -58,12 +60,13 @@ $('overlay').onclick = () => {
 };
 $('overlay').classList.toggle('on', overlay);
 $('record').onclick = toggleRecord;
-start();
+if (BENCH) startBench();
+else start();
 
 async function start() {
   if (camera) return;
   setStatus('starting camera and MediaPipe…');
-  startWorker();
+  if (!worker) startWorker();
   camera = new CameraSource();
   try {
     await camera.start();
@@ -99,7 +102,7 @@ function startWorker() {
   worker.onerror = (e) => {
     workerError = e.message || 'worker failed';
   };
-  worker.postMessage({ type: 'init', device: DEVICE } satisfies InitMsg);
+  worker.postMessage({ type: 'init', device: DEVICE, dtype: DTYPE } satisfies InitMsg);
 }
 
 function depthSize(w: number, h: number) {
@@ -129,7 +132,7 @@ function onPose(frame: PoseFrame) {
   pending.set(frame.t, entry);
   createImageBitmap(video, { resizeWidth: size.w, resizeHeight: size.h, resizeQuality: 'medium' })
     .then((bitmap) => {
-      const msg: FrameMsg = { type: 'frame', t: frame.t, bitmap, points, patch: PATCH, wantMap: overlay };
+      const msg: FrameMsg = { type: 'frame', t: frame.t, bitmap, points, wantMap: overlay };
       lastPoints = points;
       worker!.postMessage(msg, [bitmap]);
     })
@@ -142,11 +145,13 @@ function onPose(frame: PoseFrame) {
 
 function onDepth(msg: DepthMsg) {
   busy = false;
+  if (BENCH) queueMicrotask(benchFrame);
   lastDepth = msg;
   depthTimes.push(performance.now());
-  depthMs += 0.1 * (msg.ms - depthMs);
-  depthTotalMs += 0.1 * (msg.totalMs - depthTotalMs);
-  const toward = { L: towardSignal(msg.samples, msg.pct, 'L'), R: towardSignal(msg.samples, msg.pct, 'R') };
+  // Smoothed timings (start from the first value so the readout isn't low at first).
+  depthMs = depthMs ? depthMs + 0.1 * (msg.ms - depthMs) : msg.ms;
+  depthTotalMs = depthTotalMs ? depthTotalMs + 0.1 * (msg.totalMs - depthTotalMs) : msg.totalMs;
+  const toward = signal.update(msg.samples, msg.pct);
   push(series.depthL, msg.t, toward.L);
   push(series.depthR, msg.t, toward.R);
   const entry = pending.get(msg.t);
@@ -157,6 +162,38 @@ function onDepth(msg: DepthMsg) {
   }
   for (const t of pending.keys()) if (t < msg.t) pending.delete(t);
   if (msg.map) paintMap(msg.map, msg.w, msg.h);
+}
+
+// --- bench mode ----------------------------------------------------------------------------------
+
+function startBench() {
+  startWorker();
+  setStatus('bench: loading depth model…');
+  requestAnimationFrame(draw);
+  const wait = setInterval(() => {
+    if (!ready) return;
+    clearInterval(wait);
+    benchFrame();
+  }, 100);
+}
+
+const benchCanvas = document.createElement('canvas');
+function benchFrame() {
+  if (!worker || busy) return;
+  const size = depthSize(640, 480);
+  benchCanvas.width = 640;
+  benchCanvas.height = 480;
+  const c = benchCanvas.getContext('2d')!;
+  const g = c.createRadialGradient(320, 200, 20, 320, 240, 400);
+  g.addColorStop(0, '#d9a07a');
+  g.addColorStop(1, '#203040');
+  c.fillStyle = g;
+  c.fillRect(0, 0, 640, 480);
+  busy = true;
+  const points = { nose: { x: 0.5, y: 0.4, r: 0.012, q: 0.5 }, lHand: { x: 0.6, y: 0.6, r: 0.08, q: 0.9 } };
+  createImageBitmap(benchCanvas, { resizeWidth: size.w, resizeHeight: size.h }).then((bitmap) => {
+    worker!.postMessage({ type: 'frame', t: performance.now(), bitmap, points, wantMap: false } satisfies FrameMsg, [bitmap]);
+  });
 }
 
 function push(list: Point[], t: number, v: number) {
@@ -178,7 +215,7 @@ function toggleRecord() {
   recording = null;
   button.textContent = 'Record';
   button.classList.remove('on');
-  const header = { clip: 'depth-spike', model: 'onnx-community/depth-anything-v2-small', device: ready?.device, dtype: ready?.dtype, res: RES, every: EVERY, patch: PATCH, frames: frames.length, ua: navigator.userAgent };
+  const header = { clip: 'depth-spike', model: 'onnx-community/depth-anything-v2-small', device: ready?.device, dtype: ready?.dtype, res: RES, every: EVERY, frames: frames.length, ua: navigator.userAgent };
   const round = (x: number) => Math.round(x * 1e5) / 1e5;
   const lines = [JSON.stringify(header), ...frames.map((f) => JSON.stringify(f, (_k, v) => (typeof v === 'number' ? round(v) : v)))];
   const url = URL.createObjectURL(new Blob([lines.join('\n') + '\n'], { type: 'application/x-ndjson' }));
@@ -242,11 +279,11 @@ function draw() {
     }
   }
   if (lastPoints) {
-    const r = PATCH * view.width;
-    for (const [name, [x, y]] of Object.entries(lastPoints)) {
-      ctx.strokeStyle = name.endsWith('Hand') ? '#ffd34d' : name === 'chest' ? '#4ade80' : '#94a3b8';
+    for (const [name, p] of Object.entries(lastPoints)) {
+      const r = p.r * view.width;
+      ctx.strokeStyle = name.endsWith('Hand') ? '#ffd34d' : name === 'nose' || name.endsWith('Shoulder') ? '#4ade80' : '#94a3b8';
       ctx.lineWidth = 2;
-      ctx.strokeRect(x * view.width - r, y * view.height - r, 2 * r, 2 * r);
+      ctx.strokeRect(p.x * view.width - r, p.y * view.height - r, 2 * r, 2 * r);
     }
   }
 
@@ -263,6 +300,7 @@ function draw() {
     : ready
       ? `depth ${depthTimes.length} fps · ${depthMs.toFixed(0)} ms model (${depthTotalMs.toFixed(0)} ms total) · ${ready.device} ${ready.dtype} · ${lastDepth ? `${lastDepth.w}×${lastDepth.h}` : RES}`
       : 'loading depth model (~50 MB first time)…';
+  if (BENCH && ready) setStatus(`bench: depth ${depthTimes.length} fps · ${depthMs.toFixed(0)} ms model (${depthTotalMs.toFixed(0)} ms total)`, depthLine);
   if (camera && stats) {
     setStatus(`pose ${poseTimes.length} fps · depth ${ready ? depthTimes.length : '…'} fps`, `${depthLine}<br>MediaPipe ${stats.detectMs.toFixed(0)} ms · camera ${stats.width}×${stats.height} @ ${stats.fps.toFixed(0)}${recording ? ` · <b style="color:#f87171">REC ${recording.length}</b>` : ''}`);
   }
@@ -320,7 +358,7 @@ function drawPlot(id: string, depth: Point[], mp: Point[], now: number) {
     ctx.lineWidth = 1;
     ctx.fillStyle = color;
     ctx.font = '600 20px system-ui';
-    ctx.fillText(`${label} ${vals[vals.length - 1].toFixed(2)}  [${lo.toFixed(2)}, ${hi.toFixed(2)}]`, 10, 24 + row * 24);
+    ctx.fillText(`${label} ${vals[vals.length - 1].toFixed(2)}  [${lo.toFixed(2)}, ${hi.toFixed(2)}]`, 10, 26 + row * 28);
   };
   line(mp, '#60a5fa', 0.3, 'MP z (m)', 1);
   line(depth, '#ffd34d', 0.5, 'depth', 0);
