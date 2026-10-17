@@ -101,6 +101,8 @@ $('guided').onclick = async () => {
   guided = { frames: [], intents: [], labels: [] };
   $('log').textContent = '';
   const prompt = $('prompt');
+  prompt.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  $('guided').textContent = 'Guided test running…';
   for (const n of [3, 2, 1]) {
     prompt.innerHTML = `get ready… ${n}<small>guard up: fists by your chin</small>`;
     await sleep(1000);
@@ -115,7 +117,9 @@ $('guided').onclick = async () => {
   }
   prompt.innerHTML = 'done!<small>results on the right, clip saved to Downloads</small>';
   setTimeout(() => (prompt.innerHTML = ''), 4000);
+  $('guided').textContent = 'Guided test (90 s)';
   showResults(guided);
+  $('results').scrollIntoView({ block: 'center', behavior: 'smooth' });
   download(guided);
   void upload(guided);
   guided = null;
