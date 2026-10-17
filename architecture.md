@@ -37,7 +37,7 @@ Game phases: lobby -> countdown -> fighting -> ko -> rematch
 
 On the client, the choice (name + frames, or the picked fighter id) goes to the host over P2P.
 Only the host talks to the forge server and keeps fighters.
-Memory card = localStorage + house fighters for now (forge/roster.ts).
+Memory card = the forge server's fighters + localStorage + house fighters (forge/roster.ts).
 
 
 ## Folders (src/)
@@ -68,8 +68,9 @@ Renderer (Three.js), Arena, FighterView, Effects, pose helpers.
 - TODO: forged GLB + animation in FighterView, hit effects, camera moves.
 
 ### forge/
-Scan capture + forge API client (mocked), roster.ts (memory card).
-- TODO: real capture, real calls to the forge server, GET /api/fighters for the roster.
+scanBuckets.ts (pure: facing from landmarks, front/left/right buckets, sharpness), scan.ts (live capture
+from the camera's video + pose frames), forge.ts (captureScan, submitForge/getForge/forgeFighter against
+config.forgeApi, mocked when empty), roster.ts (memory card: forge server's fighters + localStorage + house).
 
 ### game/
 Game.ts wires everything on the host and runs the phases. store.ts is UI state.
