@@ -1,5 +1,6 @@
 import { createLocalSource, type InputSource } from '../input';
 import { captureScan } from '../forge/forge';
+import { FORGE_STEPS, scanStatus } from '../forge/status';
 import { Peer } from '../net/Peer';
 import { Signaling } from '../net/Signaling';
 import { PROTOCOL_VERSION, type ClientMessage, type HostMessage } from '../net/protocol';
@@ -9,14 +10,6 @@ import type { FighterChoice } from './Game';
 import { localPlayerId, updatePlayer, useGameStore } from './store';
 
 const PLAYER = localPlayerId('client');
-
-const FORGE_STEPS: Record<NonNullable<ForgedFighter['step']>, string> = {
-  brief: 'Sizing you up',
-  sheet: 'Drawing your fighter',
-  model: 'Building your 3D model',
-  cleanup: 'Polishing',
-  rig: 'Rigging your fighter',
-};
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -72,7 +65,8 @@ export class ClientSession {
 
       if (choice.kind === 'scan') {
         updatePlayer(PLAYER, { statusDetail: 'Turn slowly' });
-        const scan: ClientMessage = { type: 'scan', frames: await captureScan(this.source.video) };
+        const frames = await captureScan(this.source.video, this.source, (p) => updatePlayer(PLAYER, { statusDetail: scanStatus(p) }));
+        const scan: ClientMessage = { type: 'scan', frames };
         this.setup.push(scan);
         this.send(scan);
       }

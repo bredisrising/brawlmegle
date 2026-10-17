@@ -95,5 +95,7 @@ export type ForgedFighter = {
   step?: 'brief' | 'sheet' | 'model' | 'cleanup' | 'rig';
   glbUrl?: string; // 1 m tall; forged models use Mixamo bones, static test models may be unrigged
   cardUrl?: string; // VS card art
+  sheetUrl?: string; // A-pose model sheet (input to the 3D step)
   brief?: Record<string, unknown>; // see SPEC.md "Prompts" for the shape
+  error?: string; // why the forge failed
 };

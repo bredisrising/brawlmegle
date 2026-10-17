@@ -6,7 +6,8 @@ import { Resolver } from '../fight/Resolver';
 import { IntentReader } from '../intent/IntentReader';
 import { InputHub, createLocalSource, type InputSource } from '../input';
 import { MockSource } from '../input/sources/MockSource';
-import { captureScan, getForge, submitForge } from '../forge/forge';
+import { captureScan, forgeFighter } from '../forge/forge';
+import { scanStatus, forgeStatus } from '../forge/status';
 import { maskedFighter, saveFighter } from '../forge/roster';
 import { Peer } from '../net/Peer';
 import { Signaling } from '../net/Signaling';
@@ -115,10 +116,12 @@ export class Game {
       let fighter: ForgedFighter;
       if (choice.kind === 'scan') {
         updatePlayer(id, { statusDetail: 'Turn slowly' });
-        const frames = await captureScan(source.video);
+        const frames = await captureScan(source.video, source, (p) => updatePlayer(id, { statusDetail: scanStatus(p) }));
         updatePlayer(id, { status: 'forging', statusDetail: 'Forging fighter' });
-        fighter = await getForge(await submitForge(name, frames), name);
-        saveFighter(fighter); // they said yes to "save fighter to memory card"
+        fighter = await forgeFighter(name, frames, (f) => updatePlayer(id, { statusDetail: forgeStatus(f) }));
+        if (fighter.status === 'ready') saveFighter(fighter); // they said yes to "save fighter to memory card"
+        // A failed forge still fights: no glbUrl means the default model (SPEC fallback ladder).
+        else console.warn('forge failed, using the default fighter:', fighter.error);
       } else if (choice.kind === 'masked') {
         fighter = maskedFighter(name);
       } else {

@@ -1,11 +1,13 @@
+import { config } from '../config';
 import type { ForgedFighter } from '../types';
+import { toForgedFighter } from './forge';
 
 /**
  * The "memory card": fighters saved from earlier scans, for "Choose existing".
  *
- * For now this is localStorage on whichever laptop forged them, plus a few house fighters.
- * TODO: store on the forge server (GET /api/fighters) so both laptops see the same list,
- * and the client gets it from the host over P2P (`roster` message).
+ * With a forge server (config.forgeApi), its ready fighters (GET /api/fighters) come first, then
+ * anything saved in this browser's localStorage that the server doesn't have, then the house fighters.
+ * Without one it's localStorage + house fighters. The client gets the host's list over P2P (`roster`).
  */
 
 const KEY = 'brawlegle.roster';
@@ -26,8 +28,28 @@ function readSaved(): ForgedFighter[] {
   }
 }
 
-export async function listFighters(): Promise<ForgedFighter[]> {
-  return [...readSaved(), ...HOUSE_FIGHTERS];
+/** Ready fighters on the forge server, newest first. Empty if there's no server or it's unreachable. */
+export async function fetchServerFighters(api = config.forgeApi, timeoutMs = 4000): Promise<ForgedFighter[]> {
+  if (!api) return [];
+  try {
+    const res = await fetch(`${api.replace(/\/+$/, '')}/api/fighters`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) throw new Error(`${res.status}`);
+    const list = (await res.json()) as Record<string, unknown>[];
+    return list.map((f) => toForgedFighter(f)).filter((f) => f.id && f.status === 'ready');
+  } catch (err) {
+    console.warn('forge roster unavailable, using local memory card', err);
+    return [];
+  }
+}
+
+/** Server fighters, then local ones the server doesn't know, then house fighters. First id wins. */
+export function mergeRosters(...lists: ForgedFighter[][]): ForgedFighter[] {
+  const seen = new Set<string>();
+  return lists.flat().filter((f) => !seen.has(f.id) && seen.add(f.id));
+}
+
+export async function listFighters(api = config.forgeApi): Promise<ForgedFighter[]> {
+  return mergeRosters(await fetchServerFighters(api), readSaved(), HOUSE_FIGHTERS);
 }
 
 export function saveFighter(fighter: ForgedFighter) {
