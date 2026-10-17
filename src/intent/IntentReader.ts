@@ -270,7 +270,7 @@ export class IntentReader {
       const features = def.kind === 'arm' ? strikeFeatures(def, s, root.p) : undefined;
       const ruleStyle: StrikeStyle = def.kind === 'arm' && Math.abs(s.peak.x) <= 0.45 && (s.peakExt > len(s.peak) || s.peakExt > 0.15 || len(s.peak) < 0.6 * s.peakMidTravel)
         ? 'straight'
-        : classify(def.kind, dir, strikeOut, s.peakTip, s.peakMid, s.peakMidOut, s.peak, s.peakMidRise);
+        : classify(def.kind, dir, strikeOut, s.peakTip, s.peakMid, s.peakMidOut, s.peak, s.peakMidRise, s.peakExt, s.peakElbow);
       const style = features && this.matcher ? this.matcher.decide(features, ruleStyle) : ruleStyle;
       out.push({
         kind: 'strike',
@@ -467,7 +467,7 @@ function raisingGuard(body: Body, start: Vec3, end: Vec3, radius: number) {
   return startedLow && endsUp;
 }
 
-function classify(kind: 'arm' | 'leg', dir: Vec3, out: number, tip: Vec3, mid: Vec3, midOut: number, travel: Vec3, midRise: number): StrikeStyle {
+function classify(kind: 'arm' | 'leg', dir: Vec3, out: number, tip: Vec3, mid: Vec3, midOut: number, travel: Vec3, midRise: number, ext = 0, elbow = 180): StrikeStyle {
   // Kick: the foot comes up near knee height. Knee strike: the knee rises with the foot tucked under it.
   if (kind === 'leg') return tip.y > mid.y - 0.3 ? 'kick' : 'knee';
   // A big sideways sweep is a hook (or a haymaker), however straight the arm.
@@ -476,6 +476,9 @@ function classify(kind: 'arm' | 'leg', dir: Vec3, out: number, tip: Vec3, mid: V
   if (dir.y > 0.6 && travel.y > 0.3 && travel.y > 1.5 * midRise) return 'upper';
   // Smaller sideways swing with the elbow flared: a tight hook. A cross drifts inward but stays tucked.
   if (Math.abs(out) > 0.6 && midOut > 0.05) return 'hook';
+  // Fist sweeping across the body with the elbow staying bent (a cross straightens the elbow as it drifts in).
+  const inward = -out * len(travel);
+  if (inward > 0.2 && inward >= 0.8 * travel.y && ext < 0.1 && elbow < 100) return 'hook';
   return 'straight';
 }
 
