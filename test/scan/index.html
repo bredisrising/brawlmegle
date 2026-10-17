@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scan test</title>
+<style>
+  :root { color-scheme: dark; --bg: #0e0f12; --panel: #17191e; --line: #2a2d35; --text: #e8e8ea; --dim: #8b8f99; --ok: #4ade80; --half: #fbbf24; --pink: #ff2d95; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, sans-serif; }
+  header { display: flex; gap: 8px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header h1 { font-size: 15px; margin: 0 12px 0 0; }
+  button, input { background: #252830; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font: inherit; }
+  button { cursor: pointer; }
+  button:disabled { opacity: 0.45; cursor: default; }
+  button.primary { background: var(--pink); border-color: var(--pink); color: #000; font-weight: 700; }
+  #status { color: var(--dim); margin-left: auto; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 12px; padding: 12px; }
+  .stage { position: relative; background: #000; border-radius: 8px; overflow: hidden; aspect-ratio: 4 / 3; max-height: calc(100vh - 80px); margin: 0 auto; width: 100%; }
+  .stage video, .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; transform: scaleX(-1); }
+  #hint { position: absolute; left: 50%; bottom: 7%; transform: translateX(-50%); text-align: center; font: 800 clamp(22px, 4vw, 44px)/1.1 system-ui; color: #fff; text-shadow: 0 2px 10px #000; padding: 12px 22px; border-radius: 12px; white-space: nowrap; pointer-events: none; }
+  #hint:not(:empty) { background: rgba(0, 0, 0, 0.55); }
+  #ring { position: absolute; right: 16px; top: 16px; width: 120px; height: 120px; }
+  #ring text { font: 700 11px system-ui; fill: #fff; text-anchor: middle; dominant-baseline: middle; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 12px; }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dim); margin: 0 0 8px; }
+  .thumbs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .thumb { position: relative; aspect-ratio: 3 / 5; background: #0b0c0f; border: 2px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .thumb.t1 { border-color: var(--half); } .thumb.t2 { border-color: var(--ok); }
+  .thumb canvas { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .thumb span { position: absolute; left: 0; right: 0; bottom: 0; padding: 2px 4px; background: rgba(0, 0, 0, 0.6); font-size: 11px; text-align: center; }
+  .row { display: flex; gap: 6px; align-items: center; margin: 6px 0; flex-wrap: wrap; }
+  .row input { flex: 1; min-width: 0; }
+  .out img { width: 100%; border-radius: 6px; margin-top: 6px; background: #0b0c0f; }
+  pre { white-space: pre-wrap; font: 11px/1.4 ui-monospace, monospace; color: var(--dim); margin: 6px 0 0; max-height: 220px; overflow: auto; }
+  .hint { color: var(--dim); font-size: 12px; }
+  #debug { font: 12px/1.5 ui-monospace, monospace; color: var(--dim); white-space: pre-line; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>360° scan</h1>
+  <button id="camera">Start camera</button>
+  <button id="scan" class="primary" disabled>Scan</button>
+  <span id="status">camera off</span>
+</header>
+<main>
+  <div>
+    <div class="stage">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="overlay" width="640" height="480"></canvas>
+      <svg id="ring" viewBox="0 0 120 120" aria-label="scan progress"></svg>
+      <div id="hint"></div>
+    </div>
+    <p class="hint">Stand back so the camera sees you head to knees. Press Scan, face the camera, then turn slowly to your left all the way around (about 10 seconds). The scan keeps the sharpest front, left and right frame.</p>
+  </div>
+  <aside>
+    <div class="panel"><h2>Captured</h2>
+      <div class="thumbs">
+        <div class="thumb" id="thumb-front"><canvas></canvas><span>front</span></div>
+        <div class="thumb" id="thumb-left"><canvas></canvas><span>left</span></div>
+        <div class="thumb" id="thumb-right"><canvas></canvas><span>right</span></div>
+      </div>
+      <div id="sizes" class="hint"></div>
+    </div>
+    <div class="panel"><h2>Facing (live)</h2><div id="debug">no pose</div></div>
+    <div class="panel"><h2>Forge</h2>
+      <div class="row"><input id="name" placeholder="Fighter name" maxlength="16"></div>
+      <div class="row"><input id="forgeUrl" placeholder="http://127.0.0.1:8787"><button id="forge" disabled>Forge</button></div>
+      <div id="forgeStatus" class="hint">Scan first. The forge URL comes from ?forge=… or VITE_FORGE_API.</div>
+      <div class="out"><img id="sheet" alt="" hidden><img id="card" alt="" hidden></div>
+      <pre id="brief" hidden></pre>
+    </div>
+  </aside>
+</main>
+<script type="module" src="./main.ts"></script>
+</body>
+</html>
