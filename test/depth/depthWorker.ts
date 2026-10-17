@@ -9,7 +9,7 @@ const STD = [0.229, 0.224, 0.225];
 
 export type DeviceChoice = 'auto' | 'webgpu' | 'wasm';
 /** dtype: override the model weights (default fp16 on WebGPU, q8 on WASM). */
-export type InitMsg = { type: 'init'; device: DeviceChoice; dtype?: 'fp32' | 'fp16' | 'q8' | 'q4' };
+export type InitMsg = { type: 'init'; device: DeviceChoice; dtype?: 'fp32' | 'fp16' | 'q8' | 'q4'; /** WebGPU adapter: integrated (low-power) or discrete. */ power?: 'low-power' | 'high-performance' };
 export type FrameMsg = {
   type: 'frame';
   t: number;
@@ -46,7 +46,7 @@ env.allowLocalModels = false;
 self.onmessage = async (event: MessageEvent<InitMsg | FrameMsg>) => {
   const msg = event.data;
   try {
-    if (msg.type === 'init') await init(msg.device, msg.dtype);
+    if (msg.type === 'init') await init(msg.device, msg.dtype, msg.power);
     else if (msg.type === 'frame') await runFrame(msg);
   } catch (err) {
     post({ type: 'error', message: (err as Error).message ?? String(err) });
@@ -57,10 +57,16 @@ function post(msg: ReadyMsg | DepthMsg | ErrorMsg, transfer: Transferable[] = []
   (self as unknown as Worker).postMessage(msg, transfer);
 }
 
-async function init(choice: DeviceChoice, dtype?: InitMsg['dtype']) {
+async function init(choice: DeviceChoice, dtype?: InitMsg['dtype'], power?: InitMsg['power']) {
   const started = performance.now();
-  const gpu = (navigator as Navigator & { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
-  const hasGpu = !!gpu && !!(await gpu.requestAdapter().catch(() => null));
+  const gpu = (navigator as Navigator & { gpu?: { requestAdapter(o?: object): Promise<{ info?: { vendor?: string; architecture?: string; description?: string } } | null> } }).gpu;
+  const adapter = gpu ? await gpu.requestAdapter(power ? { powerPreference: power } : undefined).catch(() => null) : null;
+  const hasGpu = !!adapter;
+  if (adapter) {
+    console.info(`WebGPU adapter: ${adapter.info?.vendor} ${adapter.info?.architecture} ${adapter.info?.description}`);
+    const onnx = env.backends.onnx as { webgpu?: { powerPreference?: string } };
+    if (power) (onnx.webgpu ??= {}).powerPreference = power;
+  }
   const tryGpu = choice === 'webgpu' || (choice === 'auto' && hasGpu);
   if (tryGpu) {
     try {

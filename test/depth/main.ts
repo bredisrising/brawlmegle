@@ -1,7 +1,7 @@
 // Depth spike: can a monocular depth model (Depth Anything V2 Small, in a Worker) see a straight punch coming
 // at the camera, live, next to MediaPipe? Webcam -> CameraSource (pose) -> every Nth frame a small bitmap goes
 // to the depth worker, which samples depth at the landmarks. Plots the scale-free toward-camera signal next to
-// MediaPipe's world z. Run `npm run dev` and open /test/depth/ (?res=252&every=2&device=auto).
+// MediaPipe's world z. Run `npm run dev` and open /test/depth/ (?res=336&every=2&device=auto&dtype=fp16, ?bench=1 for depth only).
 import { CameraSource } from '../../src/input/sources/CameraSource';
 import type { PoseFrame } from '../../src/types';
 import type { DepthMsg, DeviceChoice, ErrorMsg, FrameMsg, InitMsg, ReadyMsg } from './depthWorker';
@@ -9,12 +9,14 @@ import { TowardSignal, samplePoints, type SampleSpec } from './signal';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const params = new URLSearchParams(location.search);
-const RES = Number(params.get('res') ?? 252);
+const RES = Number(params.get('res') ?? 336);
 const EVERY = Math.max(1, Number(params.get('every') ?? 2));
 const DEVICE = (params.get('device') ?? 'auto') as DeviceChoice;
 /** ?bench=1: no camera or MediaPipe, just run the depth model back to back on a synthetic frame. */
 const BENCH = params.get('bench') === '1';
 const DTYPE = (params.get('dtype') ?? undefined) as InitMsg['dtype'];
+/** ?power=low-power to put the depth model on the integrated GPU of a dual-GPU laptop. */
+const POWER = (params.get('power') ?? undefined) as InitMsg['power'];
 const WINDOW_MS = 8000;
 const BONES: [number, number][] = [[11, 12], [11, 13], [13, 15], [12, 14], [14, 16], [11, 23], [12, 24], [0, 11], [0, 12]];
 
@@ -66,7 +68,8 @@ else start();
 async function start() {
   if (camera) return;
   setStatus('starting camera and MediaPipe…');
-  if (!worker) startWorker();
+  // ?depth=off: MediaPipe alone, to see what the depth model costs it.
+  if (!worker && params.get('depth') !== 'off') startWorker();
   camera = new CameraSource();
   try {
     await camera.start();
@@ -83,6 +86,8 @@ async function start() {
   $('camera').textContent = 'Camera on';
   camera.onFrame(onPose);
   requestAnimationFrame(draw);
+  // Logged for automated runs (headless Chrome reads the console).
+  setInterval(() => console.info(`live: ${$('status').innerText.replace(/\n/g, ' | ')}`), 5000);
 }
 
 function startWorker() {
@@ -102,7 +107,7 @@ function startWorker() {
   worker.onerror = (e) => {
     workerError = e.message || 'worker failed';
   };
-  worker.postMessage({ type: 'init', device: DEVICE, dtype: DTYPE } satisfies InitMsg);
+  worker.postMessage({ type: 'init', device: DEVICE, dtype: DTYPE, power: POWER } satisfies InitMsg);
 }
 
 function depthSize(w: number, h: number) {
@@ -168,6 +173,8 @@ function onDepth(msg: DepthMsg) {
 
 function startBench() {
   startWorker();
+  // Logged for automated runs (headless Chrome reads the console).
+  setInterval(() => ready && console.info(`bench ${ready.device} ${ready.dtype} ${RES}px: ${depthMs.toFixed(1)} ms model, ${depthTotalMs.toFixed(1)} ms total, ${depthTimes.length} fps`), 5000);
   setStatus('bench: loading depth model…');
   requestAnimationFrame(draw);
   const wait = setInterval(() => {
