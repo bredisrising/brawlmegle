@@ -3,12 +3,16 @@ import { BRIEF_PROMPT, sheetPrompt, cardPrompt } from "./prompts.js";
 
 const API = "https://api.openai.com/v1";
 const BRIEF_MODEL = process.env.FORGE_BRIEF_MODEL ?? "gpt-5.4-mini";
-const IMAGE_MODEL = process.env.FORGE_IMAGE_MODEL ?? "gpt-image-2.5-flare";
+// Picked from a head-to-head on 2026-10-17: sunburst follows the style prompt best (18 s at medium), flare is the
+// fastest (12 s) and fine for the card, which runs next to the 3D step anyway. chatgpt-image-latest came out as
+// 2D pixel art, and gpt-image-2 was slower and smoother.
+const IMAGE_MODEL = process.env.FORGE_IMAGE_MODEL ?? "gpt-image-2.5-sunburst";
+const CARD_MODEL = process.env.FORGE_CARD_MODEL ?? "gpt-image-2.5-flare";
 const IMAGE_QUALITY = process.env.FORGE_IMAGE_QUALITY ?? "medium";
 /** "high" keeps faces closer to the photos. Only gpt-image-1 models accept it; gpt-image-2 rejects it. */
-const INPUT_FIDELITY = process.env.FORGE_INPUT_FIDELITY ?? (IMAGE_MODEL.startsWith("gpt-image-1") ? "high" : "");
+const INPUT_FIDELITY = process.env.FORGE_INPUT_FIDELITY ?? "high";
 
-export const models = { brief: BRIEF_MODEL, image: IMAGE_MODEL, quality: IMAGE_QUALITY };
+export const models = { brief: BRIEF_MODEL, sheet: IMAGE_MODEL, card: CARD_MODEL, quality: IMAGE_QUALITY };
 
 async function openai(path, init, timeoutMs) {
   const res = await fetch(API + path, {
@@ -48,13 +52,13 @@ export async function makeBrief(frames) {
 }
 
 /** Generates a new image from reference images plus a prompt. Returns PNG bytes. */
-export async function editImage(refs, prompt) {
+export async function editImage(refs, prompt, model = IMAGE_MODEL) {
   const form = new FormData();
-  form.append("model", IMAGE_MODEL);
+  form.append("model", model);
   form.append("prompt", prompt);
   form.append("size", "1024x1536");
   form.append("quality", IMAGE_QUALITY);
-  if (INPUT_FIDELITY) form.append("input_fidelity", INPUT_FIDELITY);
+  if (INPUT_FIDELITY && model.startsWith("gpt-image-1")) form.append("input_fidelity", INPUT_FIDELITY);
   refs.forEach((ref, i) => form.append("image[]", new Blob([ref.data], { type: ref.type }), `ref${i}.${ref.type.split("/")[1]}`));
   const body = await openai("/images/edits", { method: "POST", body: form }, 180_000);
   return Buffer.from(body.data[0].b64_json, "base64");
@@ -90,7 +94,7 @@ export async function runForge(job, frames, store) {
     // and the game falls back to the stock fighter.
     job.step = "model";
     store.save();
-    const card = await timed("card", () => editImage([{ data: sheet, type: "image/png" }], cardPrompt(job.brief)));
+    const card = await timed("card", () => editImage([{ data: sheet, type: "image/png" }], cardPrompt(job.brief), CARD_MODEL));
     job.cardUrl = store.write("card.png", card);
 
     job.status = "ready";

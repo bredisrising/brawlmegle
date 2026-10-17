@@ -186,5 +186,5 @@ http
     }),
   )
   .listen(PORT, BIND, () => {
-    console.log(`forge on http://${BIND}:${PORT} (brief ${models.brief}, images ${models.image} @ ${models.quality})`);
+    console.log(`forge on http://${BIND}:${PORT} (brief ${models.brief}, sheet ${models.sheet}, card ${models.card} @ ${models.quality})`);
   });
