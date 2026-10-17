@@ -3,7 +3,9 @@ import type { Landmark, PoseFrame } from '../../types';
 import type { InputSource } from '../InputSource';
 
 const WASM_ROOT = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1/wasm';
-const POSE_MODEL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
+/** `full` is more accurate (including depth) at a modest cost; `?pose=lite` for slow laptops. */
+const POSE_VARIANT = new URLSearchParams(window.location.search).get('pose') === 'lite' ? 'lite' : 'full';
+const POSE_MODEL = `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_${POSE_VARIANT}/float16/1/pose_landmarker_${POSE_VARIANT}.task`;
 
 /** Webcam -> MediaPipe PoseLandmarker -> timestamped image and world landmarks. */
 export class CameraSource implements InputSource {
@@ -35,7 +37,8 @@ export class CameraSource implements InputSource {
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
-        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+        // 60 fps if the camera can: a punch lasts only ~4–6 frames at 30.
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 60 }, facingMode: 'user' },
       });
       this.video.srcObject = this.stream;
       await this.video.play();
@@ -59,7 +62,7 @@ export class CameraSource implements InputSource {
         });
       }
       this.running = true;
-      this.frameRequest = requestAnimationFrame(this.detectFrame);
+      this.schedule();
     } catch (error) {
       this.stop();
       throw error;
@@ -68,7 +71,8 @@ export class CameraSource implements InputSource {
 
   stop() {
     this.running = false;
-    cancelAnimationFrame(this.frameRequest);
+    if (this.frameRequest && 'cancelVideoFrameCallback' in this.video) this.video.cancelVideoFrameCallback(this.frameRequest);
+    else cancelAnimationFrame(this.frameRequest);
     this.frameRequest = 0;
     this.landmarker?.close();
     this.landmarker = null;
@@ -85,8 +89,27 @@ export class CameraSource implements InputSource {
     return () => this.listeners.delete(cb);
   }
 
-  private detectFrame = (now: number) => {
+  /**
+   * Run once per new camera frame. requestVideoFrameCallback fires exactly once per frame, so the same
+   * image is never processed twice (requestAnimationFrame runs at the display rate, usually faster than
+   * the camera, which duplicates frames and makes speeds jumpy).
+   */
+  private schedule() {
+    if (!this.running) return;
+    if ('requestVideoFrameCallback' in this.video) {
+      this.frameRequest = this.video.requestVideoFrameCallback((now, meta) => this.detectFrame(meta.captureTime ?? now));
+    } else {
+      this.frameRequest = requestAnimationFrame(this.detectFrame);
+    }
+  }
+
+  private lastTimestamp = 0;
+
+  private detectFrame = (time: number) => {
     if (!this.running || !this.landmarker) return;
+    // MediaPipe needs strictly increasing timestamps.
+    const now = Math.max(time, this.lastTimestamp + 1);
+    this.lastTimestamp = now;
     if (this.video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
       const result = this.landmarker.detectForVideo(this.video, now);
       const selected = selectCenteredPose(result.landmarks);
@@ -97,6 +120,7 @@ export class CameraSource implements InputSource {
           t: now,
           image: image.map(toLandmark),
           world: world.map(toLandmark),
+          aspect: this.video.videoWidth / this.video.videoHeight,
         };
         this._latestFrame = frame;
         this._tracking = true;
@@ -106,7 +130,7 @@ export class CameraSource implements InputSource {
         this._tracking = false;
       }
     }
-    this.frameRequest = requestAnimationFrame(this.detectFrame);
+    this.schedule();
   };
 }
 
