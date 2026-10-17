@@ -1,21 +1,24 @@
 import * as THREE from 'three';
-import type { PlayerId } from '../types';
+import type { FightEvent, FighterState, PlayerId, PoseFrame } from '../types';
 import { FIGHTER_SPACING, PLAYER_COLORS } from '../game/constants';
-import { BONES, JOINTS, copyPose, createPose, type JointName, type Pose, type PoseTracker } from '../vision';
+import { BONES, GUARD_POSE, JOINTS, copyPose, createPose, type JointName, type Pose } from './pose';
 
 /**
- * One player in the world: placement, pose input, and the visual model.
+ * How one fighter looks on screen. Driven by the fight engine's FighterState
+ * (position, phase, move) plus a light blend of the player's live pose.
+ * It never decides anything; it only shows what the engine decided.
  *
- * The rendered pose is NOT 100% the tracked pose — reactions (knockback,
- * head recoil) get layered on top so hits read clearly.
+ * TODO:
+ *  - swap the placeholder for the forged GLB (Mixamo bones) + AnimationMixer
+ *  - layers: locomotion, action clips, live pose (~30% in idle/guard)
+ *  - stepped animation (~12 fps poses), IK fist onto target at contact
+ *  - reactions from FightEvents: head rock, knockback, hit flash
  */
-export class Fighter {
+export class FighterView {
   readonly id: PlayerId;
   /** World placement; rotated so local +z faces the opponent. */
   readonly root = new THREE.Group();
-  readonly trackedPose = createPose();
-  readonly renderPose = createPose();
-  tracker: PoseTracker | null = null;
+  readonly pose = createPose();
 
   private readonly joints = new Map<JointName, THREE.Mesh>();
   private readonly bones: THREE.LineSegments;
@@ -28,7 +31,6 @@ export class Fighter {
     this.root.visible = false;
 
     // Placeholder model: joint spheres + bone lines.
-    // TODO: replace with the generated GLB (from services/imageTo3D) skinned to a rig driven by renderPose.
     const material = new THREE.MeshStandardMaterial({ color: PLAYER_COLORS[id], roughness: 0.4 });
     for (const j of JOINTS) {
       const r = j === 'head' ? 0.075 : j.includes('Wrist') ? 0.04 : 0.025;
@@ -42,35 +44,25 @@ export class Fighter {
       new THREE.LineBasicMaterial({ color: PLAYER_COLORS[id] }),
     );
     this.root.add(this.bones);
+    this.applyPose(copyPose(this.pose, GUARD_POSE));
   }
 
-  setTracker(tracker: PoseTracker | null) {
-    this.tracker?.stop();
-    this.tracker = tracker;
-    this.root.visible = !!tracker;
+  setVisible(visible: boolean) {
+    this.root.visible = visible;
   }
 
-  /** Fixed-step update: pull latest pose, apply reactions, update the model. */
-  step(_dt: number) {
-    const pose = this.tracker?.getPose();
-    if (!pose) return;
-    copyPose(this.trackedPose, pose);
-    copyPose(this.renderPose, this.trackedPose);
-    // TODO: knockback / head-recoil springs layered onto renderPose + root offset.
-    this.applyPose(this.renderPose);
-  }
+  /** Called every sim tick with the engine's state and the latest live frame (if any). */
+  update(_state: Readonly<FighterState>, _live: PoseFrame | null) {}
 
-  /** React to being hit. */
-  hit(_damage: number, _headshot: boolean) {
-    // TODO: knockback impulse along local -z, head recoil, hit flash.
-  }
+  /** React to a fight event involving this fighter. */
+  onEvent(_event: FightEvent) {}
 
   worldJoint(joint: JointName, out = new THREE.Vector3()) {
-    return out.copy(this.renderPose[joint]).applyMatrix4(this.root.matrixWorld);
+    this.root.updateMatrixWorld();
+    return out.copy(this.pose[joint]).applyMatrix4(this.root.matrixWorld);
   }
 
   dispose() {
-    this.setTracker(null);
     this.root.removeFromParent();
   }
 

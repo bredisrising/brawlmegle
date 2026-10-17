@@ -1,7 +1,9 @@
 import { create } from 'zustand';
-import { PLAYER_IDS, type Phase, type PlayerId, type PlayerStatus } from '../types';
+import { PLAYER_IDS, type Phase, type PlayerId, type PlayerStatus, type Role } from '../types';
 import { MAX_HP, PLAYER_NAMES } from './constants';
-import type { HitKind } from './combat';
+
+/** Popup style. Game maps FightEvents onto these. */
+export type HitKind = 'light' | 'heavy' | 'blocked';
 
 export interface PlayerState {
   name: string;
@@ -22,8 +24,18 @@ export interface HitPopup {
   kind: HitKind;
 }
 
+/**
+ * App-level screens (before/around the fight):
+ *   title -> avatar (scan new / choose existing) -> game (host) | client (client laptop)
+ */
+export type Screen = 'title' | 'avatar' | 'game' | 'client';
+
 /** UI-facing state. The Game writes to it; React components read from it. */
 export interface GameState {
+  screen: Screen;
+  role: Role | null;
+  /** Room code from the signaling server (host shows it, client typed it). */
+  roomCode: string | null;
   phase: Phase;
   /** 3, 2, 1, then 0 = "FIGHT!"; null when hidden. */
   countdown: number | null;
@@ -43,6 +55,9 @@ const initialPlayer = (id: PlayerId): PlayerState => ({
 });
 
 export const useGameStore = create<GameState>(() => ({
+  screen: 'title',
+  role: null,
+  roomCode: null,
   phase: 'lobby',
   countdown: null,
   winner: null,
@@ -50,6 +65,9 @@ export const useGameStore = create<GameState>(() => ({
   popups: [],
   flashKey: 0,
 }));
+
+/** The player slot tracked on this laptop: host = p1, client = p2. */
+export const localPlayerId = (role: Role | null): PlayerId => (role === 'client' ? 'p2' : 'p1');
 
 export const updatePlayer = (id: PlayerId, patch: Partial<PlayerState>) =>
   useGameStore.setState((s) => ({ players: { ...s.players, [id]: { ...s.players[id], ...patch } } }));

@@ -1,10 +1,9 @@
 import { Vector3 } from 'three';
 
 /**
- * Pose in fighter-local space:
- *  - meters, normalized so the fighter is ~1m tall (FIGHTER_HEIGHT)
- *  - y up, feet at y = 0
- *  - +z is "forward" (toward the opponent), +x is the fighter's left
+ * Display skeleton used by the director (placeholder fighters, live-pose layer).
+ * Fighter-local space: meters, ~1m tall, y up, feet at y = 0,
+ * +z toward the opponent, +x is the fighter's left.
  */
 export const JOINTS = [
   'head', 'neck',
@@ -14,10 +13,6 @@ export const JOINTS = [
 
 export type JointName = (typeof JOINTS)[number];
 export type Pose = Record<JointName, Vector3>;
-
-export type Hand = 'left' | 'right';
-export const HANDS: readonly Hand[] = ['left', 'right'];
-export const WRIST: Record<Hand, JointName> = { left: 'lWrist', right: 'rWrist' };
 
 /** Pairs of joints rendered as limbs. */
 export const BONES: readonly [JointName, JointName][] = [
@@ -38,3 +33,17 @@ export function copyPose(dst: Pose, src: Pose): Pose {
   for (const j of JOINTS) dst[j].copy(src[j]);
   return dst;
 }
+
+/** Rough standing guard pose, used until real models + animation exist. */
+export const GUARD_POSE: Pose = (() => {
+  const p = createPose();
+  p.head.set(0, 0.9, 0);
+  p.neck.set(0, 0.82, 0);
+  p.lShoulder.set(0.12, 0.78, 0); p.rShoulder.set(-0.12, 0.78, 0);
+  p.lElbow.set(0.15, 0.66, 0.04); p.rElbow.set(-0.15, 0.66, 0.04);
+  p.lWrist.set(0.07, 0.76, 0.15); p.rWrist.set(-0.07, 0.76, 0.12);
+  p.lHip.set(0.07, 0.5, 0); p.rHip.set(-0.07, 0.5, 0);
+  p.lKnee.set(0.075, 0.27, 0.05); p.rKnee.set(-0.075, 0.27, -0.03);
+  p.lAnkle.set(0.07, 0.03, 0.08); p.rAnkle.set(-0.07, 0.03, -0.06);
+  return p;
+})();

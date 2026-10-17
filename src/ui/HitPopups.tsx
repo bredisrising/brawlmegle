@@ -1,5 +1,4 @@
-import { removePopup, useGameStore } from '../game/store';
-import type { HitKind } from '../game/combat';
+import { removePopup, useGameStore, type HitKind } from '../game/store';
 
 const STYLE: Record<HitKind, string> = {
   light: 'text-white text-3xl',

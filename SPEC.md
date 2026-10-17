@@ -6,21 +6,29 @@ First there was Omegle: talking to strangers. Then there was Omoggle: talking an
 
 ## The demo, start to finish
 
-1. Two players step up to the booth. Each half of the screen says "Waiting for player." Each player taps **Detect**.
-2. A "Save fighter to memory card?" prompt asks for consent. Yes starts the scan. No gives them the masked mystery fighter.
-3. Each player turns slowly in front of their camera for about 10 seconds, and three frames get captured.
-4. While their fighter forges (expect 2–4 minutes; measure it), they move around freely as a stock mannequin. A quick tutorial teaches guard, jab, cross, block and slip, and measures their reach and speed.
-5. The forged fighters swap in. VS cards, then the walk-in, then 3, 2, 1, FIGHT.
-6. A 60-second fight with real punches. K.O., a slow-motion replay, then a rematch button.
+1. Two laptops connect: one taps **Host** on the title screen and shows a room code, the other taps **Connect** and types it in. The host's screen is the game.
+2. Two players step up, one in front of each laptop's camera. Each laptop shows **Scan new** or **Choose existing**.
+3. **Choose existing** lists fighters saved to the memory card plus house fighters; picking one skips straight to the lobby.
+4. **Scan new** asks for their fighter name (shown on the HUD, the VS card and in commentary) and for consent: "Save fighter to memory card?" Yes starts the scan. No gives them the masked mystery fighter under that name.
+5. Each scanning player turns slowly in front of their camera for about 10 seconds, and three frames get captured.
+6. While their fighter forges (expect 2–4 minutes; measure it), they move around freely as a stock mannequin. A quick tutorial teaches guard, jab, cross, block and slip, and measures their reach and speed.
+7. The forged fighters swap in. VS cards, then the walk-in, then 3, 2, 1, FIGHT.
+8. A 60-second fight with real punches. K.O., a slow-motion replay, then a rematch button.
 
 A judge slot is about 5 minutes and the forge eats most of it. So scan the judge first and pitch while it forges, and keep pre-forged house fighters ready as opponents.
 
 ## Decided
 
 - Both players are at the booth together. No voice or video chat.
-- One laptop, two cameras: the built-in camera plus a USB webcam (or a phone running a webcam app), one camera per player. One game, one screen, no networking. Pending one test: can the laptop run two pose trackers at a smooth frame rate?
+- Two laptops, one camera each, connected peer-to-peer (WebRTC). See [Networking](#networking-p2p).
+  - The **host** laptop runs the game: input, intent, fight engine, graphics and the big screen. It also tracks and scans its own player (P1).
+  - The **client** laptop only scans its player (P2), sends the scan to the host, then streams that player's live pose to the host.
+  - A small AWS server only brokers the handshake (room codes, SDP/ICE). Game data never goes through it.
+- Each player is tracked by exactly one laptop, and each laptop tracks at most one person.
+- Live pose input can come from any source (local camera, remote peer, mock, recorded replay). The **InputHub** maps a source to a player, so nothing downstream cares where frames came from.
+- After Host/Connect, each player either scans a new fighter or picks an existing one from the memory card. Scanning asks for their fighter name first.
 - The screen splits 50/50 before the fight. During the fight, about 95% of the screen is the 3D game.
-- Stack: React, Tailwind CSS, Three.js, MediaPipe, and the ChatGPT image API.
+- Stack: React, Tailwind CSS, Three.js, MediaPipe, WebRTC, the ChatGPT image API, and AWS for signaling + forge.
 - Every fighter is scaled to 1 m tall.
 - 100 HP per player.
 - Damage comes from wind-up and speed: how far you pull back and how fast you swing.
@@ -31,42 +39,80 @@ A judge slot is about 5 minutes and the forge eats most of it. So scan the judge
 
 ## Booth setup
 
-- Laptop raised to about chest height. Borrow an external monitor or TV if possible.
-- Two cameras at chest height, each aimed at one player's spot. Players stand side by side about 1.5 m apart and about 2 m back. Each camera should frame its player at least head to hips; head to knees is better.
+- Host laptop drives the main screen. Borrow an external monitor or TV if possible.
+- Both laptops raised to about chest height, each camera aimed at its own player's spot. Players stand side by side about 1.5 m apart and about 2 m back. Each camera should frame its player at least head to hips; head to knees is better.
+- Both laptops on the same network. Bring a phone hotspot in case the venue Wi-Fi blocks P2P.
 - Tape marks on the floor for both spots.
 - Light from the front (a cheap clip-on LED works). Keep bright windows out from behind the players.
 - A small speaker so the game cuts through the hall.
-- Use 640×480 per camera. That's plenty for MediaPipe and avoids USB bandwidth limits with two cameras.
+- Use 640×480 per camera. That's plenty for MediaPipe and keeps tracking fast.
 
 ## Architecture
 
 ```
-camera 1 ─▶ Vision ─▶ Intent ─┐
-                              ├─▶ Fight engine ─▶ Director ─▶ Three.js scene
-camera 2 ─▶ Vision ─▶ Intent ─┘   (rules, 60 Hz)   (animation, VFX, camera)
-                                       │
-                                       └─▶ events ─▶ Commentary (stretch)
+CLIENT LAPTOP (P2)                         HOST LAPTOP (P1 + the game)
+camera ─▶ CameraSource                     camera ─▶ CameraSource ──────┐
+            │                                                           ▼
+            └─ PoseFrames ══ P2P ══▶ RemoteSource ─────────────▶ InputHub (source → player)
+               scan + name ══ P2P ══▶ host submits to Forge             │
+                                                                        ▼
+                                              Intent (per player) ─▶ Fight engine ─▶ Director ─▶ Three.js scene
+                                                                      (rules, 60 Hz)   (animation, VFX, camera)
+                                                                           │
+                                                                           └─▶ events ─▶ Commentary (stretch)
 
-Forge server: 3 scan frames ─▶ brief ─▶ model sheet ─▶ 3D ─▶ cleanup ─▶ rig ─▶ fighter GLB
+AWS: signaling server (room codes, SDP/ICE relay) + Forge server
+Forge: 3 scan frames ─▶ brief ─▶ model sheet ─▶ 3D ─▶ cleanup ─▶ rig ─▶ fighter GLB
 ```
 
 **The core rule:** the camera reports what you meant, the engine decides what happens, and the director makes it look good. Tracked pose never decides a hit.
 
+Intent runs on the host for both players, so calibration, tuning and the debug overlay live in one place. The client streams raw `PoseFrame`s, not commands.
+
+### Code layout
+
+| Folder | Module |
+|---|---|
+| `src/input/` | `InputSource` interface, `InputHub` wrapper, sources: `CameraSource`, `RemoteSource`, `MockSource` |
+| `src/net/` | `Signaling` (AWS WebSocket), `Peer` (WebRTC), `protocol.ts` (message types) |
+| `src/intent/` | `IntentReader`, one per player |
+| `src/fight/` | `FightEngine`, pure TypeScript |
+| `src/director/` | `Renderer` (Three.js), `Arena`, `FighterView`, `Effects`, live-pose helpers |
+| `src/forge/` | Scan capture + forge API client |
+| `src/game/` | `Game` orchestrator (host), phase state machine, UI store |
+| `src/ui/` | React overlays |
+| `src/types.ts` | The module contracts below |
+
 ### Module contracts
 
-Agree on these first so all four people can build in parallel against mocks.
+Agree on these first so all four people can build in parallel against mocks. The source of truth is `src/types.ts`.
 
 ```ts
-type PlayerId = 1 | 2;
+type PlayerId = "p1" | "p2";   // p1 = host's player, p2 = client's player
 
-// Vision → Intent, once per camera frame (~30 fps)
+// Any InputSource → InputHub, once per camera frame (~30 fps).
+// Sources don't know which player they are; the hub assigns that.
 type Landmark = { x: number; y: number; z: number; visibility: number };
 type PoseFrame = {
-  player: PlayerId;
-  t: number;              // performance.now() in ms
+  t: number;              // performance.now() in ms, on the laptop that tracked it
   image: Landmark[];      // 33 MediaPipe landmarks, normalized image coords
   world: Landmark[];      // 33 world landmarks, meters, hip-centered
 };
+
+interface InputSource {
+  kind: "camera" | "remote" | "mock" | "replay";
+  start(): Promise<void>;
+  stop(): void;
+  onFrame(cb: (frame: PoseFrame) => void): () => void;
+}
+
+// The wrapper. Everything downstream reads per player from here.
+interface InputHub {
+  assign(player: PlayerId, source: InputSource): void;
+  unassign(player: PlayerId): void;
+  latest(player: PlayerId): PoseFrame | null;
+  subscribe(player: PlayerId, cb: (frame: PoseFrame) => void): () => void;
+}
 
 // Intent → Engine
 type Command =
@@ -106,9 +152,9 @@ type FightEvent = {
 };
 
 // Forge → Game
-type Fighter = {
+type ForgedFighter = {
   id: string;
-  name: string;
+  name: string;           // typed in by the player before the scan
   status: "scanning" | "forging" | "ready" | "failed";
   step?: "brief" | "sheet" | "model" | "cleanup" | "rig";
   glbUrl?: string;        // rigged, Mixamo bone names, 1 m tall
@@ -121,37 +167,116 @@ Build two dev tools on day one:
 - **Keyboard input** that emits `Command` and `Stance` for both players. P1 uses WASD plus F/G/R; P2 uses the arrows plus K/L/O. The engine and director can then be built and tuned before vision works.
 - **A debug overlay** showing the skeleton on each camera feed, the recognized command, both `FighterState`s and a frame-data timeline. All the tuning happens here.
 
+Also build a **replay source**: record `PoseFrame`s from a real session, play them back as an `InputSource`. That tests streaming, intent and the director with nobody in front of a camera.
+
 Keep the engine pure TypeScript: no Three.js or React imports, a fixed 60 Hz tick, and no randomness. The same commands then always give the same fight. That makes it testable, and K.O. replays come free: re-run the engine on the logged commands and render it in slow motion.
+
+## Networking (P2P)
+
+### Roles
+
+| | Host laptop | Client laptop |
+|---|---|---|
+| Player | P1 | P2 |
+| Camera + tracking | Its own player | Its own player |
+| Scan | Captures P1's frames | Captures P2's frames, sends them + name to the host |
+| Forge | Submits both players to the forge server, stores both fighters | Nothing |
+| Game loop, intent, engine, graphics | Yes | No |
+| Screen | The game (big screen) | Its player's prompts: consent, name, scan, "look at the big screen" |
+
+For dev, the host can run both players alone: assign a `MockSource` or replay source to P2.
+
+### Connecting
+
+1. Host taps **Host** on the title screen. It opens a WebSocket to the AWS signaling server and gets a 4-letter room code to show on screen.
+2. Client taps **Connect** and types the code.
+3. The signaling server relays the WebRTC offer, answer and ICE candidates. Once the data channels open, signaling is done. Game data never touches AWS.
+4. Host sends `welcome` with the client's player id (`p2`). The host assigns a `RemoteSource` for P2 in the `InputHub`.
+
+Signaling messages (JSON over WebSocket):
+
+```ts
+type SignalMessage =
+  | { type: "host" }                        // host → server: open a room
+  | { type: "room"; code: string }          // server → host
+  | { type: "join"; code: string }          // client → server
+  | { type: "peer-joined" }                 // server → host
+  | { type: "signal"; data: SDP | ICE }     // relayed to the other peer
+  | { type: "error"; message: string };
+```
+
+The server is tiny: in-memory rooms, relay messages between the two sockets in a room, delete rooms after an hour. A small Node `ws` server on Lightsail or EC2 is simplest; API Gateway WebSockets + Lambda also work. Use Google's public STUN, and add a TURN server (coturn on the same box) in case venue Wi-Fi blocks direct connections.
+
+### Data channels
+
+Two channels on one `RTCPeerConnection`:
+- **`poses`**: `ordered: false, maxRetransmits: 0`. A late pose is useless, so drop it instead of retrying.
+- **`control`**: reliable and ordered. Everything else.
+
+```ts
+// Client → host
+type ClientMessage =
+  | { type: "hello"; version: number }
+  | { type: "pose"; frame: PoseFrame }                        // poses channel, ~30/s
+  | { type: "profile"; name: string; consent: "save" | "masked" } // after "Scan new"
+  | { type: "pick"; fighterId: string }                       // after "Choose existing"
+  | { type: "scan"; frames: [front, left, right] };           // base64 JPEGs, chunk if large
+
+// Host → client
+type HostMessage =
+  | { type: "welcome"; player: PlayerId }
+  | { type: "roster"; fighters: ForgedFighter[] }             // for the client's memory-card screen
+  | { type: "phase"; phase: Phase; countdown: number | null } // so the client shows the right prompt
+  | { type: "fighter"; fighter: ForgedFighter };              // forge progress for the client's screen
+```
+
+A pose frame is about 66 landmarks × 4 numbers. As JSON that's ~3 KB, ~100 KB/s at 30 fps, which is fine on a LAN. Pack it into a `Float32Array` later if needed.
+
+### Timing
+
+- `PoseFrame.t` is the tracking laptop's clock. Intent uses it for speeds, so network jitter doesn't distort punch speed.
+- The `InputHub` also stamps each frame with the host's arrival time and drops frames older than the latest one.
+- Expect +5–30 ms over local Wi-Fi on top of the ~150–250 ms camera → intent latency.
+
+### Disconnects
+
+If the client drops mid-fight, its `RemoteSource` stops sending, P2's stance goes `tracked: false` (fighter holds guard), and the host shows "Reconnecting…". The client rejoins with the same room code; the host reassigns P2 and keeps the stored fighter.
 
 ## Screens and flow
 
-Each player moves through join → ready on their own half of the screen. The match starts when both are ready.
+Each player moves through join → ready on their own half of the host screen. The match starts when both are ready.
 
-| Screen | What's on it | Moves on when |
-|---|---|---|
-| Title / attract | Logo, last fight's replay on loop | Anyone taps Detect |
-| Join (50/50 split) | [Waiting for player 1] [Waiting for player 2], camera preview, Detect button | That side's player is tracked |
-| Consent | Memory-card prompt: Save fighter? Yes / Masked fighter | Choice made |
-| Scan | "Turn slowly", progress ring with front/left/right ticks | All 3 angles captured (~10 s) |
-| Forge + tutorial | Stock mannequin following the player; tutorial prompts; forge step badges (brief → sheet → model → rig) | Tutorial done and fighter ready (or timeout fallback) |
-| VS + walk-in | Flaming VS cards, fly-through, side-by-side walk-out | ~10–12 s, skippable on rematch |
-| Countdown | 3, 2, 1, FIGHT | Automatic |
-| Fight | Arena, HUD | K.O. or 60 s timer |
-| Result | Slow-mo K.O. replay, winner, Rematch / New players | Button |
+| Screen | Where | What's on it | Moves on when |
+|---|---|---|---|
+| Title | Both | Logo, **Host** and **Connect** buttons (last fight's replay on loop behind them). Connect asks for the 4-letter room code | Hosting, or joined a room |
+| Pick fighter | Both | **Scan new** / **Choose existing**, room code + role badge | Choice made |
+| Memory card | Both | Grid of saved fighters + house fighters (card art or initials, name) | Fighter picked → Lobby |
+| Name + consent | Both | "Enter your fighter name" (16 characters max), memory-card prompt: **Yes, scan me** / **No, go masked** | Name submitted |
+| Scan | Tracking laptop | "Turn slowly", progress ring with front/left/right ticks | All 3 angles captured (~10 s) |
+| Lobby (50/50 split) | Host | Each side shows that player's progress. P2's side shows the room code until the client joins | Both players ready |
+| Waiting | Client | Its player's scan/forge progress, then "You're in! Look at the big screen" | Fight over |
+| Forge + tutorial | Host (client mirrors status) | Stock mannequin following the player; tutorial prompts; forge step badges (brief → sheet → model → rig) | Tutorial done and fighter ready (or timeout fallback) |
+| VS + walk-in | Host | Flaming VS cards, fly-through, side-by-side walk-out | ~10–12 s, skippable on rematch |
+| Countdown | Host | 3, 2, 1, FIGHT | Automatic |
+| Fight | Host (client shows "look at the big screen") | Arena, HUD | K.O. or 60 s timer |
+| Result | Host | Slow-mo K.O. replay, winner, Rematch / New players | Button |
+
+The "tracking laptop" is the host for P1 and the client for P2.
 
 HUD during the fight:
-- Top bar: P1 name and HP bar (left), timer (center), P2 name and HP bar (right).
+- Top bar: P1 name and HP bar (left), timer (center), P2 name and HP bar (right). Names are the ones players typed.
 - A thin stamina bar under each HP bar.
 - A combo counter.
 - Commentary captions at the bottom.
 
 ## Forge: scan to fighter
 
-### Capture (browser)
+### Capture (browser, on the tracking laptop)
 
+- The player types their fighter name and gives consent on the same screen, right after tapping **Scan new**.
 - During the turn, estimate which way the player faces from pose landmarks: shoulder width shrinks as they turn, and the nose's offset from the shoulder midpoint gives the direction.
 - Bucket frames into front, left and right. Keep the sharpest frame in each bucket (highest variance of the Laplacian).
-- Send the three JPEGs to the forge server.
+- On the host, submit the name + three JPEGs to the forge server. On the client, send them to the host over P2P (`profile` + `scan` messages) and the host submits them. Only the host talks to the forge and keeps fighters.
 
 ### Pipeline (server)
 
@@ -171,18 +296,22 @@ Generating the sheet before the card art keeps the card off the critical path. T
 API:
 
 ```
-POST /api/forge        { player, frames: [front, left, right] }  →  { id }
-GET  /api/forge/:id    →  Fighter
+POST /api/forge        { name, frames: [front, left, right] }  →  { id }
+GET  /api/forge/:id    →  ForgedFighter
+GET  /api/fighters     →  ForgedFighter[]   (memory card: saved + house fighters)
 ```
+
+Until `/api/fighters` exists, the memory card is localStorage on the host plus a hardcoded house-fighter list (`src/forge/roster.ts`). Only fighters scanned with consent get saved; masked fighters don't.
 
 ### Prompts (v1, tune them)
 
 **Brief** (vision model, JSON mode):
 
 ```
-You're casting a fighting game. From these photos of one person, return JSON:
+You're casting a fighting game. This fighter calls themselves "{name}".
+From these photos of one person, return JSON:
 {
-  "name": a playful 2–3 word fighter name, never about their body,
+  "title": a playful 2–3 word nickname shown under their name (e.g. "The Library Menace"), never about their body,
   "distinctive": the 3 most distinctive things about how they look (hair, eyebrows, jaw, glasses, beard, build, outfit),
   "archetype": "brawler" | "speedster" | "tank" | "showboat",
   "outfit_upgrade": one sentence turning their outfit up to 11,
@@ -246,10 +375,11 @@ Budget about $50–100 in API credits.
 
 ## Vision
 
-- `@mediapipe/tasks-vision` PoseLandmarker, `runningMode: "VIDEO"`, GPU delegate. One instance per camera.
+- `@mediapipe/tasks-vision` PoseLandmarker, `runningMode: "VIDEO"`, GPU delegate. One instance per laptop (each laptop tracks one person), wrapped in `CameraSource`.
 - Try the lite model first and switch to full only if tracking is poor.
 - Set `numPoses: 2` and keep the pose closest to the frame center, so a passerby or the other player doesn't steal the tracking.
-- Pick the two cameras with `enumerateDevices()` in a settings panel, and remember the choice in localStorage.
+- Pick each laptop's camera with `enumerateDevices()` in a settings panel, and remember the choice in localStorage.
+- Landmarks leave the vision step as raw `PoseFrame`s. `CameraSource` applies the One Euro filter before emitting. On the client, frames then go straight onto the P2P `poses` channel. Body units and calibration happen in intent, on the host.
 - Smooth every landmark with a One Euro filter. Tune it in the debug overlay: too little smoothing jitters, too much lags.
 - **Body units.** Measure everything in the player's own arm length L (shoulder → elbow → wrist, calibrated in the tutorial). Distance from the camera and body size then don't matter, and standing closer doesn't hit harder.
 - **Calibration** happens in the tutorial: arm length, torso size, guard position, and the speed of the player's hardest jab.
@@ -321,7 +451,7 @@ Frames are at 60 fps. These are starting values for playtesting.
 
 **End:** K.O. at 0 HP. When the 60 s timer runs out, more HP wins.
 
-**Latency:** camera → landmarks → intent adds roughly 150–250 ms. Don't build a twitch fighter. Build a heavyweight slugfest where big punches can be seen coming, and let anticipation animations hide the gap.
+**Latency:** camera → landmarks → intent adds roughly 150–250 ms, plus 5–30 ms over P2P for the client's player. Don't build a twitch fighter. Build a heavyweight slugfest where big punches can be seen coming, and let anticipation animations hide the gap.
 
 ## Director: animation, camera, effects
 
@@ -401,7 +531,8 @@ The masked mystery fighter is the no option, so nobody sits out. Don't store raw
 
 **Milestones:**
 - **4:00 PM Sat:**
-  - Both cameras drive stick figures with commands showing in the debug overlay.
+  - Host and client connect through the signaling server, and the client's poses stream into the host's `InputHub`.
+  - Both players drive stick figures with commands showing in the debug overlay.
   - The engine runs a keyboard fight with HP and hit-stop.
   - The forge has been run by hand on all four of us, and the 3D generator and rigger are picked.
 - **5:00 PM:** likeness verdict. Do at least 3 of 4 look like the person?
@@ -414,8 +545,8 @@ The masked mystery fighter is the no option, so nobody sits out. Don't store raw
 Every hour after 9 PM should go into playing it against each other and tuning the numbers. That's what makes it feel good, and it can't be one-shotted.
 
 **Suggested split:**
-- **Forge:** capture, server pipeline, prompts, cleanup, rigging, fallbacks.
-- **Fight:** vision, intent reader, fight engine, calibration tutorial.
+- **Forge:** capture, server pipeline, prompts, cleanup, rigging, fallbacks, AWS signaling server.
+- **Fight:** vision, input hub + P2P streaming, intent reader, fight engine, calibration tutorial.
 - **Show:** director, animation, camera, effects, HUD, walk-in, visual style.
 - **Voice:** commentators, audio, demo video, Devpost.
 
@@ -434,18 +565,20 @@ Every hour after 9 PM should go into playing it against each other and tuning th
 | The likeness misses | Test by 5 PM. Fallback: generated face on a stock head. |
 | The forge is too slow | Sheet-first critical path, tutorial covers the wait, house fighters, 5-minute timeout fallback. |
 | The rig looks rubbery | Rigid head and fists, small move set, action-figure mode. |
-| Two trackers are too slow | Lite model, lower resolution, alternate frames between cameras. Worst case: one camera tracking 2 people. |
-| It feels laggy | Slugfest pacing, anticipation animations, generous windows. |
+| Venue Wi-Fi blocks P2P (client isolation, strict NAT) | TURN server on the AWS box. Phone hotspot with both laptops on it. Worst case: run both players on the host with a USB webcam as a second `CameraSource`. |
+| Client drops mid-fight | Fighter holds guard, "Reconnecting…", rejoin with the same room code. |
+| It feels laggy | Slugfest pacing, anticipation animations, generous windows. Unordered `poses` channel so late frames get dropped, not queued. |
 | Players flail | Return-to-guard, stamina. |
-| Venue Wi-Fi (SSH is already blocked) | The forge needs internet. Keep a phone hotspot as backup. |
+| Venue Wi-Fi (SSH is already blocked) | The forge and signaling need internet. Keep a phone hotspot as backup. |
 | Image API refuses to edit a real person | Second provider (Gemini ↔ OpenAI) as a fallback. |
 | The hall is loud | Captions, speaker. |
 
 ## Open questions
 
-1. Two-camera frame rate on our laptop. Test this first.
+1. Does WebRTC connect between two laptops on the venue Wi-Fi? Test this first, with and without TURN.
 2. Which 3D generator and rigger. Decide by 4 PM.
 3. OpenAI vs. Gemini for image generation, on speed and likeness.
 4. Laptop OS. On a Mac, an iPhone works as a webcam through Continuity Camera.
 5. Can we get an external monitor for the booth?
 6. Final name and domain.
+7. Signaling on a small EC2/Lightsail Node box, or API Gateway WebSockets + Lambda? Same box as the forge server?

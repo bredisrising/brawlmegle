@@ -1,61 +1,130 @@
-import { Engine } from '../engine/Engine';
-import { Effects } from '../engine/Effects';
-import { Fighter } from '../player/Fighter';
-import { forgeFighter } from '../services/forge';
-import { createTracker } from '../vision';
-import { PLAYER_IDS, opponentOf, type PlayerId } from '../types';
-import { COUNTDOWN_FROM, HITSTOP, MAX_HP, SIM_DT } from './constants';
-import { detectHits, type HitEvent } from './combat';
-import { pushPopup, updatePlayer, useGameStore } from './store';
+import { Renderer } from '../director/Renderer';
+import { Effects } from '../director/Effects';
+import { FighterView } from '../director/FighterView';
+import { FightEngine } from '../fight/FightEngine';
+import { IntentReader } from '../intent/IntentReader';
+import { InputHub, createLocalSource, type InputSource } from '../input';
+import { MockSource } from '../input/sources/MockSource';
+import { captureScan, getForge, submitForge } from '../forge/forge';
+import { maskedFighter, saveFighter } from '../forge/roster';
+import { Peer } from '../net/Peer';
+import { Signaling } from '../net/Signaling';
+import { config } from '../config';
+import {
+  PLAYER_IDS, opponentOf,
+  type Command, type FightEvent, type ForgedFighter, type PlayerId, type Stance,
+} from '../types';
+import { COUNTDOWN_FROM, KO_FREEZE, MAX_HP, PLAYER_NAMES, SIM_DT } from './constants';
+import { localPlayerId, pushPopup, updatePlayer, useGameStore } from './store';
+
+/** What the player picked on the avatar screen. */
+export type FighterChoice =
+  | { kind: 'scan'; name: string } // consented: scan + forge + save to memory card
+  | { kind: 'masked'; name: string } // declined: masked mystery fighter, no scan
+  | { kind: 'existing'; fighter: ForgedFighter };
 
 /**
- * Orchestrates everything: owns the engine, fighters and phase state machine,
- * runs the fixed-step sim, and mirrors UI-relevant state into the store.
+ * Host-side orchestrator. Wires the pipeline and runs the phase state machine:
  *
- *   lobby --(both ready)--> countdown --> fighting --(hp 0)--> ko --(rematch)--> countdown
+ *   InputHub -> IntentReader (per player) -> FightEngine -> FighterView / Effects / store
+ *
+ *   lobby --(both ready)--> countdown --> fighting --(K.O.)--> ko --(rematch)--> countdown
+ *
+ * Only the host runs this. A client laptop just scans + streams (see net/).
  */
 export class Game {
-  readonly engine: Engine;
+  readonly renderer: Renderer;
+  readonly input = new InputHub();
+  private readonly fight = new FightEngine();
   private readonly effects: Effects;
-  private readonly fighters: Record<PlayerId, Fighter>;
+  private readonly views: Record<PlayerId, FighterView>;
+  private readonly intent: Record<PlayerId, IntentReader>;
+  private peer: Peer | null = null;
   private accumulator = 0;
   private phaseTimer = 0;
 
   constructor(container: HTMLElement) {
-    this.engine = new Engine(container);
-    this.effects = new Effects(this.engine.scene);
-    this.fighters = { p1: new Fighter('p1'), p2: new Fighter('p2') };
-    for (const f of Object.values(this.fighters)) this.engine.scene.add(f.root);
+    this.renderer = new Renderer(container);
+    this.effects = new Effects(this.renderer.scene);
+    this.views = { p1: new FighterView('p1'), p2: new FighterView('p2') };
+    this.intent = { p1: new IntentReader('p1'), p2: new IntentReader('p2') };
+    for (const v of Object.values(this.views)) this.renderer.scene.add(v.root);
 
-    this.engine.onFrame(this.update);
-    this.engine.start();
+    this.renderer.onFrame(this.update);
+    this.renderer.start();
     window.addEventListener('keydown', this.onDebugKey);
   }
 
-  /** "Detect player" button: start vision, run the forge pipeline, spawn the fighter. */
-  async detectPlayer(id: PlayerId) {
+  /** Title screen: "Host". Opens a room on the signaling server and shows its code. */
+  async host() {
+    this.peer = new Peer('host', new Signaling(config.signalUrl));
+    const code = await this.peer.host();
+    useGameStore.setState({ role: 'host', roomCode: code || null, screen: 'avatar' });
+    // TODO: when the client connects, assign a RemoteSource to p2 and run setupPlayer('p2', ...)
+    // with the profile + scan it sends over P2P.
+  }
+
+  /** Title screen: "Connect" with a room code. */
+  async join(code: string) {
+    this.peer = new Peer('client', new Signaling(config.signalUrl));
+    await this.peer.join(code);
+    useGameStore.setState({ role: 'client', roomCode: code, screen: 'avatar' });
+  }
+
+  /** Avatar screen: the player on THIS laptop scanned, went masked, or picked a saved fighter. */
+  async chooseFighter(choice: FighterChoice) {
+    const { role } = useGameStore.getState();
+    useGameStore.setState({ screen: role === 'client' ? 'client' : 'game' });
+    // TODO (client): send profile + scan frames to the host and stream poses over P2P,
+    // instead of forging here. Runs locally for now so the flow can be tested on one laptop.
+    await this.setupPlayer(localPlayerId(role), choice);
+  }
+
+  /** Dev only: fill a slot with a house fighter driven by a MockSource. */
+  addTestPlayer(id: PlayerId) {
+    return this.setupPlayer(id, { kind: 'existing', fighter: { id: 'test', name: PLAYER_NAMES[id], status: 'ready' } }, new MockSource());
+  }
+
+  /** Start a player's input source, get their fighter (scan + forge, masked, or saved), spawn them. */
+  private async setupPlayer(id: PlayerId, choice: FighterChoice, source: InputSource = createLocalSource()) {
+    const name = choice.kind === 'existing' ? choice.fighter.name : choice.name;
     try {
-      updatePlayer(id, { status: 'scanning', statusDetail: 'Starting camera' });
-      const tracker = createTracker(id);
-      await tracker.start();
+      updatePlayer(id, { name, status: 'scanning', statusDetail: 'Starting camera' });
+      await source.start();
+      this.input.assign(id, source);
 
-      updatePlayer(id, { status: 'forging' });
-      const forged = await forgeFighter((step) => updatePlayer(id, { statusDetail: step }));
-      // TODO: load forged.modelUrl into the fighter instead of the placeholder model.
+      let fighter: ForgedFighter;
+      if (choice.kind === 'scan') {
+        updatePlayer(id, { statusDetail: 'Turn slowly' });
+        const frames = await captureScan(source.video);
+        updatePlayer(id, { status: 'forging', statusDetail: 'Forging fighter' });
+        fighter = await getForge(await submitForge(name, frames), name);
+        saveFighter(fighter); // they said yes to "save fighter to memory card"
+      } else if (choice.kind === 'masked') {
+        fighter = maskedFighter(name);
+      } else {
+        fighter = choice.fighter;
+      }
+      // TODO: load fighter.glbUrl into the FighterView instead of the placeholder.
 
-      this.fighters[id].setTracker(tracker);
-      this.effects.burst(this.fighters[id].root.position, 'spawn');
-      updatePlayer(id, { status: 'ready', statusDetail: '', portraitUrl: forged.heroImageUrl });
+      this.views[id].setVisible(true);
+      this.effects.burst(this.views[id].root.position, 'spawn');
+      updatePlayer(id, { status: 'ready', statusDetail: '', portraitUrl: fighter.cardUrl ?? null });
 
       const { players } = useGameStore.getState();
       if (PLAYER_IDS.every((p) => players[p].status === 'ready')) this.startCountdown();
     } catch (err) {
       console.error(err);
-      updatePlayer(id, { status: 'waiting', statusDetail: 'Detection failed — try again' });
+      this.input.unassign(id);
+      source.stop();
+      updatePlayer(id, { status: 'waiting', statusDetail: 'Something went wrong — try again' });
+      const { role } = useGameStore.getState();
+      if (id === localPlayerId(role)) useGameStore.setState({ screen: 'avatar' });
     }
   }
 
   rematch() {
+    this.fight.reset();
     for (const id of PLAYER_IDS) updatePlayer(id, { hp: MAX_HP });
     useGameStore.setState({ winner: null });
     this.startCountdown();
@@ -63,9 +132,11 @@ export class Game {
 
   dispose() {
     window.removeEventListener('keydown', this.onDebugKey);
-    for (const f of Object.values(this.fighters)) f.dispose();
+    this.peer?.close();
+    for (const id of PLAYER_IDS) this.input.unassign(id);
+    for (const v of Object.values(this.views)) v.dispose();
     this.effects.dispose();
-    this.engine.dispose();
+    this.renderer.dispose();
   }
 
   private startCountdown() {
@@ -78,69 +149,85 @@ export class Game {
     if (frozen) return;
     this.accumulator += dt;
     while (this.accumulator >= SIM_DT) {
-      this.tick(SIM_DT);
+      this.tick();
       this.accumulator -= SIM_DT;
     }
   };
 
-  /** One fixed simulation step. */
-  private tick(dt: number) {
-    for (const f of Object.values(this.fighters)) f.step(dt);
-
+  /** One fixed 60 Hz step. */
+  private tick() {
     const { phase, countdown } = useGameStore.getState();
-    this.phaseTimer += dt;
+    this.phaseTimer += SIM_DT;
 
     if (phase === 'countdown' && this.phaseTimer >= 1) {
       this.phaseTimer = 0;
       const next = (countdown ?? 1) - 1;
       useGameStore.setState(next <= 0 ? { phase: 'fighting', countdown: 0 } : { countdown: next });
     }
-
-    if (phase === 'fighting') {
-      if (countdown === 0 && this.phaseTimer >= 0.8) useGameStore.setState({ countdown: null });
-      for (const id of PLAYER_IDS) {
-        for (const hit of detectHits(this.fighters[id], this.fighters[opponentOf(id)], dt)) this.applyHit(hit);
-      }
+    if (phase === 'fighting' && countdown === 0 && this.phaseTimer >= 0.8) {
+      useGameStore.setState({ countdown: null });
     }
+
+    // Input -> intent -> fight engine. All stubs for now (see SPEC.md).
+    const commands: Command[] = [];
+    const stances = {} as Record<PlayerId, Stance>;
+    for (const id of PLAYER_IDS) {
+      const frame = this.input.latest(id);
+      const out = frame ? this.intent[id].update(frame) : null;
+      if (out) commands.push(...out.commands);
+      stances[id] = out?.stance ?? { player: id, guard: true, advance: 0, lean: { x: 0, y: 0 }, tracked: false };
+    }
+    if (phase === 'fighting') {
+      for (const event of this.fight.step(commands, stances)) this.applyEvent(event);
+    }
+    for (const id of PLAYER_IDS) this.views[id].update(this.fight.state(id), this.input.latest(id));
   }
 
-  private applyHit(hit: HitEvent) {
+  /** Engine event -> HP in the store, hit-stop, effects, popups. */
+  private applyEvent(event: FightEvent) {
     const { players, phase } = useGameStore.getState();
-    if (phase !== 'fighting') return;
+    if (phase !== 'fighting' || !event.damage) return;
 
-    const hp = Math.max(0, players[hit.defender].hp - hit.damage);
-    updatePlayer(hit.defender, { hp });
-    this.fighters[hit.defender].hit(hit.damage, hit.zone === 'head');
-    this.effects.burst(hit.point, hit.kind);
-    this.engine.freeze(HITSTOP[hit.kind]);
+    const defender = opponentOf(event.attacker);
+    // TODO: once FightEngine is real, mirror FighterState.hp instead of subtracting here.
+    const hp = Math.max(0, players[defender].hp - event.damage);
+    updatePlayer(defender, { hp });
+    this.views[defender].onEvent(event);
+    this.renderer.freeze((event.hitstopFrames ?? 0) * SIM_DT);
 
-    const label = hit.kind === 'blocked' ? 'BLOCKED' : hit.kind === 'heavy' ? 'CRUSHING!' : hit.zone === 'head' ? 'HEADSHOT' : 'HIT';
-    pushPopup({ ...this.engine.project(hit.point), label, damage: Math.round(hit.damage), kind: hit.kind });
-
-    if (hit.kind === 'heavy') {
-      this.engine.shake(0.04);
+    const point = this.views[defender].worldJoint('head');
+    const heavy = event.type === 'counter' || event.damage >= 10;
+    this.effects.burst(point, event.type === 'blocked' ? 'blocked' : event.type === 'counter' ? 'counter' : 'hit');
+    pushPopup({
+      ...this.renderer.project(point),
+      label: event.type === 'blocked' ? 'BLOCKED' : event.type === 'counter' ? 'COUNTER!' : event.move.toUpperCase(),
+      damage: Math.round(event.damage),
+      kind: event.type === 'blocked' ? 'blocked' : heavy ? 'heavy' : 'light',
+    });
+    if (heavy) {
+      this.renderer.shake(0.04);
       useGameStore.setState((s) => ({ flashKey: s.flashKey + 1 }));
     }
     if (hp <= 0) {
-      this.engine.freeze(HITSTOP.ko);
-      this.effects.burst(hit.point, 'ko');
-      useGameStore.setState({ phase: 'ko', winner: hit.attacker, countdown: null });
+      this.renderer.freeze(KO_FREEZE);
+      this.effects.burst(point, 'ko');
+      useGameStore.setState({ phase: 'ko', winner: event.attacker, countdown: null });
     }
   }
 
-  /** Dev only: press 1 / 2 to fake a hit on that player (until combat detection exists). */
+  /** Dev only: press 1 / 2 to fake a hit on P1 / P2 (Shift = counter) until the fight engine exists. */
   private onDebugKey = (e: KeyboardEvent) => {
-    if (!import.meta.env.DEV || (e.key !== '1' && e.key !== '2')) return;
-    const defender: PlayerId = e.key === '1' ? 'p1' : 'p2';
-    const heavy = e.shiftKey;
-    this.applyHit({
+    if (!import.meta.env.DEV || e.target instanceof HTMLInputElement) return;
+    if (e.code !== 'Digit1' && e.code !== 'Digit2') return;
+    const defender: PlayerId = e.code === 'Digit1' ? 'p1' : 'p2';
+    const damage = e.shiftKey ? 15 : 5;
+    this.applyEvent({
+      t: performance.now(),
+      type: e.shiftKey ? 'counter' : 'hit',
       attacker: opponentOf(defender),
-      defender,
-      hand: 'right',
-      zone: 'head',
-      kind: heavy ? 'heavy' : 'light',
-      damage: heavy ? 18 : 7,
-      point: this.fighters[defender].worldJoint('head'),
+      move: e.shiftKey ? 'cross' : 'jab',
+      damage,
+      hitstopFrames: Math.min(14, 4 + damage / 2),
     });
   };
 }

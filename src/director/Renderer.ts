@@ -5,9 +5,9 @@ export type FrameCallback = (dt: number, frozen: boolean) => void;
 
 /**
  * Owns the Three.js renderer, scene, camera and render loop.
- * Game logic hooks in via onFrame(); freeze() pauses simulation for hit-stop.
+ * The game hooks in via onFrame(); freeze() pauses the sim for hit-stop while camera + VFX keep running.
  */
-export class Engine {
+export class Renderer {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(40, 1, 0.05, 100);
   readonly renderer = new THREE.WebGLRenderer({ antialias: true });

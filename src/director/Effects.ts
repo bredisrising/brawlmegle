@@ -1,6 +1,6 @@
 import type * as THREE from 'three';
 
-export type EffectKind = 'light' | 'heavy' | 'blocked' | 'spawn' | 'ko';
+export type EffectKind = 'hit' | 'blocked' | 'whiff' | 'counter' | 'ko' | 'spawn';
 
 /**
  * Visual effects layer (hit sparks, impact rings, etc).

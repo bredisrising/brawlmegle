@@ -1,9 +1,97 @@
+/**
+ * Shared contracts between modules (see SPEC.md "Module contracts").
+ * Agree on these first so everyone can build in parallel against mocks.
+ */
+
 export type PlayerId = 'p1' | 'p2';
 export const PLAYER_IDS: readonly PlayerId[] = ['p1', 'p2'];
 
 export const opponentOf = (id: PlayerId): PlayerId => (id === 'p1' ? 'p2' : 'p1');
 
+/** Which laptop this is. Host = the game + P1, client = scanner/streamer for P2. */
+export type Role = 'host' | 'client';
+
 export type Phase = 'lobby' | 'countdown' | 'fighting' | 'ko';
 
 /** waiting -> scanning (camera/vision) -> forging (hero image + 3D model) -> ready */
 export type PlayerStatus = 'waiting' | 'scanning' | 'forging' | 'ready';
+
+// ---------------------------------------------------------------------------
+// Input: any source (local camera, remote peer, mock, replay) -> InputHub
+// ---------------------------------------------------------------------------
+
+export type Landmark = { x: number; y: number; z: number; visibility: number };
+
+/** One tracked frame of one person, ~30 fps. Sources don't know which player they are; the InputHub tags them. */
+export type PoseFrame = {
+  t: number; // performance.now() in ms, on the machine that tracked it
+  image: Landmark[]; // 33 MediaPipe landmarks, normalized image coords
+  world: Landmark[]; // 33 world landmarks, meters, hip-centered
+};
+
+// ---------------------------------------------------------------------------
+// Intent -> Fight engine
+// ---------------------------------------------------------------------------
+
+export type Hand = 'L' | 'R';
+export type AttackMove = 'jab' | 'cross' | 'hook' | 'uppercut';
+export type DefendMove = 'block' | 'slip' | 'duck';
+
+export type Command =
+  | { kind: 'anticipate'; player: PlayerId; t: number; hand: Hand }
+  | {
+      kind: 'attack';
+      player: PlayerId;
+      t: number;
+      move: AttackMove;
+      hand: Hand;
+      height: 'head' | 'body';
+      speed: number; // 0.8–1.3, relative to this player's calibrated max
+      windup: number; // 0.8–1.3
+    }
+  | { kind: 'defend'; player: PlayerId; t: number; move: DefendMove; dir?: Hand };
+
+/** Continuous, every frame. */
+export type Stance = {
+  player: PlayerId;
+  guard: boolean;
+  advance: number; // -1 (backing off) to 1 (stepping in)
+  lean: { x: number; y: number };
+  tracked: boolean; // false when the player is lost
+};
+
+// ---------------------------------------------------------------------------
+// Fight engine -> Director / UI / Commentary
+// ---------------------------------------------------------------------------
+
+export type FighterState = {
+  x: number; // position on the fight line, meters
+  hp: number;
+  stamina: number;
+  phase: 'idle' | 'startup' | 'active' | 'recovery' | 'hitstun' | 'blockstun' | 'ko';
+  move?: string;
+  frame: number; // frame within the current phase
+};
+
+export type FightEvent = {
+  t: number;
+  type: 'startup' | 'hit' | 'blocked' | 'whiff' | 'counter' | 'ko' | 'timeout';
+  attacker: PlayerId;
+  move: string;
+  damage?: number;
+  hitstopFrames?: number;
+};
+
+// ---------------------------------------------------------------------------
+// Forge -> Game
+// ---------------------------------------------------------------------------
+
+export type ForgedFighter = {
+  id: string;
+  name: string; // typed in by the player before the scan
+  status: 'scanning' | 'forging' | 'ready' | 'failed';
+  step?: 'brief' | 'sheet' | 'model' | 'cleanup' | 'rig';
+  glbUrl?: string; // rigged, Mixamo bone names, 1 m tall
+  cardUrl?: string; // VS card art
+  brief?: Record<string, unknown>; // see SPEC.md "Prompts" for the shape
+};
