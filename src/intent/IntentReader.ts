@@ -224,7 +224,7 @@ export class IntentReader {
       // Arms only: a leg needs its full rise to tell a knee from a kick. A hand starting low waits too, to see
       // whether it's an uppercut or just the guard coming up.
       const shoulderY = (body.points[LM.lShoulder].p.y + body.points[LM.rShoulder].p.y) / 2;
-      const fromLow = s.anchorTip.y < shoulderY - 0.5;
+      const fromLow = s.anchorTip.y < shoulderY - 0.3;
       const farEnough = def.kind === 'arm' && !fromLow && s.peakDisp >= cfg.strikeDist && t - s.since >= 30;
       const slowing = outward < s.peakSpeed * 0.35 && t - s.since > 40;
       if (!farEnough && !slowing && t - s.since < cfg.maxWindupMs) return;
@@ -236,7 +236,8 @@ export class IntentReader {
       // Punches don't travel down: an arm straightening as the hand drops (back to the lap) isn't a strike.
       const goingDown = def.kind === 'arm' && tTip.y < -0.15 && tTip.y < -0.5 * len(tTip);
       const isStrike = s.peakDisp >= needed && !goingDown && (def.kind === 'arm' || lift >= this.config.legRise)
-        && !(def.kind === 'arm' && raisingGuard(body, s.anchorTip, tipPt.p, this.config.guard.radius));
+        && !(def.kind === 'arm' && raisingGuard(body, s.anchorTip, tipPt.p, this.config.guard.radius))
+        && !(def.kind === 'arm' && bothHandsUp(body, name, tTip));
       if (!isStrike) {
         s.phase = 'idle';
         out.push({ kind: 'cancel', limb: name, t });
@@ -400,10 +401,21 @@ function windingUp(def: LimbDef, tip: Vec3) {
  * Bringing a hand up from the lap or a relaxed low position into the guard zone (by the face) is putting
  * your guard up, not an uppercut. Real uppercuts start from guard height.
  */
+/**
+ * Both hands rising at the same time is putting a guard up (or throwing your hands up), not two uppercuts.
+ * Real uppercuts are one hand at a time.
+ */
+function bothHandsUp(body: Body, limb: LimbName, travel: Vec3) {
+  if (travel.y < 0.15 || travel.y < 0.5 * len(travel)) return false;
+  const other = body.points[limb === 'armL' ? LM.rWrist : LM.lWrist];
+  const otherShoulder = body.points[limb === 'armL' ? LM.rShoulder : LM.lShoulder];
+  return other.vf.y - otherShoulder.vf.y > 1.0;
+}
+
 function raisingGuard(body: Body, start: Vec3, end: Vec3, radius: number) {
   const nose = body.points[LM.nose].p;
   const shoulderY = (body.points[LM.lShoulder].p.y + body.points[LM.rShoulder].p.y) / 2;
-  const startedLow = start.y < shoulderY - 0.5;
+  const startedLow = start.y < shoulderY - 0.3;
   // Ends by the face, or anywhere around shoulder height (some people hold their hands lower).
   const endsUp = Math.hypot(end.x - nose.x, end.y - nose.y) < radius * 1.2 || end.y > shoulderY - 0.25;
   return startedLow && endsUp;
