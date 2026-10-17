@@ -15,7 +15,7 @@ export const FIGHTER_SCALE = 0.75;
 export const FIGHTER_SPACING = 1;
 
 export const PLAYER_COLORS: Record<PlayerId, string> = {
-  p1: '#ff2e3f',
+  p1: '#ff2d95',
   p2: '#1f8bff',
 };
 
