@@ -16,6 +16,7 @@ Read `SPEC.md` (what we're building) and `architecture.md` (how the code is laid
 |---|---|---|
 | Game | `npm run dev` | http://localhost:5173/ (`?input=camera` for the webcam, `?pose=lite` on slow laptops) |
 | Intent tuner | `npm run dev` | http://localhost:5173/test/tuner/: live webcam → detected moves, live threshold sliders, record/replay clips |
+| Intent tuner (hosted) | `node scripts/build-tuner.mjs`, copy `dist/tuner` to the server's `/var/www/brawlegle/tuner` | https://54-149-60-196.sslip.io/tuner/ (works from any laptop, no install) |
 | Forge server | `cd forge && npm start` | http://127.0.0.1:8787/ (dev page for likeness tests) |
 | Matchmaker | deployed at `wss://54-149-60-196.sslip.io/ws` | see `matchmaker/README.md` |
 | Tests | `npx vitest run` | intent accuracy on synthetic clips, recorded-clip runs |

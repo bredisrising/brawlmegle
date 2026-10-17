@@ -175,11 +175,17 @@ server {
     proxy_set_header Host \$host;
     proxy_read_timeout 120s;
   }
+  # Static dev tools (the intent tuner), copied to /var/www/brawlegle/ separately.
+  location /tuner/ {
+    alias /var/www/brawlegle/tuner/;
+    try_files \$uri \$uri/ /tuner/index.html;
+  }
   location / {
     proxy_pass http://127.0.0.1:3000;
   }
 }
 EOF
+install -d /var/www/brawlegle
 ln -sf /etc/nginx/sites-available/brawlegle-https.conf /etc/nginx/sites-enabled/brawlegle-https.conf
 install -d /etc/nginx/stream.d
 grep -q 'stream.d' /etc/nginx/nginx.conf || printf '\nstream { include /etc/nginx/stream.d/*.conf; }\n' >> /etc/nginx/nginx.conf
