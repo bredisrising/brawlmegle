@@ -1,6 +1,8 @@
 import type { Landmark } from '../types';
 import type { JointName, Pose } from './pose';
 
+const FIGHTER_HEIGHT = 1;
+
 /** MediaPipe Pose landmark indices for the joints we display (neck = shoulder midpoint). */
 export const MP_INDEX: Record<Exclude<JointName, 'neck'>, number> = {
   head: 0, // nose
@@ -19,6 +21,24 @@ export const MP_INDEX: Record<Exclude<JointName, 'neck'>, number> = {
  *
  * TODO: implement (flip y/z, scale to FIGHTER_HEIGHT, drop feet to the floor).
  */
-export function worldLandmarksToPose(_world: Landmark[], out: Pose): Pose {
+export function worldLandmarksToPose(world: Landmark[], out: Pose): Pose {
+  const landmark = (joint: Exclude<JointName, 'neck'>) => world[MP_INDEX[joint]];
+  const leftAnkle = landmark('lAnkle');
+  const rightAnkle = landmark('rAnkle');
+  const head = landmark('head');
+  if (!leftAnkle || !rightAnkle || !head) return out;
+
+  const floor = (leftAnkle.y + rightAnkle.y) / 2;
+  const height = Math.abs(head.y - floor);
+  if (!Number.isFinite(height) || height < 0.15) return out;
+  const scale = FIGHTER_HEIGHT / height;
+
+  for (const joint of Object.keys(MP_INDEX) as Exclude<JointName, 'neck'>[]) {
+    const point = landmark(joint);
+    if (!point) continue;
+    // MediaPipe uses y down and reports negative z toward the camera.
+    out[joint].set(point.x * scale, (floor - point.y) * scale, -point.z * scale);
+  }
+  out.neck.copy(out.lShoulder).add(out.rShoulder).multiplyScalar(0.5);
   return out;
 }
