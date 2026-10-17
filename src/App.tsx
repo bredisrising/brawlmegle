@@ -12,6 +12,7 @@ import { DebugHint } from './ui/DebugHint';
 import { TitleScreen } from './ui/screens/TitleScreen';
 import { AvatarScreen } from './ui/screens/AvatarScreen';
 import { ClientScreen } from './ui/screens/ClientScreen';
+import { PoseDebugOverlay } from './ui/PoseDebugOverlay';
 
 export default function App() {
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -51,6 +52,7 @@ export default function App() {
               </>
             )}
           </div>
+          <PoseDebugOverlay />
         </GameContext.Provider>
       )}
     </div>

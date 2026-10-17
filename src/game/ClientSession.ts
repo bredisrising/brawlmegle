@@ -41,6 +41,10 @@ export class ClientSession {
     this.code = code;
   }
 
+  get inputSource() {
+    return this.source;
+  }
+
   /** Title screen "Join". Throws if the room can't be reached. */
   async connect() {
     this.peer = await this.open();

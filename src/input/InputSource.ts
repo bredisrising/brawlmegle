@@ -14,4 +14,7 @@ export interface InputSource {
   onFrame(cb: (frame: PoseFrame) => void): () => void;
   /** Optional live preview (e.g. webcam) the UI can show. */
   readonly video?: HTMLVideoElement;
+  /** Latest local frame and tracking state, used by the developer pose monitor. */
+  readonly latestFrame?: PoseFrame | null;
+  readonly tracking?: boolean;
 }

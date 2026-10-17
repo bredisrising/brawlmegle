@@ -57,6 +57,14 @@ export class Game {
     window.addEventListener('keydown', this.onDebugKey);
   }
 
+  /** Current local camera or mock source, for the development pose monitor. */
+  localInputSource() {
+    const { role } = useGameStore.getState();
+    return role === 'client'
+      ? this.client?.inputSource ?? null
+      : this.input.source(localPlayerId(role));
+  }
+
   /** Title screen: "Host". Opens a room on the signaling server and shows its code. */
   async host() {
     this.peer = new Peer('host', new Signaling(config.signalUrl));

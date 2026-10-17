@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import type { FightEvent, FighterState, ForgedFighter, PlayerId, PoseFrame } from '../types';
 import { FIGHTER_SPACING, PLAYER_COLORS } from '../game/constants';
 import { BONES, GUARD_POSE, JOINTS, copyPose, createPose, type JointName, type Pose } from './pose';
+import { worldLandmarksToPose } from './livePose';
 
 /**
  * How one fighter looks on screen. Driven by the fight engine's FighterState
@@ -20,11 +21,13 @@ export class FighterView {
   /** World placement; rotated so local +z faces the opponent. */
   readonly root = new THREE.Group();
   readonly pose = createPose();
+  private readonly livePose = createPose();
 
   private readonly joints = new Map<JointName, THREE.Mesh>();
   private readonly bones: THREE.LineSegments;
   private readonly placeholder = new THREE.Group();
   private model: THREE.Group | null = null;
+  private readonly modelParts = new Map<string, THREE.Object3D>();
   private loadVersion = 0;
 
   constructor(id: PlayerId) {
@@ -65,9 +68,11 @@ export class FighterView {
       disposeObject(this.model);
     }
     this.model = model;
+    this.modelParts.clear();
     this.placeholder.visible = model === null;
     if (model) {
       model.traverse((object) => {
+        this.modelParts.set(object.name.toLowerCase(), object);
         if (object instanceof THREE.Mesh) {
           object.castShadow = true;
           object.receiveShadow = true;
@@ -82,7 +87,17 @@ export class FighterView {
   }
 
   /** Called every sim tick with the engine's state and the latest live frame (if any). */
-  update(_state: Readonly<FighterState>, _live: PoseFrame | null) {}
+  update(state: Readonly<FighterState>, live: PoseFrame | null) {
+    this.root.position.x = state.x;
+    if (!live) return;
+
+    worldLandmarksToPose(live.world, this.livePose);
+    // Camera data controls the display skeleton directly. Smooth it slightly so
+    // tracking jitter does not make the fighter flicker between camera frames.
+    for (const joint of JOINTS) this.pose[joint].lerp(this.livePose[joint], 0.35);
+    this.applyPose(this.pose);
+    this.applyDefaultModelPose(this.pose);
+  }
 
   /** React to a fight event involving this fighter. */
   onEvent(_event: FightEvent) {}
@@ -107,6 +122,41 @@ export class FighterView {
     });
     attr.needsUpdate = true;
   }
+
+  /** Pose the shipped static default GLB by its named, separate body meshes. */
+  private applyDefaultModelPose(pose: Pose) {
+    if (!this.model) return;
+    const setPosition = (name: string, position: THREE.Vector3) => this.modelParts.get(name)?.position.copy(position);
+    const setLimb = (name: string, from: THREE.Vector3, to: THREE.Vector3, restLength: number) => {
+      const part = this.modelParts.get(name);
+      if (!part) return;
+      const direction = to.clone().sub(from);
+      part.position.copy(from).add(to).multiplyScalar(0.5);
+      part.quaternion.setFromUnitVectors(UP, direction.normalize());
+      part.scale.set(1, direction.length() / restLength, 1);
+    };
+
+    setLimb('left upper arm', pose.lShoulder, pose.lElbow, GUARD_POSE.lShoulder.distanceTo(GUARD_POSE.lElbow));
+    setLimb('left forearm', pose.lElbow, pose.lWrist, GUARD_POSE.lElbow.distanceTo(GUARD_POSE.lWrist));
+    setLimb('right upper arm', pose.rShoulder, pose.rElbow, GUARD_POSE.rShoulder.distanceTo(GUARD_POSE.rElbow));
+    setLimb('right forearm', pose.rElbow, pose.rWrist, GUARD_POSE.rElbow.distanceTo(GUARD_POSE.rWrist));
+    setLimb('left thigh', pose.lHip, pose.lKnee, GUARD_POSE.lHip.distanceTo(GUARD_POSE.lKnee));
+    setLimb('left shin', pose.lKnee, pose.lAnkle, GUARD_POSE.lKnee.distanceTo(GUARD_POSE.lAnkle));
+    setLimb('right thigh', pose.rHip, pose.rKnee, GUARD_POSE.rHip.distanceTo(GUARD_POSE.rKnee));
+    setLimb('right shin', pose.rKnee, pose.rAnkle, GUARD_POSE.rKnee.distanceTo(GUARD_POSE.rAnkle));
+    setPosition('left glove', pose.lWrist);
+    setPosition('right glove', pose.rWrist);
+    setPosition('left shoe', pose.lAnkle);
+    setPosition('right shoe', pose.rAnkle);
+    setPosition('hips', midpoint(pose.lHip, pose.rHip));
+    setPosition('neck', pose.neck);
+    setPosition('head', pose.head);
+  }
+}
+
+const UP = new THREE.Vector3(0, 1, 0);
+function midpoint(a: THREE.Vector3, b: THREE.Vector3) {
+  return a.clone().add(b).multiplyScalar(0.5);
 }
 
 function disposeObject(root: THREE.Object3D) {
