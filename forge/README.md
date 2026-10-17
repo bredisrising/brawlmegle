@@ -22,8 +22,8 @@ Fighters are saved in `forge/data/<id>/` (gitignored). An empty `name` gets the 
 ## Pipeline
 
 1. **Brief** (`gpt-5.4-mini`, about 3 s): reads the photos and returns JSON with name, distinctive features, archetype, outfit upgrade, prop, palette and scout report.
-2. **Model sheet** (`gpt-image-2`, about 11 s at low quality): full-body A-pose caricature on gray. This is what the image-to-3D step will get.
-3. **Card art** (about 11 s): same character in a fighting stance, using the sheet as the reference.
+2. **Model sheet** (`gpt-image-2.5-sunburst`, about 18 s at medium): full-body A-pose caricature on gray. This is what the image-to-3D step will get.
+3. **Card art** (`gpt-image-2.5-flare`, about 12 s): same character in a fighting stance, using the sheet as the reference.
 4. **3D model + rig:** not wired yet. It goes next to step 3 once we pick a provider. Until then `glbUrl` stays empty and the game uses the default model.
 
 Prompts live in `prompts.js`. They're v1 and the look isn't decided, so tune them freely.
@@ -32,7 +32,8 @@ Prompts live in `prompts.js`. They're v1 and the look isn't decided, so tune the
 
 | Variable | Default |
 |---|---|
-| `FORGE_IMAGE_MODEL` | `gpt-image-2` (also available: `gpt-image-2.5-flare`, `gpt-image-2.5-sunburst`, `gpt-image-1.5`) |
+| `FORGE_IMAGE_MODEL` | `gpt-image-2.5-sunburst` for the model sheet (best style match, about 18 s at medium) |
+| `FORGE_CARD_MODEL` | `gpt-image-2.5-flare` for the card (fastest, about 12 s) |
 | `FORGE_IMAGE_QUALITY` | `medium` (`low` is cheaper and faster for testing) |
 | `FORGE_BRIEF_MODEL` | `gpt-5.4-mini` |
 | `FORGE_PORT` / `FORGE_BIND` | `8787` / `127.0.0.1` |

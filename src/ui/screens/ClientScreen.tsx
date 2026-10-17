@@ -1,5 +1,7 @@
 import { useGameStore } from '../../game/store';
 import type { Phase } from '../../types';
+import { ACCENT } from '../accent';
+import { ForgeSteps } from '../ForgeSteps';
 
 /** Headline once P2 is ready, following the host's phase. */
 const READY_HEADLINE: Record<Phase, string> = {
@@ -16,34 +18,55 @@ export function ClientScreen() {
   const connection = useGameStore((s) => s.connection);
   const phase = useGameStore((s) => s.phase);
   const busy = player.status === 'scanning' || player.status === 'forging';
+  const accent = ACCENT.p2;
 
   return (
-    <div className="pointer-events-auto absolute inset-0 flex flex-col items-center justify-center gap-6 bg-arena/85 px-4 text-center backdrop-blur-sm">
-      <p className="text-sm font-semibold uppercase tracking-widest text-white/50">Room {roomCode}</p>
-      <h2 className="font-display text-outline text-7xl text-p2">{player.name}</h2>
+    <div className="tex-hatch pointer-events-auto absolute inset-0 overflow-hidden bg-ink">
+      <span aria-hidden className="text-hollow absolute -right-[0.06em] -bottom-[0.18em] font-display text-[22rem] leading-none sm:text-[34rem]">
+        2
+      </span>
 
-      {connection === 'reconnecting' && (
-        <div className="flex items-center gap-3 border-2 border-red-300/60 bg-black/50 px-4 py-2 font-semibold text-red-300">
-          <span className="size-4 animate-spin rounded-full border-2 border-red-300/30 border-t-red-300" />
-          Lost the big screen. Reconnecting…
+      <div className="relative flex h-full flex-col justify-center gap-6 px-6 sm:px-14">
+        <div className="animate-in-l flex items-stretch font-cond text-sm font-extrabold uppercase tracking-[0.25em]">
+          <span className={`slant ${accent.bg} grid place-items-center px-3 font-display tracking-normal text-ink [--slant:8px]`}>{accent.tag}</span>
+          <span className="slant -ml-1 bg-paper px-4 py-1.5 text-ink [--slant:8px]">Room {roomCode}</span>
         </div>
-      )}
 
-      {busy && (
-        <div className="flex items-center gap-3 text-2xl font-semibold">
-          <span className="size-5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-          {player.statusDetail}…
-        </div>
-      )}
+        <h2 className="animate-in-l max-w-full break-words font-display text-6xl uppercase leading-[0.88] tracking-tighter [animation-delay:80ms] sm:text-8xl">
+          {player.name}
+        </h2>
 
-      {player.status === 'ready' && (
-        <>
-          <p className="font-display text-outline text-5xl text-hp">{READY_HEADLINE[phase]}</p>
-          <p className="text-xl font-semibold text-white/70">Stay in front of this camera and look at the big screen.</p>
-        </>
-      )}
+        {connection === 'reconnecting' && (
+          <div className="flex items-center gap-3 self-start border-l-4 border-dmg bg-ink-2 px-4 py-2 font-semibold">
+            <span className="animate-blink size-3 bg-dmg" />
+            Lost the big screen. Reconnecting…
+          </div>
+        )}
 
-      {player.status === 'waiting' && player.statusDetail && <p className="text-red-300">{player.statusDetail}</p>}
+        {(busy || player.status === 'ready') && <ForgeSteps status={player.status} color={accent.bg} />}
+
+        {busy && (
+          <p className="font-cond text-2xl font-bold uppercase tracking-[0.12em] sm:text-3xl">
+            {player.statusDetail}
+            <span className="animate-blink">_</span>
+          </p>
+        )}
+
+        {player.status === 'ready' && (
+          <div className="flex flex-col items-start gap-3">
+            <p key={phase} className="animate-slam origin-left bg-hp px-4 py-2 font-display text-5xl uppercase tracking-tight text-ink sm:text-6xl">
+              {READY_HEADLINE[phase]}
+            </p>
+            <p className="font-cond text-xl font-bold uppercase tracking-[0.12em] text-paper/70">
+              Stay in front of this camera and look at the big screen.
+            </p>
+          </div>
+        )}
+
+        {player.status === 'waiting' && player.statusDetail && (
+          <p className="self-start border-l-4 border-dmg bg-ink-2 px-4 py-2 font-semibold">{player.statusDetail}</p>
+        )}
+      </div>
     </div>
   );
 }

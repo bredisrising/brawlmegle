@@ -9,12 +9,14 @@ export const ROUND_SECONDS = 60;
 
 /** World scale: every fighter is normalized to 1 meter tall. */
 export const FIGHTER_HEIGHT = 1;
+/** Display-only scale applied to each fighter on screen. Models, poses and the fight line stay in 1 m units. */
+export const FIGHTER_SCALE = 0.75;
 /** Fighters start this far apart on the fight line (meters). */
 export const FIGHTER_SPACING = 1;
 
 export const PLAYER_COLORS: Record<PlayerId, string> = {
-  p1: '#ff3b5c',
-  p2: '#2fb8ff',
+  p1: '#ff2d95',
+  p2: '#1f8bff',
 };
 
 export const PLAYER_NAMES: Record<PlayerId, string> = {
