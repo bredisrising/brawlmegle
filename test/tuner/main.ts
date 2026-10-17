@@ -7,6 +7,7 @@ import { DEFAULT_INTENT, type Intent, type IntentConfig, type LimbName } from '.
 import type { Command, FightEvent, PoseFrame, Stance } from '../../src/types';
 import { FightEngine } from '../../src/fight/FightEngine';
 import { Resolver } from '../../src/fight/Resolver';
+import { Cpu, type CpuLevel } from '../../src/fight/Cpu';
 import { FIGHT } from '../../src/fight/moves';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -416,7 +417,7 @@ $('reset').onclick = () => {
 buildConfigUI();
 
 // --- fight a dummy ---------------------------------------------------------------------------------
-// The real resolver + fight engine at 60 Hz: you (p1, from the camera) against a dummy (p2).
+// The real resolver + fight engine at 60 Hz: you (p1, from the camera) against p2: a punching bag, or the CPU.
 
 const engine = new FightEngine();
 const resolver = new Resolver();
@@ -425,24 +426,36 @@ let lastStance: Stance = { player: 'p1', guard: false, advance: 0, lean: { x: 0,
 let tick = 0;
 const DUMMY_STANCE: Stance = { player: 'p2', guard: false, advance: 0, lean: { x: 0, y: 0 }, tracked: true };
 const lastMove: { p1?: Command; p2?: Command } = {};
+let cpu: Cpu | null = null;
+let fights = 0;
+
+/** Off = a punching bag; otherwise p2 is the CPU at that level (a new seed each fight). */
+function setOpponent() {
+  const level = $<HTMLSelectElement>('dummyLevel').value;
+  cpu = level === 'off' ? null : new Cpu('p2', level as CpuLevel, ++fights);
+}
+$<HTMLSelectElement>('dummyLevel').onchange = setOpponent;
+setOpponent(); // the browser may have restored the select on reload
+const p2Name = () => (cpu ? `${cpu.level} cpu` : 'dummy');
 
 setInterval(() => {
   tick++;
   const commands = resolver.resolve('p1', pendingIntents, engine);
   pendingIntents = [];
   for (const c of commands) if (c.kind === 'attack') lastMove.p1 = c;
-  // The dummy throws a jab every ~2.5 s if enabled (in range or not: it lunges like anyone else).
-  if ($<HTMLInputElement>('dummyAttacks').checked && tick % 150 === 0 && engine.state('p2').phase === 'idle') {
-    const jab: Command = { kind: 'attack', player: 'p2', t: 0, move: 'jab', hand: 'L', height: 'head', speed: 1, windup: 1, lunge: Math.max(0, engine.distance() - 0.75) };
-    commands.push(jab);
-    lastMove.p2 = jab;
+  let p2Stance = DUMMY_STANCE;
+  if (cpu) {
+    const out = cpu.think(engine, tick);
+    for (const c of out.commands) if (c.kind === 'attack') lastMove.p2 = c;
+    commands.push(...out.commands);
+    p2Stance = out.stance;
   }
-  for (const event of engine.step(commands, { p1: lastStance, p2: DUMMY_STANCE })) logFight(event);
+  for (const event of engine.step(commands, { p1: lastStance, p2: p2Stance })) logFight(event);
   if (tick % 4 === 0) drawFight();
 }, 1000 / 60);
 
 function logFight(ev: FightEvent) {
-  const who = ev.attacker === 'p1' ? 'you' : 'dummy';
+  const who = ev.attacker === 'p1' ? 'you' : p2Name();
   let text: string | null = null;
   if (ev.type === 'startup') {
     const c = ev.attacker === 'p1' ? lastMove.p1 : lastMove.p2;
@@ -451,7 +464,7 @@ function logFight(ev: FightEvent) {
   } else if (ev.type === 'hit' || ev.type === 'counter') text = `  → ${ev.type === 'counter' ? 'COUNTER ' : ''}HIT ${ev.damage}`;
   else if (ev.type === 'blocked') text = `  → blocked (${ev.damage} chip)`;
   else if (ev.type === 'whiff') text = '  → missed';
-  else if (ev.type === 'ko') text = ev.attacker === 'p1' ? 'K.O.! you win' : 'K.O.! the dummy wins';
+  else if (ev.type === 'ko') text = ev.attacker === 'p1' ? 'K.O.! you win' : `K.O.! the ${p2Name()} wins`;
   if (!text) return;
   const row = document.createElement('div');
   row.className = ev.type;
@@ -473,10 +486,11 @@ function drawFight() {
   ($('dot1') as HTMLElement).style.left = pos(p1.x);
   ($('dot2') as HTMLElement).style.left = pos(p2.x);
   const evade = engine.evading('p1');
-  $('phases').textContent = `distance ${engine.distance().toFixed(2)} m · you: ${p1.phase}${p1.move ? ` ${p1.move}` : ''}${lastStance.guard ? ' · guard up' : ''}${evade ? ` · ${evade}` : ''} · dummy: ${p2.phase}${p2.move ? ` ${p2.move}` : ''}`;
+  $('phases').textContent = `distance ${engine.distance().toFixed(2)} m · you: ${p1.phase}${p1.move ? ` ${p1.move}` : ''}${lastStance.guard ? ' · guard up' : ''}${evade ? ` · ${evade}` : ''} · ${p2Name()}: ${p2.phase}${p2.move ? ` ${p2.move}` : ''}`;
 }
 
 $('fightReset').onclick = () => {
   engine.reset();
+  setOpponent();
   $('fightLog').textContent = '';
 };
