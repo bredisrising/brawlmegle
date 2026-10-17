@@ -33,6 +33,8 @@ export type PreprocessConfig = {
   core: OneEuroParams;
   extremity: OneEuroParams;
   depth: OneEuroParams;
+  /** Light smoothing used only for velocities, so motion onsets aren't delayed by the main filter. */
+  fast: OneEuroParams;
   /** Below this visibility a point is ignored and held. */
   minVisibility: number;
   /** How long a lost point is held before it counts as missing (ms). */
@@ -47,6 +49,7 @@ export const DEFAULT_PREPROCESS: PreprocessConfig = {
   core: { minCutoff: 1.0, beta: 0.6, dCutoff: 1.0 },
   extremity: { minCutoff: 1.6, beta: 1.2, dCutoff: 1.0 },
   depth: { minCutoff: 0.6, beta: 0.2, dCutoff: 1.0 },
+  fast: { minCutoff: 5, beta: 0.5, dCutoff: 1.0 },
   minVisibility: 0.2,
   holdMs: 200,
   maxSpeed: 40,
@@ -57,8 +60,10 @@ export type Vec3 = { x: number; y: number; z: number };
 export type BodyPoint = {
   /** Body units: x to the image right, y up, z toward the camera; origin at the hip center. */
   p: Vec3;
-  /** Velocity in body units per second, relative to the hips. */
+  /** Velocity in body units per second, relative to the hips (from the smooth positions). */
   v: Vec3;
+  /** Same, from lightly filtered positions: noisier, but reacts a frame or two sooner. Use it for onsets. */
+  vf: Vec3;
   /** Confident this frame (visible, not held, not a glitch). */
   ok: boolean;
   visibility: number;
@@ -73,6 +78,11 @@ export type Body = {
   scale: number;
   /** Whether hips are visible (full-body framing) or the body unit falls back to shoulder width. */
   fullBody: boolean;
+  /**
+   * Elbow angles in degrees (180 = straight) from MediaPipe's 3D world landmarks, and how fast they open.
+   * A straight punch at the camera barely moves the wrist in the image, but the elbow still straightens.
+   */
+  elbow: { L: number; R: number; vL: number; vR: number };
 };
 
 type Raw = { x: number; y: number; z: number; visibility: number };
@@ -80,6 +90,9 @@ type Raw = { x: number; y: number; z: number; visibility: number };
 export class PosePreprocessor {
   private config: PreprocessConfig;
   private readonly filters: { x: OneEuro; y: OneEuro; z: OneEuro }[];
+  private readonly fastFilters: { x: OneEuro; y: OneEuro; z: OneEuro }[];
+  private prevFast: Vec3[] | null = null;
+  private readonly elbowFilters = { L: new OneEuro({ minCutoff: 3, beta: 0.05, dCutoff: 1 }), R: new OneEuro({ minCutoff: 3, beta: 0.05, dCutoff: 1 }) };
   private lastT = -Infinity;
   private lastRawKey = '';
   private prev: Body | null = null;
@@ -95,6 +108,7 @@ export class PosePreprocessor {
       const xy = EXTREMITIES.has(i) ? config.extremity : config.core;
       return { x: new OneEuro({ ...xy }), y: new OneEuro({ ...xy }), z: new OneEuro({ ...config.depth }) };
     });
+    this.fastFilters = Array.from({ length: 33 }, () => ({ x: new OneEuro({ ...config.fast }), y: new OneEuro({ ...config.fast }), z: new OneEuro({ ...config.fast }) }));
   }
 
   /** Live tuning: swap in new parameters without losing state. */
@@ -106,10 +120,15 @@ export class PosePreprocessor {
       f.y.params = { ...xy };
       f.z.params = { ...config.depth };
     });
+    this.fastFilters.forEach((f) => (f.x.params = { ...config.fast }, f.y.params = { ...config.fast }, f.z.params = { ...config.fast }));
   }
 
   reset() {
     this.filters.forEach((f) => (f.x.reset(), f.y.reset(), f.z.reset()));
+    this.fastFilters.forEach((f) => (f.x.reset(), f.y.reset(), f.z.reset()));
+    this.elbowFilters.L.reset();
+    this.elbowFilters.R.reset();
+    this.prevFast = null;
     this.lastT = -Infinity;
     this.lastRawKey = '';
     this.prev = null;
@@ -180,8 +199,38 @@ export class PosePreprocessor {
       const v = before && dt > 0
         ? { x: (p.x - before.x) / dt, y: (p.y - before.y) / dt, z: (p.z - before.z) / dt }
         : { x: 0, y: 0, z: 0 };
-      return { p, v, ok: point.visibility >= 0.5 && this.lastGood[i] === frame.t, visibility: point.visibility };
+      return { p, v, vf: { x: 0, y: 0, z: 0 }, ok: point.visibility >= 0.5 && this.lastGood[i] === frame.t, visibility: point.visibility };
     });
+
+    // Fast channel: same transform, lighter filtering, used only for velocities.
+    const fast: Vec3[] = raw.map((point, i) => {
+      const f = this.fastFilters[i];
+      const ok = this.lastGood[i] === frame.t;
+      const x = ok ? f.x.filter(point.x, dt) : (f.x.value ?? point.x);
+      const y = ok ? f.y.filter(point.y, dt) : (f.y.value ?? point.y);
+      const z = ok ? f.z.filter(point.z, dt) : (f.z.value ?? point.z);
+      return { x: (x - hip.x) / U, y: (hip.y - y) / U, z: -z / WU };
+    });
+    if (this.prevFast && dt > 0) {
+      points.forEach((pt, i) => {
+        const a = this.prevFast![i];
+        pt.vf = { x: (fast[i].x - a.x) / dt, y: (fast[i].y - a.y) / dt, z: (fast[i].z - a.z) / dt };
+      });
+    }
+    this.prevFast = fast;
+
+    const elbowOf = (side: 'L' | 'R') => {
+      const [s, e, w] = side === 'L' ? [LM.lShoulder, LM.lElbow, LM.lWrist] : [LM.rShoulder, LM.rElbow, LM.rWrist];
+      return this.elbowFilters[side].filter(angle3(frame.world[s], frame.world[e], frame.world[w]), dt);
+    };
+    const prevElbow = this.prev?.elbow;
+    const L = elbowOf('L');
+    const R = elbowOf('R');
+    const elbow = {
+      L, R,
+      vL: prevElbow && dt > 0 ? (L - prevElbow.L) / dt : 0,
+      vR: prevElbow && dt > 0 ? (R - prevElbow.R) / dt : 0,
+    };
 
     const rootX = (hip.x - this.home.x) / U;
     const rootY = (this.home.y - hip.y) / U;
@@ -192,7 +241,7 @@ export class PosePreprocessor {
       vy: this.prev && dt > 0 ? (rootY - this.prev.root.y) / dt : 0,
     };
 
-    const body: Body = { t: frame.t, dt, points, root, scale: unit.size / U, fullBody: unit.fullBody };
+    const body: Body = { t: frame.t, dt, points, root, scale: unit.size / U, fullBody: unit.fullBody, elbow };
     this.prev = body;
     this.prevRaw = raw;
     return body;
@@ -230,6 +279,14 @@ function bodyUnit(points: { x: number; y: number; visibility: number }[]) {
   // Upper-body framing: a torso is roughly 1.4 shoulder widths; put the "hips" that far below the shoulders.
   const size = Math.max(1e-4, Math.hypot(ls.x - rs.x, ls.y - rs.y) * 1.4);
   return { size, center: { x: shoulders.x, y: shoulders.y + size }, fullBody: false };
+}
+
+/** Angle at b (degrees) between b->a and b->c, in 3D. */
+function angle3(a: Landmark, b: Landmark, c: Landmark) {
+  const u = { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
+  const v = { x: c.x - b.x, y: c.y - b.y, z: c.z - b.z };
+  const d = Math.hypot(u.x, u.y, u.z) * Math.hypot(v.x, v.y, v.z) || 1;
+  return (Math.acos(Math.max(-1, Math.min(1, (u.x * v.x + u.y * v.y + u.z * v.z) / d))) * 180) / Math.PI;
 }
 
 function dist(a: { x: number; y: number }, b: { x: number; y: number }) {

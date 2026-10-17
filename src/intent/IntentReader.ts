@@ -27,9 +27,14 @@ const LIMBS: Record<LimbName, LimbDef> = {
 };
 /** How much the middle joint counts next to the tip. */
 const MID_WEIGHT = 0.8;
+/** How much elbow straightening counts (per 90° opened), next to tip travel in body units. */
+const EXT_WEIGHT = 0.6;
+/** Elbow angles from one camera wobble; ignore the first ~15° of opening. */
+const EXT_DEADBAND = 0.1;
 const LIMB_NAMES = Object.keys(LIMBS) as LimbName[];
 
-type Pair = { tip: Vec3; mid: Vec3 };
+/** Tip and middle joint relative to the limb root, plus (arms) how open the elbow is, scaled by EXT_WEIGHT. */
+type Pair = { tip: Vec3; mid: Vec3; ext: number };
 type LimbState = {
   phase: 'idle' | 'onset' | 'recover';
   /** Usual position (guard or relaxed); "back near rest" means ready to strike again. */
@@ -47,6 +52,8 @@ type LimbState = {
   peakMid: Vec3;
   /** Middle-joint (elbow/knee) rise from the anchor at the peak. */
   peakMidRise: number;
+  /** Elbow-opening part of the displacement at the peak. */
+  peakExt: number;
   history: { t: number; d: Vec3 }[];
   typicalSpeed: number;
   // Debug readouts
@@ -154,23 +161,31 @@ export class IntentReader {
       y: legs ? p.p.y + body.root.y : p.p.y - root.p.y,
       z: (p.p.z - root.p.z) * wz,
     });
+    // Velocities come from the lightly filtered channel so onsets register a frame or two sooner.
     const velOf = (p: BodyPoint): Vec3 => ({
-      x: p.v.x - root.v.x,
-      y: legs ? p.v.y + body.root.vy : p.v.y - root.v.y,
-      z: (p.v.z - root.v.z) * wz,
+      x: p.vf.x - root.vf.x,
+      y: legs ? p.vf.y + body.root.vy : p.vf.y - root.vf.y,
+      z: (p.vf.z - root.vf.z) * wz,
     });
-    const now: Pair = { tip: relOf(tipPt), mid: relOf(midPt) };
-    const vel: Pair = { tip: velOf(tipPt), mid: velOf(midPt) };
+    const side = name === 'armL' ? 'L' : 'R';
+    const ext = legs ? 0 : (body.elbow[side] / 90) * EXT_WEIGHT;
+    const extV = legs ? 0 : (body.elbow[side === 'L' ? 'vL' : 'vR'] / 90) * EXT_WEIGHT;
+    const now: Pair = { tip: relOf(tipPt), mid: relOf(midPt), ext };
+    const vel = { tip: velOf(tipPt), mid: velOf(midPt) };
     if (!s.rest) s.rest = clonePair(now);
     if (!s.anchor) s.anchor = clonePair(now);
 
     // Travel since the last pause, tip and middle joint together.
     const tTip = sub(now.tip, s.anchor.tip);
     const tMid = sub(now.mid, s.anchor.mid);
-    const disp = Math.hypot(len(tTip), MID_WEIGHT * len(tMid));
-    const outward = disp > 1e-3 ? (dot(vel.tip, tTip) + MID_WEIGHT * MID_WEIGHT * dot(vel.mid, tMid)) / disp : 0;
-    const speed = Math.hypot(len(vel.tip), MID_WEIGHT * len(vel.mid));
-    const restDisp = Math.hypot(len(sub(now.tip, s.rest.tip)), MID_WEIGHT * len(sub(now.mid, s.rest.mid)));
+    // Only opening the elbow counts (bending it back is a retraction).
+    const tExt = Math.max(0, now.ext - s.anchor.ext - EXT_DEADBAND);
+    const disp = Math.hypot(len(tTip), MID_WEIGHT * len(tMid), tExt);
+    const outward = disp > 1e-3 ? (dot(vel.tip, tTip) + MID_WEIGHT * MID_WEIGHT * dot(vel.mid, tMid) + tExt * extV) / disp : 0;
+    // Resting is judged on the smooth channel: the fast one is too jittery to ever look still.
+    const smoothV = (p: BodyPoint) => Math.hypot(p.v.x - root.v.x, p.v.y - root.v.y);
+    const speed = Math.hypot(smoothV(tipPt), MID_WEIGHT * smoothV(midPt));
+    const restDisp = Math.hypot(len(sub(now.tip, s.rest.tip)), MID_WEIGHT * len(sub(now.mid, s.rest.mid)), Math.abs(now.ext - s.rest.ext));
     s.disp = disp;
     s.out = outward;
     s.history.push({ t, d: sub(now.tip, s.rest.tip) });
@@ -182,16 +197,19 @@ export class IntentReader {
         s.anchor = clonePair(now);
         const k = 1 - Math.exp(-body.dt / this.config.restSeconds);
         s.rest = lerpPair(s.rest, now, k);
+      } else if (def.kind === 'arm' && windingUp(def, tTip)) {
+        // Loading up (dropping for an uppercut, cocking out for a hook): the strike will start from here.
+        s.anchor = clonePair(now);
       }
-      if (visible && outward > cfg.onsetSpeed && disp > cfg.onsetDist && strikeLike(def, tTip, tMid, disp)) {
-        Object.assign(s, { phase: 'onset', since: t, peakDisp: disp, peakSpeed: outward, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y });
+      if (visible && outward > cfg.onsetSpeed && disp > cfg.onsetDist && (strikeLike(def, tTip, tMid, disp) || extensionStrike(def, tTip, tExt, disp))) {
+        Object.assign(s, { phase: 'onset', since: t, peakDisp: disp, peakSpeed: outward, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt });
         out.push({ kind: 'anticipate', limb: name, t });
       }
       return;
     }
 
     if (s.phase === 'onset') {
-      if (disp > s.peakDisp) Object.assign(s, { peakDisp: disp, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y });
+      if (disp > s.peakDisp) Object.assign(s, { peakDisp: disp, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt });
       s.peakSpeed = Math.max(s.peakSpeed, outward);
       const slowing = outward < s.peakSpeed * 0.35 && t - s.since > 40;
       if (!slowing && t - s.since < cfg.maxWindupMs) return;
@@ -213,7 +231,8 @@ export class IntentReader {
         limb: name,
         t,
         onsetT: s.since,
-        style: classify(def.kind, dir, strikeOut, s.peakTip, s.peakMid),
+        // Mostly elbow straightening with little visible hand travel: a straight punch at the camera.
+        style: s.peakExt > len(s.peak) ? 'straight' : classify(def.kind, dir, strikeOut, s.peakTip, s.peakMid),
         height: heightOf(def.kind, s.peakTip, body),
         dir: { out: strikeOut, up: dir.y, fwd: dir.z },
         speed: clamp(0.8 + 0.5 * (speedRatio - 0.6), 0.8, 1.3),
@@ -339,6 +358,20 @@ function strikeLike(def: LimbDef, tip: Vec3, mid: Vec3, disp: number) {
   return Math.max(fwd, up, inward) > 0.35 * disp;
 }
 
+/**
+ * The elbow straightening also counts as a strike (a punch at the camera), unless the hand is mostly
+ * dropping or swinging outward: that's the dip before an uppercut or the wind-up before a hook.
+ */
+function extensionStrike(def: LimbDef, tip: Vec3, ext: number, disp: number) {
+  return ext > 0.35 * disp && !windingUp(def, tip);
+}
+
+/** The hand has clearly traveled down or outward: loading up an uppercut or a hook, not striking yet. */
+function windingUp(def: LimbDef, tip: Vec3) {
+  const travel = len(tip);
+  return travel > 0.12 && (tip.y < -0.6 * travel || tip.x * def.side > 0.6 * travel);
+}
+
 function classify(kind: 'arm' | 'leg', dir: Vec3, out: number, tip: Vec3, mid: Vec3): StrikeStyle {
   // Kick: the foot comes up near knee height. Knee strike: the knee rises with the foot tucked under it.
   if (kind === 'leg') return tip.y > mid.y - 0.3 ? 'kick' : 'knee';
@@ -365,12 +398,13 @@ function windupOf(s: LimbState, dir: Vec3) {
 function newLimb(): LimbState {
   return {
     phase: 'idle', rest: null, anchor: null, since: 0, peakDisp: 0, peakSpeed: 0,
-    peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, history: [], typicalSpeed: 4, disp: 0, out: 0,
+    peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, history: [], typicalSpeed: 4, disp: 0, out: 0,
   };
 }
 
-const clonePair = (p: Pair): Pair => ({ tip: { ...p.tip }, mid: { ...p.mid } });
+const clonePair = (p: Pair): Pair => ({ tip: { ...p.tip }, mid: { ...p.mid }, ext: p.ext });
 const lerpPair = (a: Pair, b: Pair, k: number): Pair => ({
+  ext: a.ext + k * (b.ext - a.ext),
   tip: { x: a.tip.x + k * (b.tip.x - a.tip.x), y: a.tip.y + k * (b.tip.y - a.tip.y), z: a.tip.z + k * (b.tip.z - a.tip.z) },
   mid: { x: a.mid.x + k * (b.mid.x - a.mid.x), y: a.mid.y + k * (b.mid.y - a.mid.y), z: a.mid.z + k * (b.mid.z - a.mid.z) },
 });

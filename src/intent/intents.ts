@@ -72,7 +72,7 @@ export type IntentConfig = {
 
 export const DEFAULT_INTENT: IntentConfig = {
   preprocess: DEFAULT_PREPROCESS,
-  arm: { onsetSpeed: 1.7, onsetDist: 0.1, strikeDist: 0.24, returnDist: 0.22, maxWindupMs: 350, recoverMs: 600, quietSpeed: 0.8 },
+  arm: { onsetSpeed: 2.4, onsetDist: 0.12, strikeDist: 0.3, returnDist: 0.22, maxWindupMs: 350, recoverMs: 600, quietSpeed: 0.8 },
   leg: { onsetSpeed: 1.8, onsetDist: 0.12, strikeDist: 0.35, returnDist: 0.25, maxWindupMs: 450, recoverMs: 800, quietSpeed: 0.8 },
   legRise: 0.2,
   depthWeight: 0.5,
