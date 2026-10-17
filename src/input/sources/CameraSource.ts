@@ -47,7 +47,9 @@ export class CameraSource implements InputSource {
       const options = {
         baseOptions: { modelAssetPath: POSE_MODEL, delegate: 'GPU' as const },
         runningMode: 'VIDEO' as const,
-        numPoses: 2,
+        // One person: MediaPipe then tracks frame to frame instead of re-running its person detector every
+        // frame (faster), and applies its own light smoothing. `?poses=2` if bystanders steal the tracking.
+        numPoses: new URLSearchParams(window.location.search).get('poses') === '2' ? 2 : 1,
         minPoseDetectionConfidence: 0.5,
         minPosePresenceConfidence: 0.5,
         minTrackingConfidence: 0.5,
@@ -138,7 +140,7 @@ function toLandmark(point: NormalizedLandmark): Landmark {
   return { x: point.x, y: point.y, z: point.z, visibility: point.visibility ?? 0 };
 }
 
-/** numPoses is two so the camera can track both people; choose the centered one. */
+/** With numPoses 2 (bystanders around), pick the person nearest the center. */
 function selectCenteredPose(poses: NormalizedLandmark[][]): number {
   let selected = -1;
   let nearest = Infinity;

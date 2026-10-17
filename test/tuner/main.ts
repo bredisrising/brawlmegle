@@ -21,14 +21,18 @@ let frameTimes: number[] = [];
 
 // --- input ---------------------------------------------------------------------------------------
 
-$('camera').onclick = async () => {
+$('camera').onclick = () => startCamera();
+// Start right away: the browser asks for camera permission, and there's no button to miss.
+startCamera();
+
+async function startCamera() {
   if (camera) return;
   $('status').textContent = 'starting camera and MediaPipe…';
   camera = new CameraSource();
   try {
     await camera.start();
   } catch (err) {
-    $('status').textContent = `camera failed: ${(err as Error).message}`;
+    $('status').textContent = `camera didn't start (${(err as Error).message}). Allow camera access, then click Start camera.`;
     camera = null;
     return;
   }
@@ -36,7 +40,7 @@ $('camera').onclick = async () => {
   $<HTMLButtonElement>('record').disabled = false;
   $('camera').textContent = 'Camera on';
   camera.onFrame((frame) => onFrame(frame, performance.now()));
-};
+}
 
 function onFrame(frame: PoseFrame, now: number) {
   lastFrame = frame;
