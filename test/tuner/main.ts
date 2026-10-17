@@ -38,6 +38,7 @@ async function startCamera() {
   }
   $<HTMLVideoElement>('video').srcObject = camera.video.srcObject;
   $<HTMLButtonElement>('record').disabled = false;
+  $<HTMLButtonElement>('guided').disabled = false;
   $('camera').textContent = 'Camera on';
   camera.onFrame((frame) => onFrame(frame, performance.now()));
 }
@@ -45,11 +46,117 @@ async function startCamera() {
 function onFrame(frame: PoseFrame, now: number) {
   lastFrame = frame;
   recording?.push(frame);
+  guided?.frames.push(frame);
   frameTimes.push(now);
   frameTimes = frameTimes.filter((t) => now - t < 1000);
   const out = reader.update(frame, now);
   lastOutput = out;
-  for (const intent of out.intents) logIntent(intent);
+  for (const intent of out.intents) {
+    logIntent(intent);
+    // Intents are stamped with the frame clock, same as the guided prompts.
+    guided?.intents.push(intent);
+  }
+}
+
+// --- guided test ---------------------------------------------------------------------------------
+// Prompts moves one at a time, records the clip with labels (so it can be scored offline too), and
+// shows right away which moves the reader caught, missed or misread.
+
+type Expect = { kind: 'strike'; limb: LimbName; style: string } | { kind: 'guard' | 'duck' } | { kind: 'dodge'; dir: 'L' | 'R' } | { kind: 'none' };
+type Step = { say: string; hint: string; expect: Expect };
+const STEPS: Step[] = [
+  { say: 'RIGHT PUNCH', hint: 'snap your right fist at the screen', expect: { kind: 'strike', limb: 'armR', style: 'straight' } },
+  { say: 'LEFT PUNCH', hint: 'snap your left fist at the screen', expect: { kind: 'strike', limb: 'armL', style: 'straight' } },
+  { say: 'STAY STILL', hint: 'just hold your guard', expect: { kind: 'none' } },
+  { say: 'RIGHT HOOK', hint: 'swing your right fist around from the side', expect: { kind: 'strike', limb: 'armR', style: 'hook' } },
+  { say: 'LEFT HOOK', hint: 'swing your left fist around from the side', expect: { kind: 'strike', limb: 'armL', style: 'hook' } },
+  { say: 'BLOCK', hint: 'both fists up in front of your face, hold', expect: { kind: 'guard' } },
+  { say: 'RIGHT UPPERCUT', hint: 'dip, then drive your right fist up', expect: { kind: 'strike', limb: 'armR', style: 'upper' } },
+  { say: 'LEFT UPPERCUT', hint: 'dip, then drive your left fist up', expect: { kind: 'strike', limb: 'armL', style: 'upper' } },
+  { say: 'SCRATCH YOUR HEAD', hint: 'slowly, like normal', expect: { kind: 'none' } },
+  { say: 'DUCK', hint: 'drop your head and shoulders quickly', expect: { kind: 'duck' } },
+  { say: 'LEAN LEFT', hint: 'lean your head to your left, quickly', expect: { kind: 'dodge', dir: 'L' } },
+  { say: 'LEAN RIGHT', hint: 'lean your head to your right, quickly', expect: { kind: 'dodge', dir: 'R' } },
+  { say: 'RIGHT PUNCH', hint: 'again!', expect: { kind: 'strike', limb: 'armR', style: 'straight' } },
+  { say: 'LEFT PUNCH', hint: 'again!', expect: { kind: 'strike', limb: 'armL', style: 'straight' } },
+  { say: 'WAVE HELLO', hint: 'a normal wave', expect: { kind: 'none' } },
+  { say: 'RIGHT PUNCH', hint: 'as hard as you can', expect: { kind: 'strike', limb: 'armR', style: 'straight' } },
+  { say: 'LEFT HOOK', hint: 'again', expect: { kind: 'strike', limb: 'armL', style: 'hook' } },
+  { say: 'RIGHT UPPERCUT', hint: 'again', expect: { kind: 'strike', limb: 'armR', style: 'upper' } },
+  { say: 'BLOCK', hint: 'fists up, hold', expect: { kind: 'guard' } },
+  { say: 'LEFT PUNCH', hint: 'small and quick', expect: { kind: 'strike', limb: 'armL', style: 'straight' } },
+];
+const STEP_MS = 3500;
+const SHOW_MS = 2600; // the rest of each step is a breather
+
+let guided: { frames: PoseFrame[]; intents: Intent[]; labels: { say: string; expect: Expect; start: number; end: number }[] } | null = null;
+
+$('guided').onclick = async () => {
+  if (guided || !camera) return;
+  guided = { frames: [], intents: [], labels: [] };
+  $('log').textContent = '';
+  const prompt = $('prompt');
+  for (const n of [3, 2, 1]) {
+    prompt.innerHTML = `get ready… ${n}<small>guard up: fists by your chin</small>`;
+    await sleep(1000);
+  }
+  for (const step of STEPS) {
+    const start = lastFrame?.t ?? performance.now();
+    prompt.innerHTML = `${step.say}<small>${step.hint}</small>`;
+    await sleep(SHOW_MS);
+    prompt.innerHTML = '';
+    await sleep(STEP_MS - SHOW_MS);
+    guided.labels.push({ say: step.say, expect: step.expect, start, end: start + STEP_MS });
+  }
+  prompt.innerHTML = 'done!<small>results on the right, clip saved to Downloads</small>';
+  setTimeout(() => (prompt.innerHTML = ''), 4000);
+  showResults(guided);
+  download(guided);
+  guided = null;
+};
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function matches(intent: Intent, expect: Expect) {
+  if (expect.kind === 'strike') return intent.kind === 'strike' && intent.limb === expect.limb;
+  if (expect.kind === 'guard') return intent.kind === 'guard' && intent.up;
+  if (expect.kind === 'dodge') return intent.kind === 'dodge';
+  return intent.kind === expect.kind;
+}
+
+function showResults(g: NonNullable<typeof guided>) {
+  const actions = g.intents.filter((i) => i.kind !== 'anticipate' && i.kind !== 'cancel' && !(i.kind === 'guard' && !i.up));
+  let hits = 0, scored = 0;
+  const rows = g.labels.map((label) => {
+    const during = actions.filter((i) => i.t >= label.start && i.t <= label.end);
+    const seen = during.map((i) => describe(i)?.split(' · ')[0]).join(', ') || 'nothing';
+    let cls: string, verdict: string;
+    if (label.expect.kind === 'none') {
+      const fired = during.filter((i) => i.kind !== 'guard');
+      cls = fired.length ? 'bad' : 'good';
+      verdict = fired.length ? 'false trigger' : 'ok';
+    } else {
+      scored++;
+      const hit = during.find((i) => matches(i, label.expect));
+      const styleOk = hit && (label.expect.kind !== 'strike' || (hit.kind === 'strike' && hit.style === label.expect.style))
+        && (label.expect.kind !== 'dodge' || (hit.kind === 'dodge' && hit.dir === label.expect.dir));
+      if (hit) hits++;
+      cls = styleOk ? 'good' : hit ? 'meh' : 'bad';
+      verdict = styleOk ? '✓' : hit ? 'caught, wrong type' : 'missed';
+    }
+    return `<tr><td>${label.say}</td><td class="${cls}">${verdict}</td><td>${seen}</td></tr>`;
+  });
+  $('resultsBody').innerHTML = `<p>${hits}/${scored} moves caught.</p><table>${rows.join('')}</table>`;
+  $('results').hidden = false;
+}
+
+function download(g: NonNullable<typeof guided>) {
+  const header = { clip: 'guided test', model: new URLSearchParams(location.search).get('pose') ?? 'full', frames: g.frames.length, labels: g.labels };
+  const blob = new Blob([[header, ...g.frames].map((x) => JSON.stringify(x)).join('\n') + '\n'], { type: 'application/x-ndjson' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `guided-${new Date().toISOString().slice(11, 19).replace(/:/g, '')}.jsonl`;
+  a.click();
 }
 
 $('record').onclick = () => {
