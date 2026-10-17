@@ -49,6 +49,12 @@ describe('estimateFacing', () => {
     expect(classify(estimateFacing(poseAt(-105), 0.72)!)).toEqual({ bucket: 'right', tier: 2 });
   });
 
+  it('skips frames where the head faces away, even if the shoulders look like a profile', () => {
+    const frame = poseAt(90);
+    frame.world[0] = { ...frame.world[0], z: 0.08 }; // nose behind the ears
+    expect(classify(estimateFacing(frame)!)).toBeNull();
+  });
+
   it('needs the torso in frame', () => {
     const frame = poseAt(0);
     frame.image[23] = { ...frame.image[23], visibility: 0.1 };
@@ -66,9 +72,12 @@ function run(yaws: number[], opts: { sharp?: (yaw: number, i: number) => number;
     if (doneAt >= 0) return;
     const t = (i * 1000) / 30;
     let frame = poseAt(yaw, { t, noise: 0.002, seed: i + 1 });
-    // MediaPipe often reads a back view as a (left/right swapped) front view.
+    // Worst case: MediaPipe reads a back view as a front view (left/right swapped, face guessed in front).
     const back = Math.abs((((yaw % 360) + 360) % 360) - 180) < 50;
-    if (opts.flipBack && back) frame = swapSides(frame);
+    if (opts.flipBack && back) {
+      frame = swapSides(frame);
+      frame.world[0] = { ...frame.world[0], z: -0.1 };
+    }
     const offer = scan.offer(frame, t);
     if (offer && scan.submit(offer, opts.sharp?.(yaw, i) ?? 100 + (i % 7))) kept[offer.bucket] = yaw;
     if (scan.progress.done) doneAt = t;

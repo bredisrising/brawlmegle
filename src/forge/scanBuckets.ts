@@ -29,6 +29,8 @@ export type Facing = {
   nose: number;
   /** Left shoulder is on the image right, as when facing the camera. False usually means a back view. */
   frontal: boolean;
+  /** World nose depth minus the ears', meters: about -0.1 facing the camera, 0 in profile, positive facing away. */
+  noseDepth: number;
 };
 
 export const SCAN_DEFAULTS = {
@@ -40,6 +42,8 @@ export const SCAN_DEFAULTS = {
   /** Sides: a true profile counts as tier 2, a 3/4 view as tier 1. */
   profileYaw: 62,
   threeQuarterYaw: 35,
+  /** Nose this far (m) behind the ears means they're facing away: we'd get the back of their head. */
+  maxNoseDepth: 0.045,
   /** |nose offset| needed to trust the direction on its own. */
   noseSure: 0.04,
   /** Torso must be at least this tall (fraction of image height) and in frame. */
@@ -86,13 +90,15 @@ export function estimateFacing(frame: PoseFrame, frontWidth = SCAN_DEFAULTS.fron
   const score = Math.abs(nose) >= o.noseSure ? noseVote : 0.6 * noseVote + 0.3 * depth + 0.1 * ears;
   const side = Math.abs(score) < 0.2 ? 0 : score > 0 ? 1 : -1;
   const frontal = dx > 0;
-  return { yaw, turn: frontal ? yaw : 180 - yaw, side, width, nose, frontal };
+  const noseDepth = W?.[NOSE] && W[EAR_L] && W[EAR_R] ? W[NOSE].z - (W[EAR_L].z + W[EAR_R].z) / 2 : 0;
+  return { yaw, turn: frontal ? yaw : 180 - yaw, side, width, nose, frontal, noseDepth };
 }
 
 /** Which bucket and tier a facing counts for, ignoring scan history. */
 export function classify(f: Facing, opts: Partial<ScanOptions> = {}): { bucket: Bucket; tier: Tier } | null {
   const o = { ...SCAN_DEFAULTS, ...opts };
   const n = Math.abs(f.nose);
+  if (f.noseDepth > o.maxNoseDepth) return null;
   if (f.frontal && f.yaw <= o.frontYaw[0] && n <= o.frontNose[0]) return { bucket: 'front', tier: 2 };
   if (f.frontal && f.yaw <= o.frontYaw[1] && n <= o.frontNose[1]) return { bucket: 'front', tier: 1 };
   // A profile is good from either side of 90°; a 3/4 view only from the front (a 3/4 back view is mostly back).
