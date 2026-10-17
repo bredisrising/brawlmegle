@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Forge test</title>
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  body { max-width: 960px; margin: 24px auto; padding: 0 16px; }
+  fieldset { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; border: 1px solid #8884; padding: 12px; margin: 0 0 12px; }
+  video, .shots img { width: 200px; aspect-ratio: 4 / 3; object-fit: cover; background: #8882; border-radius: 4px; }
+  .shots, .results { display: flex; flex-wrap: wrap; gap: 12px; }
+  .results img { width: 300px; border-radius: 4px; background: #8882; }
+  pre { font: 12px/1.5 ui-monospace, monospace; white-space: pre-wrap; border: 1px solid #8884; padding: 12px; }
+</style>
+</head>
+<body>
+<h1>Forge test</h1>
+<p>Dev tool for checking likeness, not the game UI. Stand back so the camera sees head to knees, capture front, left and right (or upload 1 to 3 photos), then forge. One forge is three paid OpenAI calls.</p>
+<fieldset>
+  <video id="video" autoplay playsinline muted></video>
+  <button id="camera">Start camera</button>
+  <button data-shot="0">Capture front</button>
+  <button data-shot="1">Capture left</button>
+  <button data-shot="2">Capture right</button>
+  <label>or upload <input id="upload" type="file" accept="image/*" multiple></label>
+</fieldset>
+<div class="shots"><img id="shot0" alt="front"><img id="shot1" alt="left"><img id="shot2" alt="right"></div>
+<fieldset>
+  <input id="name" placeholder="fighter name (optional)">
+  <button id="forge">Forge</button>
+  <span id="status"></span>
+</fieldset>
+<div class="results"><img id="sheet" alt="model sheet"><img id="card" alt="card art"></div>
+<pre id="out"></pre>
+<script>
+const $ = (id) => document.getElementById(id);
+const shots = [null, null, null];
+
+function setShot(i, dataUrl) {
+  shots[i] = dataUrl;
+  $(`shot${i}`).src = dataUrl;
+}
+
+/** Downscale to at most 1024 px on the long side and encode as JPEG. */
+function toJpeg(source, width, height) {
+  const scale = Math.min(1, 1024 / Math.max(width, height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(width * scale);
+  canvas.height = Math.round(height * scale);
+  canvas.getContext("2d").drawImage(source, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", 0.9);
+}
+
+$("camera").onclick = async () => {
+  $("video").srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
+};
+document.querySelectorAll("[data-shot]").forEach((button) => {
+  button.onclick = () => {
+    const v = $("video");
+    if (v.videoWidth) setShot(Number(button.dataset.shot), toJpeg(v, v.videoWidth, v.videoHeight));
+  };
+});
+$("upload").onchange = async (e) => {
+  const files = [...e.target.files].slice(0, 3);
+  for (const [i, file] of files.entries()) {
+    const img = await createImageBitmap(file);
+    setShot(i, toJpeg(img, img.width, img.height));
+  }
+};
+
+$("forge").onclick = async () => {
+  const frames = shots.filter(Boolean);
+  if (!frames.length) return ($("status").textContent = "capture or upload at least one photo");
+  $("sheet").removeAttribute("src");
+  $("card").removeAttribute("src");
+  $("status").textContent = "sending…";
+  const res = await fetch("/api/forge", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: $("name").value, frames }),
+  });
+  const body = await res.json();
+  if (!res.ok) return ($("status").textContent = `error: ${body.error}`);
+  const started = Date.now();
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 1500));
+    const fighter = await (await fetch(`/api/forge/${body.id}`)).json();
+    const secs = Math.round((Date.now() - started) / 1000);
+    $("status").textContent = `${fighter.status}${fighter.step ? ` · ${fighter.step}` : ""} · ${secs}s`;
+    if (fighter.sheetUrl) $("sheet").src = fighter.sheetUrl;
+    if (fighter.cardUrl) $("card").src = fighter.cardUrl;
+    $("out").textContent = JSON.stringify(fighter, null, 2);
+    if (fighter.status === "ready" || fighter.status === "failed") break;
+  }
+};
+</script>
+</body>
+</html>

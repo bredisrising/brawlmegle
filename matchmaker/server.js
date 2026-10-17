@@ -37,6 +37,7 @@ const testPage = fs.readFileSync(new URL("./public/index.html", import.meta.url)
  * @property {import("ws").WebSocket} ws
  * @property {Client | null} peer
  * @property {null | "queue" | string} waiting  "queue" for a random match, or a room code
+ * @property {string | null} hostCode  room this client hosts (host/join flow)
  * @property {boolean} alive
  * @property {number} msgs
  * @property {number} windowStart
@@ -48,6 +49,9 @@ const clients = new Set();
 const queue = new Set();
 /** Private rooms with one player waiting. @type {Map<string, Client>} */
 const rooms = new Map();
+/** Host/join flow: rooms keyed by a short code, held by the host for as long as it's connected. @type {Map<string, Client>} */
+const hosted = new Map();
+const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O or 1/I
 
 /** STUN/TURN servers for RTCPeerConnection, with fresh TURN credentials. */
 function iceServers(id) {
@@ -71,6 +75,11 @@ function iceServers(id) {
 
 function send(client, msg) {
   if (client.ws.readyState === client.ws.OPEN) client.ws.send(JSON.stringify(msg));
+}
+
+/** `error` for this server's test page, `message` for the game's Signaling client. */
+function sendError(client, text) {
+  send(client, { type: "error", error: text, message: text });
 }
 
 function stopWaiting(client) {
@@ -118,6 +127,37 @@ function reset(client) {
   stopWaiting(client);
 }
 
+/** Host/join flow: the host opens a room and shows its code; the room stays open so a dropped client can rejoin. */
+function host(client) {
+  reset(client);
+  if (!client.hostCode) {
+    let code;
+    do code = Array.from(crypto.randomBytes(4), (b) => CODE_CHARS[b % CODE_CHARS.length]).join("");
+    while (hosted.has(code));
+    hosted.set(code, client);
+    client.hostCode = code;
+  }
+  send(client, { type: "room", code: client.hostCode, iceServers: iceServers(client.id) });
+}
+
+function joinHosted(client, code) {
+  const hostClient = hosted.get(code.toUpperCase());
+  if (!hostClient || hostClient === client) return sendError(client, `No room with code ${code}`);
+  if (hostClient.peer) return sendError(client, "That room already has two players");
+  reset(client);
+  hostClient.peer = client;
+  client.peer = hostClient;
+  // The host makes the offer. Both get fresh TURN credentials; the client can apply them with
+  // pc.setConfiguration() because the offer only arrives after this message.
+  send(hostClient, { type: "peer-joined", iceServers: iceServers(hostClient.id) });
+  send(client, { type: "joined", code: hostClient.hostCode, iceServers: iceServers(client.id) });
+}
+
+function stopHosting(client) {
+  if (client.hostCode && hosted.get(client.hostCode) === client) hosted.delete(client.hostCode);
+  client.hostCode = null;
+}
+
 function onMessage(client, raw) {
   const now = Date.now();
   if (now - client.windowStart > RATE_WINDOW_MS) {
@@ -130,15 +170,23 @@ function onMessage(client, raw) {
   try {
     msg = JSON.parse(raw.toString());
   } catch {
-    return send(client, { type: "error", error: "bad json" });
+    return sendError(client, "bad json");
   }
 
   switch (msg?.type) {
+    case "host":
+      host(client);
+      break;
     case "join":
+      if (typeof msg.code === "string") {
+        if (ROOM_RE.test(msg.code)) joinHosted(client, msg.code);
+        else sendError(client, "bad room code");
+        break;
+      }
       reset(client);
       if (msg.room === undefined) joinQueue(client);
       else if (typeof msg.room === "string" && ROOM_RE.test(msg.room)) joinRoom(client, msg.room);
-      else send(client, { type: "error", error: "bad room" });
+      else sendError(client, "bad room");
       break;
     case "signal":
       if (client.peer) send(client.peer, { type: "signal", data: msg.data });
@@ -149,9 +197,10 @@ function onMessage(client, raw) {
       break;
     case "leave":
       reset(client);
+      stopHosting(client);
       break;
     default:
-      send(client, { type: "error", error: "unknown type" });
+      sendError(client, "unknown type");
   }
 }
 
@@ -159,7 +208,7 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url ?? "/", "http://localhost");
   if (url.pathname === "/health") {
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ ok: true, clients: clients.size, waiting: queue.size, rooms: rooms.size }));
+    res.end(JSON.stringify({ ok: true, clients: clients.size, waiting: queue.size, rooms: rooms.size, hosted: hosted.size }));
   } else if (url.pathname === "/") {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     res.end(testPage);
@@ -179,12 +228,13 @@ const wss = new WebSocketServer({
 
 wss.on("connection", (ws) => {
   /** @type {Client} */
-  const client = { id: crypto.randomUUID(), ws, peer: null, waiting: null, alive: true, msgs: 0, windowStart: Date.now() };
+  const client = { id: crypto.randomUUID(), ws, peer: null, waiting: null, hostCode: null, alive: true, msgs: 0, windowStart: Date.now() };
   clients.add(client);
   ws.on("pong", () => (client.alive = true));
   ws.on("message", (raw) => onMessage(client, raw));
   ws.on("close", () => {
     reset(client);
+    stopHosting(client);
     clients.delete(client);
   });
   ws.on("error", () => {}); // "close" always follows

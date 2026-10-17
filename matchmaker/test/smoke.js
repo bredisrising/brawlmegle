@@ -98,7 +98,37 @@ try {
   assert.equal((await a.next("error")).error, "bad room");
   console.log("ok  room validation");
 
-  for (const x of [a, b, c]) x.close();
+  // Host/join flow used by the game: the host gets a code, the client joins with it.
+  const host = await client();
+  const guest = await client();
+  host.send({ type: "host" });
+  const { code, iceServers } = await host.next("room");
+  assert.match(code, /^[A-Z2-9]{4}$/);
+  assert.ok(iceServers.length > 0);
+  guest.send({ type: "join", code: code.toLowerCase() });
+  assert.equal((await guest.next("joined")).code, code);
+  assert.ok((await host.next("peer-joined")).iceServers.length > 0);
+  host.send({ type: "signal", data: { type: "offer", sdp: "y" } });
+  assert.equal((await guest.next("signal")).data.sdp, "y");
+  console.log("ok  host and join by code");
+
+  // A third player can't take the room, and errors carry `message` for the game's client.
+  const third = await client();
+  third.send({ type: "join", code });
+  assert.match((await third.next("error")).message, /two players/);
+  third.send({ type: "join", code: "ZZZZ" });
+  assert.match((await third.next("error")).message, /No room/);
+  console.log("ok  room full / unknown code");
+
+  // When the guest drops, the room stays open and a new guest can rejoin it.
+  guest.close();
+  await host.next("peer-left");
+  third.send({ type: "join", code });
+  await third.next("joined");
+  await host.next("peer-joined");
+  console.log("ok  rejoin after drop");
+
+  for (const x of [a, b, c, host, third]) x.close();
   console.log("all passed");
 } finally {
   child?.kill("SIGTERM");

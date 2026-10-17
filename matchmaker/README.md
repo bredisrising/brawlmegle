@@ -17,7 +17,24 @@ The test page at `/` connects two browsers. Open it in two tabs (or two machines
 
 ## Protocol
 
-JSON messages over a WebSocket at `/ws`.
+JSON messages over a WebSocket at `/ws`. Two ways to pair up: host and join by code (what the game uses), or random strangers and named rooms (the test page).
+
+### Host and join by code
+
+| Message | Direction | Means |
+|---|---|---|
+| `{type: "host"}` | host → server | Open a room |
+| `{type: "room", code, iceServers}` | server → host | 4-character code to show on screen. The room stays open while the host is connected, so a dropped client can rejoin. |
+| `{type: "join", code}` | client → server | Join that room (case doesn't matter) |
+| `{type: "joined", code, iceServers}` | server → client | In. Call `pc.setConfiguration({iceServers})` now; the offer comes after this. |
+| `{type: "peer-joined", iceServers}` | server → host | Create the connection with these `iceServers` and send the offer |
+| `{type: "signal", data}` | both ways | Offer, answer or ICE candidate, passed to the other side |
+| `{type: "peer-left"}` | server → host | The client dropped; the room is open again |
+| `{type: "error", message}` | server → either | No room with that code, room full, bad message |
+
+`iceServers` includes short-lived TURN credentials, so don't hard-code TURN usernames or passwords in the app.
+
+### Random strangers and named rooms
 
 Client → server:
 
@@ -38,7 +55,7 @@ Server → client:
 | `{type: "matched", peer, initiator, iceServers}` | Paired. The `initiator` creates the offer. Pass `iceServers` straight to `new RTCPeerConnection({iceServers})`; it includes short-lived TURN credentials. |
 | `{type: "signal", data}` | From your peer |
 | `{type: "peer-left"}` | Your peer left or pressed next |
-| `{type: "error", error}` | Bad message |
+| `{type: "error", error, message}` | Bad message |
 
 The test page's script is a working client to copy from. Two things to keep: process incoming messages one at a time (so ICE candidates don't arrive before the offer is applied), and use an unordered data channel with `maxRetransmits: 0` for game inputs.
 
