@@ -43,6 +43,12 @@ describe('estimateFacing', () => {
     expect(classify(f)).toBeNull();
   });
 
+  it('skips 3/4 back views but keeps a profile from just behind', () => {
+    expect(classify(estimateFacing(poseAt(130), 0.72)!)).toBeNull();
+    expect(classify(estimateFacing(poseAt(-130), 0.72)!)).toBeNull();
+    expect(classify(estimateFacing(poseAt(-105), 0.72)!)).toEqual({ bucket: 'right', tier: 2 });
+  });
+
   it('needs the torso in frame', () => {
     const frame = poseAt(0);
     frame.image[23] = { ...frame.image[23], visibility: 0.1 };

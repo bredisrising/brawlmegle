@@ -74,7 +74,7 @@ async function scan() {
   $<HTMLButtonElement>('forge').disabled = got.length === 0;
   $('forgeStatus').textContent = got.length ? 'Ready to forge (three paid image calls).' : 'Scan again.';
   // For headless checks.
-  (window as unknown as { scanResult: unknown }).scanResult = { got, tiers: lastTiers, sizes: frames.map((f) => f.length) };
+  (window as unknown as { scanResult: unknown }).scanResult = { got, tiers: lastTiers, sizes: frames.map((f) => f.length), frames };
 }
 
 function onScanUpdate(u: ScanUpdate) {

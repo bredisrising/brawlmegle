@@ -19,6 +19,8 @@ const NOSE = 0, EAR_L = 7, EAR_R = 8, SHOULDER_L = 11, SHOULDER_R = 12, HIP_L = 
 export type Facing = {
   /** How far the body has turned from facing the camera, 0–90°, from shoulder width (front and back look alike). */
   yaw: number;
+  /** Like yaw but 0–180: past 90 when the shoulders say it's a back view (see `frontal`). */
+  turn: number;
   /** Which side turned toward the camera, from the nose offset (plus depth and ears). 0 when unsure. */
   side: -1 | 0 | 1; // 1 = left side toward camera, -1 = right side
   /** Shoulder width over torso length (aspect-corrected). Shrinks as they turn. */
@@ -83,7 +85,8 @@ export function estimateFacing(frame: PoseFrame, frontWidth = SCAN_DEFAULTS.fron
   const noseVote = clamp(-nose / 0.1, -1, 1);
   const score = Math.abs(nose) >= o.noseSure ? noseVote : 0.6 * noseVote + 0.3 * depth + 0.1 * ears;
   const side = Math.abs(score) < 0.2 ? 0 : score > 0 ? 1 : -1;
-  return { yaw, side, width, nose, frontal: dx > 0 };
+  const frontal = dx > 0;
+  return { yaw, turn: frontal ? yaw : 180 - yaw, side, width, nose, frontal };
 }
 
 /** Which bucket and tier a facing counts for, ignoring scan history. */
@@ -92,8 +95,9 @@ export function classify(f: Facing, opts: Partial<ScanOptions> = {}): { bucket: 
   const n = Math.abs(f.nose);
   if (f.frontal && f.yaw <= o.frontYaw[0] && n <= o.frontNose[0]) return { bucket: 'front', tier: 2 };
   if (f.frontal && f.yaw <= o.frontYaw[1] && n <= o.frontNose[1]) return { bucket: 'front', tier: 1 };
-  if (f.side === 0 || f.yaw < o.threeQuarterYaw) return null;
-  return { bucket: f.side > 0 ? 'left' : 'right', tier: f.yaw >= o.profileYaw ? 2 : 1 };
+  // A profile is good from either side of 90°; a 3/4 view only from the front (a 3/4 back view is mostly back).
+  if (f.side === 0 || f.turn < o.threeQuarterYaw || f.turn > 180 - o.profileYaw) return null;
+  return { bucket: f.side > 0 ? 'left' : 'right', tier: f.turn >= o.profileYaw ? 2 : 1 };
 }
 
 export type BucketState = {
@@ -158,7 +162,7 @@ export class ScanBuckets {
 
     const hit = classify(facing, this.opts);
     if (!hit) return null;
-    if (hit.bucket !== 'front' && facing.yaw >= this.opts.profileYaw - 10) this.sidesSeen.add(hit.bucket);
+    if (hit.bucket !== 'front' && facing.turn >= this.opts.profileYaw - 10) this.sidesSeen.add(hit.bucket);
     if (hit.bucket === 'front') {
       const turnedAway = this.sidesSeen.size > 0;
       const cameBack = this.sidesSeen.size === 2;
