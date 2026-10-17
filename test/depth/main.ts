@@ -88,6 +88,13 @@ async function start() {
   requestAnimationFrame(draw);
   // Logged for automated runs (headless Chrome reads the console).
   setInterval(() => console.info(`live: ${$('status').innerText.replace(/\n/g, ' | ')}`), 5000);
+  // ?report=1: also post the live stats to the server every 5 s (for automated runs that can't read the console).
+  if (params.get('report') === '1') {
+    setInterval(() => {
+      const header = { clip: 'depth report', labels: [], query: location.search, status: $('status').innerText.replace(/\n/g, ' | '), ua: navigator.userAgent };
+      void fetch('/samples', { method: 'POST', headers: { 'content-type': 'text/plain' }, body: JSON.stringify(header) + '\n' }).catch(() => {});
+    }, 5000);
+  }
 }
 
 function startWorker() {
