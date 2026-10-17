@@ -1,0 +1,65 @@
+# Matchmaker
+
+Pairs two players and passes their WebRTC connection details back and forth until they connect directly. After that, game traffic goes peer to peer and never touches this server. When a direct connection fails (strict school, office or event Wi-Fi), coturn on the same box relays it.
+
+Separate from the game app: its own `package.json`, plain Node, one dependency (`ws`).
+
+## Run it locally
+
+```
+cd matchmaker
+npm install
+npm start          # ws://127.0.0.1:3000/ws, test page at http://127.0.0.1:3000/
+npm test           # starts a server and checks pairing, relaying, rooms, TURN credentials
+```
+
+The test page at `/` connects two browsers. Open it in two tabs (or two machines), use the same room code or none, and it shows whether the connection went direct or through TURN, plus the round-trip time. `?room=abc&relay=1&auto=1` joins automatically and forces TURN.
+
+## Protocol
+
+JSON messages over a WebSocket at `/ws`.
+
+Client → server:
+
+| Message | Does |
+|---|---|
+| `{type: "join"}` | Wait for a random stranger |
+| `{type: "join", room: "abc"}` | Wait in a private room (letters, digits, `-`, `_`, up to 32). The second person in gets matched. |
+| `{type: "signal", data}` | Pass `data` (offer, answer or ICE candidate) to your matched peer |
+| `{type: "next"}` | Drop your peer and wait for a new random stranger |
+| `{type: "leave"}` | Drop your peer or stop waiting |
+
+Server → client:
+
+| Message | Means |
+|---|---|
+| `{type: "hello", id}` | Connected |
+| `{type: "waiting", room?}` | In the queue or room |
+| `{type: "matched", peer, initiator, iceServers}` | Paired. The `initiator` creates the offer. Pass `iceServers` straight to `new RTCPeerConnection({iceServers})`; it includes short-lived TURN credentials. |
+| `{type: "signal", data}` | From your peer |
+| `{type: "peer-left"}` | Your peer left or pressed next |
+| `{type: "error", error}` | Bad message |
+
+The test page's script is a working client to copy from. Two things to keep: process incoming messages one at a time (so ICE candidates don't arrive before the offer is applied), and use an unordered data channel with `maxRetransmits: 0` for game inputs.
+
+## Deployed server
+
+- Matchmaker: `wss://54-149-60-196.sslip.io/ws`. Test page: https://54-149-60-196.sslip.io/
+- TURN: `turn.54-149-60-196.sslip.io` (the matchmaker hands out the URLs and credentials, so the game never hard-codes them)
+- `sslip.io` is a free DNS service that turns a name like `54-149-60-196.sslip.io` into that IP, so we don't need a domain yet.
+- Tested from the DubHacks Wi-Fi: it blocks port 3478, but relaying over 443 works (about 32 ms round trip). From a home network, 3478 works too.
+
+- One `t4g.micro` EC2 instance in us-west-2 named `brawlegle-matchmaker`, tagged `Project=brawlegle`, with a fixed (Elastic) IP.
+- nginx takes port 443 and routes by hostname: the matchmaker hostname goes to the Node app, and the TURN hostname goes to coturn (TURN over TLS). Both work on networks that only allow HTTPS.
+- coturn also listens on 3478 (UDP and TCP), with relay ports 49152–49999/UDP.
+- The TURN secret is generated on the server and never leaves it. Bandwidth through TURN is capped at about 10 Mbps total.
+
+### Update the code or switch domains
+
+`deploy/setup.sh` is safe to re-run. Copy this folder to the server and run:
+
+```
+sudo DOMAIN=match.example.com TURN_DOMAIN=turn.example.com deploy/setup.sh
+```
+
+To move to a real domain, add two DNS A records pointing at the server's Elastic IP (one for each hostname), then re-run the script with the new names. It requests a new certificate automatically.

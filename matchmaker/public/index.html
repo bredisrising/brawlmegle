@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Matchmaker test</title>
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  body { max-width: 640px; margin: 24px auto; padding: 0 16px; }
+  fieldset { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; border: 1px solid #8884; padding: 12px; }
+  #log { font: 13px/1.5 ui-monospace, monospace; white-space: pre-wrap; border: 1px solid #8884; padding: 12px; min-height: 240px; }
+</style>
+</head>
+<body>
+<h1>Matchmaker test</h1>
+<p>Open this page in two browsers, possibly on different networks. Join the same room code, or leave it blank for a random match. Once the data channel opens, Ping measures the round trip peer to peer.</p>
+<fieldset>
+  <input id="room" placeholder="room code (optional)">
+  <label><input id="relay" type="checkbox"> force TURN relay</label>
+  <button id="join">Join</button>
+  <button id="next">Next</button>
+  <button id="ping" disabled>Ping</button>
+</fieldset>
+<div id="log"></div>
+<script>
+const $ = (id) => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+$("room").value = params.get("room") ?? "";
+$("relay").checked = params.get("relay") === "1";
+
+/** Status for automated tests: idle, waiting, matched, open, then route info. */
+window.mmStatus = { state: "idle" };
+let ws, pc, dc;
+let chain = Promise.resolve();
+
+function log(text) {
+  $("log").textContent += `${new Date().toLocaleTimeString()}  ${text}\n`;
+}
+
+function signal(data) {
+  ws.send(JSON.stringify({ type: "signal", data }));
+}
+
+function closePeer() {
+  dc?.close();
+  pc?.close();
+  pc = dc = undefined;
+  $("ping").disabled = true;
+}
+
+function connect() {
+  return new Promise((resolve) => {
+    if (ws?.readyState === WebSocket.OPEN) return resolve();
+    ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+    ws.onopen = () => resolve();
+    ws.onclose = () => log("matchmaker disconnected");
+    // Handle messages one at a time, so ICE candidates never race ahead of the offer.
+    ws.onmessage = (e) => {
+      chain = chain.then(() => handle(JSON.parse(e.data))).catch((err) => log(`error: ${err.message}`));
+    };
+  });
+}
+
+async function handle(msg) {
+  if (msg.type === "hello") log(`connected as ${msg.id.slice(0, 8)}`);
+  else if (msg.type === "waiting") {
+    window.mmStatus = { state: "waiting" };
+    log(msg.room ? `waiting in room ${msg.room}` : "waiting for a stranger");
+  } else if (msg.type === "matched") {
+    window.mmStatus = { state: "matched" };
+    log(`matched with ${msg.peer.slice(0, 8)}, ${msg.initiator ? "sending offer" : "waiting for offer"}`);
+    log(`ICE servers: ${msg.iceServers.flatMap((s) => [].concat(s.urls)).join(", ")}`);
+    await startPeer(msg.iceServers, msg.initiator);
+  } else if (msg.type === "signal") await onSignal(msg.data);
+  else if (msg.type === "peer-left") {
+    log("peer left");
+    window.mmStatus = { state: "idle" };
+    closePeer();
+  } else if (msg.type === "error") log(`server error: ${msg.error}`);
+}
+
+async function startPeer(iceServers, initiator) {
+  closePeer();
+  pc = new RTCPeerConnection({ iceServers, iceTransportPolicy: $("relay").checked ? "relay" : "all" });
+  pc.onicecandidate = (e) => e.candidate && signal({ candidate: e.candidate });
+  pc.onconnectionstatechange = () => {
+    log(`connection: ${pc.connectionState}`);
+    if (pc.connectionState === "failed") window.mmStatus = { state: "failed" };
+  };
+  if (initiator) {
+    // Unordered, no retransmits: behaves like UDP, which is what game inputs want.
+    setupChannel(pc.createDataChannel("game", { ordered: false, maxRetransmits: 0 }));
+    await pc.setLocalDescription(await pc.createOffer());
+    signal({ description: pc.localDescription });
+  } else {
+    pc.ondatachannel = (e) => setupChannel(e.channel);
+  }
+}
+
+async function onSignal(data) {
+  if (!pc) return;
+  if (data.description) {
+    await pc.setRemoteDescription(data.description);
+    if (data.description.type === "offer") {
+      await pc.setLocalDescription(await pc.createAnswer());
+      signal({ description: pc.localDescription });
+    }
+  } else if (data.candidate) {
+    await pc.addIceCandidate(data.candidate);
+  }
+}
+
+function setupChannel(channel) {
+  dc = channel;
+  dc.onopen = async () => {
+    log("data channel open");
+    $("ping").disabled = false;
+    window.mmStatus = { state: "open", ...(await route()) };
+    log(`route: ${window.mmStatus.route}`);
+  };
+  dc.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.ping) dc.send(JSON.stringify({ pong: msg.ping }));
+    else if (msg.pong) {
+      const rtt = Math.round(performance.now() - msg.pong);
+      window.mmStatus.rtt = rtt;
+      log(`pong: ${rtt} ms round trip`);
+    }
+  };
+}
+
+/** Which path the connection took: direct, or relayed through TURN (and how). */
+async function route() {
+  const stats = await pc.getStats();
+  let pair;
+  stats.forEach((s) => {
+    if (s.type === "transport" && s.selectedCandidatePairId) pair = stats.get(s.selectedCandidatePairId);
+  });
+  if (!pair) stats.forEach((s) => {
+    if (s.type === "candidate-pair" && s.nominated && s.state === "succeeded") pair = s;
+  });
+  const local = pair && stats.get(pair.localCandidateId);
+  if (!local) return { route: "unknown" };
+  return local.candidateType === "relay"
+    ? { route: `relayed through TURN over ${local.relayProtocol ?? "?"}`, relay: local.relayProtocol ?? "?" }
+    : { route: `direct (${local.candidateType}, ${local.protocol})`, relay: null };
+}
+
+$("join").onclick = async () => {
+  await connect();
+  const room = $("room").value.trim();
+  ws.send(JSON.stringify(room ? { type: "join", room } : { type: "join" }));
+};
+$("next").onclick = async () => {
+  closePeer();
+  await connect();
+  ws.send(JSON.stringify({ type: "next" }));
+};
+$("ping").onclick = () => dc?.readyState === "open" && dc.send(JSON.stringify({ ping: performance.now() }));
+
+if (params.get("auto") === "1") $("join").click();
+</script>
+</body>
+</html>
