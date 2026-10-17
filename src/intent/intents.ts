@@ -83,7 +83,7 @@ export const DEFAULT_INTENT: IntentConfig = {
   restSeconds: 1.5,
   jump: { rise: 0.1, speed: 1.0 },
   duck: { drop: 0.28, speed: 1.0 },
-  dodge: { shift: 0.28, speed: 1.0 },
+  dodge: { shift: 0.13, speed: 0.6 },
   guard: { radius: 0.5, holdMs: 120 },
   advance: { in: 0.08, out: 0.07 },
   coreCooldownMs: 450,

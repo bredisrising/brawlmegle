@@ -238,7 +238,7 @@ export class IntentReader {
       // Arms only: a leg needs its full rise to tell a knee from a kick. A hand starting low waits too, to see
       // whether it's an uppercut or just the guard coming up.
       const shoulderY = (body.points[LM.lShoulder].p.y + body.points[LM.rShoulder].p.y) / 2;
-      const fromLow = s.anchorTip.y < shoulderY - 0.3;
+      const fromLow = s.anchorTip.y < shoulderY - 0.8;
       const farEnough = def.kind === 'arm' && !fromLow && s.peakDisp >= cfg.strikeDist && t - s.since >= 30;
       const slowing = outward < s.peakSpeed * 0.35 && t - s.since > 40;
       if (!farEnough && !slowing && t - s.since < cfg.maxWindupMs) return;
@@ -324,8 +324,9 @@ export class IntentReader {
 
     // Dodge: the head leans sideways relative to the hips.
     const lean = nose.p.x - this.headRest.x;
+    // Not while ducking: a duck usually tilts the head too.
     if (Math.abs(lean) > cfg.dodge.shift && Math.sign(nose.v.x) === Math.sign(lean) && Math.abs(nose.v.x) > cfg.dodge.speed
-      && t - this.lastCore.dodge > cfg.coreCooldownMs) {
+      && headDrop < cfg.duck.drop * 0.6 && t - this.lastCore.dodge > cfg.coreCooldownMs) {
       this.lastCore.dodge = t;
       out.push({ kind: 'dodge', t, dir: lean > 0 ? 'L' : 'R' });
     }
@@ -453,7 +454,8 @@ function bothHandsUp(body: Body, limb: LimbName, travel: Vec3) {
 function raisingGuard(body: Body, start: Vec3, end: Vec3, radius: number) {
   const nose = body.points[LM.nose].p;
   const shoulderY = (body.points[LM.lShoulder].p.y + body.points[LM.rShoulder].p.y) / 2;
-  const startedLow = start.y < shoulderY - 0.3;
+  // Lap level, not just a low guard: plenty of people punch (and uppercut) from below the shoulders.
+  const startedLow = start.y < shoulderY - 0.8;
   // Ends by the face, or anywhere around shoulder height (some people hold their hands lower).
   const endsUp = Math.hypot(end.x - nose.x, end.y - nose.y) < radius * 1.2 || end.y > shoulderY - 0.25;
   return startedLow && endsUp;
