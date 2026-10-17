@@ -49,8 +49,24 @@ async function errorText(res: Response) {
   }
 }
 
+/** Usernames are a light "log in": case-insensitive, 1–24 letters, digits, `_ . -`. Null if not usable. */
+export function normalizeUsername(raw: string): string | null {
+  const u = raw.trim().toLowerCase();
+  return /^[a-z0-9_.-]{1,24}$/.test(u) ? u : null;
+}
+
+/** The fighter saved under a username on the forge server, if any (null when none, or with no server). */
+export async function findProfile(username: string, api = config.forgeApi): Promise<ForgedFighter | null> {
+  const u = normalizeUsername(username);
+  if (!api || !u) return null;
+  const res = await fetch(`${trimSlash(api)}/api/profiles/${encodeURIComponent(u)}`);
+  if (!res.ok) return null;
+  const body = (await res.json()) as { fighter: Record<string, unknown> | null };
+  return body.fighter ? toForgedFighter(body.fighter) : null;
+}
+
 /** Starts a forge. Returns its id. `api` defaults to config.forgeApi (empty = mock). */
-export async function submitForge(name: string, frames: ScanFrames, api = config.forgeApi): Promise<string> {
+export async function submitForge(name: string, frames: ScanFrames, api = config.forgeApi, username?: string): Promise<string> {
   if (!api) {
     await wait(300);
     return `mock-${Date.now()}`;
@@ -59,8 +75,8 @@ export async function submitForge(name: string, frames: ScanFrames, api = config
   if (present.length === 0) throw new Error('The scan got no frames: nobody was in view');
   const res = await fetch(`${trimSlash(api)}/api/forge`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ name, frames: present }),
+    headers: { 'content-type': 'application/json', 'x-forge-key': config.forgeKey },
+    body: JSON.stringify({ name, username, frames: present }),
   });
   if (!res.ok) throw new Error(`Forge rejected the scan (${res.status}): ${await errorText(res)}`);
   return ((await res.json()) as { id: string }).id;
@@ -101,6 +117,8 @@ export type ForgeOptions = {
   /** Give up and report 'failed' after this long (SPEC fallback ladder: 5 minutes). */
   timeoutMs?: number;
   signal?: AbortSignal;
+  /** Saves the fighter under this username on the server. */
+  username?: string;
 };
 
 /**
@@ -112,9 +130,9 @@ export async function forgeFighter(
   name: string,
   frames: ScanFrames,
   onProgress?: (fighter: ForgedFighter) => void,
-  { api = config.forgeApi, pollMs = 1500, timeoutMs = 5 * 60_000, signal }: ForgeOptions = {},
+  { api = config.forgeApi, pollMs = 1500, timeoutMs = 5 * 60_000, signal, username }: ForgeOptions = {},
 ): Promise<ForgedFighter> {
-  const id = await submitForge(name, frames, api);
+  const id = await submitForge(name, frames, api, username);
   const started = Date.now();
   let last: ForgedFighter = { id, name, status: 'scanning' };
   onProgress?.(last);

@@ -79,6 +79,8 @@ export class FighterView {
           object.receiveShadow = true;
         }
       });
+      // Forged fighters (Tripo) are exported facing +x; this fighter space faces +z toward the opponent.
+      if (fighter.glbUrl?.includes('/api/forge/')) model.rotation.y = -Math.PI / 2;
       this.root.add(model);
     }
   }

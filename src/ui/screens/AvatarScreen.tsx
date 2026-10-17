@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
+import { findProfile, normalizeUsername } from '../../forge/forge';
 import { listFighters } from '../../forge/roster';
 import { localPlayerId, useGameStore } from '../../game/store';
 import type { ForgedFighter, PlayerId } from '../../types';
@@ -6,11 +7,11 @@ import { ACCENT } from '../accent';
 import { Arrow, ArcadeButton, TextButton } from '../ArcadeButton';
 import { useGame } from '../GameContext';
 
-const NAME_MAX = 16;
+const NAME_MAX = 24;
 
 type Step = 'choose' | 'name' | 'roster';
 
-const STEP_LABEL: Record<Step, string> = { choose: 'Select', name: 'Name', roster: 'Memory card' };
+const STEP_LABEL: Record<Step, string> = { choose: 'Select', name: 'Username', roster: 'Memory card' };
 
 /** After Host / Connect: scan a new fighter (asks for a name first) or pick a saved one. */
 export function AvatarScreen() {
@@ -84,8 +85,8 @@ function ChooseStep({ player, onScan, onExisting }: { player: PlayerId; onScan: 
       <div className="grid w-full max-w-5xl grid-cols-1 gap-4 sm:grid-cols-[1.3fr_1fr] sm:gap-5">
         <ChoiceCard
           index="01"
-          title="Scan new"
-          body="Turn 360° in front of the camera and get forged into a fighter."
+          title="Enter"
+          body="Type your username. Your fighter comes back, or you get scanned and forged into one."
           fill="hover:bg-hp focus-visible:bg-hp"
           bar="bg-hp"
           onClick={onScan}
@@ -129,32 +130,57 @@ function ChoiceCard(props: { index: string; title: string; body: string; fill: s
   );
 }
 
+/**
+ * Username "log in": as you type, the server is checked for your fighter. Found: fight as it (or rescan).
+ * New: the memory-card consent, then a scan, and the fighter is saved under your username on every laptop.
+ */
 function NameStep({ player }: { player: PlayerId }) {
   const game = useGame();
   const [name, setName] = useState('');
-  const trimmed = name.trim();
+  const username = normalizeUsername(name);
+  const trimmed = username ?? '';
   const accent = ACCENT[player];
+  // undefined = checking, null = no fighter yet
+  const [found, setFound] = useState<ForgedFighter | null | undefined>(null);
+  const [rescan, setRescan] = useState(false);
+
+  useEffect(() => {
+    setRescan(false);
+    if (!username) return setFound(null);
+    setFound(undefined);
+    let alive = true;
+    const timer = setTimeout(() => {
+      findProfile(username)
+        .then((f) => alive && setFound(f))
+        .catch(() => alive && setFound(null));
+    }, 300);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [username]);
 
   const scan = (e: FormEvent) => {
     e.preventDefault();
-    if (trimmed) game.chooseFighter({ kind: 'scan', name: trimmed });
+    if (found && !rescan) return game.chooseFighter({ kind: 'existing', fighter: found });
+    if (trimmed) game.chooseFighter({ kind: 'scan', name: trimmed, username: trimmed });
   };
 
   return (
     <form onSubmit={scan} className="grid flex-1 content-center items-end gap-10 lg:grid-cols-[1.4fr_1fr] lg:gap-16">
       <div className="flex flex-col gap-8">
-        <Heading step={`${accent.tag} · Step 02`} top="Name your" bottom="fighter" accent="text-hp" />
+        <Heading step={`${accent.tag} · Step 02`} top="Who's" bottom="fighting?" accent="text-hp" />
         <div className="animate-rise [animation-delay:120ms]">
           <label htmlFor="fighter-name" className="font-cond text-sm font-bold uppercase tracking-[0.3em] text-paper/50">
-            Fighter name
+            Username
           </label>
           <div className={`mt-2 flex items-stretch border-b-[6px] ${accent.border}`}>
             <input
               id="fighter-name"
               autoFocus
               value={name}
-              onChange={(e) => setName(e.target.value.slice(0, NAME_MAX))}
-              placeholder="Kid Haymaker"
+              onChange={(e) => setName(e.target.value.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, NAME_MAX))}
+              placeholder="ankit"
               autoComplete="off"
               className="min-w-0 flex-1 bg-paper px-5 py-4 font-display text-3xl uppercase tracking-tight text-ink caret-dmg outline-none placeholder:text-ink/20 sm:text-5xl"
             />
@@ -165,9 +191,27 @@ function NameStep({ player }: { player: PlayerId }) {
         </div>
       </div>
 
+      {found && !rescan ? (
+        <div key={found.id} className="animate-in-r flex flex-col gap-6 border-2 border-paper/15 bg-ink p-6 sm:p-8">
+          <div className="flex gap-5">
+            {found.cardUrl && <img src={found.cardUrl} alt="" className="aspect-[2/3] w-32 shrink-0 object-cover" />}
+            <div>
+              <span className="bg-hp px-2 py-1 font-cond text-xs font-extrabold uppercase tracking-[0.25em] text-ink">Welcome back</span>
+              <p className="mt-4 font-display text-3xl uppercase leading-[0.95] tracking-tight">{found.name}</p>
+              <p className="mt-3 text-paper/65">Your fighter is on the memory card{found.glbUrl ? ', 3D model and all' : ''}.</p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-x-8 gap-y-4">
+            <ArcadeButton type="submit">Fight as {found.name}</ArcadeButton>
+            <TextButton onClick={() => setRescan(true)}>Rescan me</TextButton>
+          </div>
+        </div>
+      ) : (
       <div className="animate-in-r flex flex-col gap-6 border-2 border-paper/15 bg-ink p-6 [animation-delay:200ms] sm:p-8">
         <div>
-          <span className="bg-hp px-2 py-1 font-cond text-xs font-extrabold uppercase tracking-[0.25em] text-ink">Memory card</span>
+          <span className="bg-hp px-2 py-1 font-cond text-xs font-extrabold uppercase tracking-[0.25em] text-ink">
+            {found === undefined && username ? 'Checking memory card…' : 'Memory card'}
+          </span>
           <p className="mt-4 font-display text-3xl uppercase leading-[0.95] tracking-tight">Save fighter to memory card?</p>
           <p className="mt-3 text-paper/65">Your photos go to our AI services to build your fighter and are deleted after the event.</p>
         </div>
@@ -180,6 +224,7 @@ function NameStep({ player }: { player: PlayerId }) {
           </TextButton>
         </div>
       </div>
+      )}
     </form>
   );
 }

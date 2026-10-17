@@ -22,7 +22,7 @@ import { localPlayerId, pushPopup, updatePlayer, useGameStore } from './store';
 
 /** What the player picked on the avatar screen. */
 export type FighterChoice =
-  | { kind: 'scan'; name: string } // consented: scan + forge + save to memory card
+  | { kind: 'scan'; name: string; username?: string } // consented: scan + forge + save under their username
   | { kind: 'masked'; name: string } // declined: masked mystery fighter, no scan
   | { kind: 'existing'; fighter: ForgedFighter };
 
@@ -119,7 +119,8 @@ export class Game {
         show('Turn slowly');
         const frames = await captureScan(source.video, source, (p) => show(scanStatus(p)));
         updatePlayer(id, { status: 'forging', statusDetail: 'Forging fighter' });
-        fighter = await forgeFighter(name, frames, (f) => show(forgeStatus(f)));
+        // With a username, the server names the fighter (from the brief) and keeps it for that username.
+        fighter = await forgeFighter(choice.username ? '' : name, frames, (f) => show(forgeStatus(f)), { username: choice.username });
         if (fighter.status === 'ready') saveFighter(fighter); // they said yes to "save fighter to memory card"
         // A failed forge still fights: no glbUrl means the default model (SPEC fallback ladder).
         else console.warn('forge failed, using the default fighter:', fighter.error);
