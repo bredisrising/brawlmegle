@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import type { FightEvent, FighterState, ForgedFighter, PlayerId, PoseFrame } from '../types';
-import { FIGHTER_SPACING, PLAYER_COLORS } from '../game/constants';
+import { FIGHTER_SCALE, FIGHTER_SPACING, PLAYER_COLORS } from '../game/constants';
 import { BONES, GUARD_POSE, JOINTS, copyPose, createPose, type JointName, type Pose } from './pose';
 
 /**
@@ -32,6 +32,7 @@ export class FighterView {
     const side = id === 'p1' ? -1 : 1;
     this.root.position.x = (side * FIGHTER_SPACING) / 2;
     this.root.rotation.y = (-side * Math.PI) / 2;
+    this.root.scale.setScalar(FIGHTER_SCALE);
     this.root.visible = false;
 
     // Placeholder model: joint spheres + bone lines.

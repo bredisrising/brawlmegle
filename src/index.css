@@ -1,37 +1,84 @@
 @import "tailwindcss";
 
 @theme {
-  --font-display: "Bangers", Impact, system-ui, sans-serif;
-  --font-sans: "Rajdhani", system-ui, sans-serif;
+  --font-display: "Archivo Black", "Arial Black", system-ui, sans-serif;
+  --font-sans: "Archivo", system-ui, sans-serif;
 
-  --color-p1: #ff3b5c;
-  --color-p2: #2fb8ff;
-  --color-hp: #ffd23f;
-  --color-arena: #0b0614;
+  --color-ink: #0b0b0d;
+  --color-ink-2: #16161a;
+  --color-ink-3: #24242a;
+  --color-line: #3a3a42;
+  --color-paper: #f3f0e8;
+  --color-p1: #ff2e3f;
+  --color-p2: #1f8bff;
+  --color-hp: #ffd400;
+  --color-dmg: #e3172b;
+  --color-low: #ff6a13;
 
-  --animate-countdown: countdown 0.9s cubic-bezier(0.2, 1.6, 0.4, 1) both;
-  --animate-popup: popup 0.9s ease-out forwards;
+  --animate-countdown: countdown 0.95s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+  --animate-band: band 0.28s cubic-bezier(0.7, 0, 0.2, 1) both;
+  --animate-popup: popup 0.9s cubic-bezier(0.2, 1.2, 0.4, 1) forwards;
   --animate-flash: flash 0.25s ease-out forwards;
-  --animate-slam: slam 0.5s cubic-bezier(0.2, 1.6, 0.4, 1) both;
+  --animate-slam: slam 0.45s cubic-bezier(0.2, 1.5, 0.4, 1) both;
+  --animate-wipe-r: wipe-r 0.4s cubic-bezier(0.7, 0, 0.2, 1) both;
+  --animate-wipe-l: wipe-l 0.4s cubic-bezier(0.7, 0, 0.2, 1) both;
+  --animate-in-l: in-l 0.45s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+  --animate-in-r: in-r 0.45s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+  --animate-rise: rise 0.45s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+  --animate-stripes: stripes 0.6s linear infinite;
+  --animate-blink: blink 0.5s steps(2, jump-none) infinite alternate;
 
   @keyframes countdown {
-    0% { transform: scale(3); opacity: 0; }
-    30% { transform: scale(1); opacity: 1; }
-    80% { transform: scale(1); opacity: 1; }
-    100% { transform: scale(0.8); opacity: 0; }
+    0% { transform: scale(1.9); opacity: 0; }
+    16% { transform: scale(0.96); opacity: 1; }
+    24% { transform: scale(1); }
+    82% { transform: scale(1); opacity: 1; }
+    100% { transform: scale(1.04) translateX(6%); opacity: 0; }
+  }
+  @keyframes band {
+    from { clip-path: inset(0 50% 0 50%); }
+    to { clip-path: inset(0 0 0 0); }
   }
   @keyframes popup {
-    0% { transform: translate(-50%, -50%) scale(0.6); opacity: 0; }
-    15% { transform: translate(-50%, -80%) scale(1.15); opacity: 1; }
-    100% { transform: translate(-50%, -180%) scale(1); opacity: 0; }
+    0% { transform: translate(-50%, -50%) scale(1.8) skewX(-10deg); opacity: 0; }
+    12% { transform: translate(-50%, -70%) scale(1) skewX(-10deg); opacity: 1; }
+    70% { opacity: 1; }
+    100% { transform: translate(-50%, -150%) scale(1) skewX(-10deg); opacity: 0; }
   }
   @keyframes flash {
     from { opacity: 0.7; }
     to { opacity: 0; }
   }
   @keyframes slam {
-    0% { transform: scale(4) rotate(-8deg); opacity: 0; }
-    100% { transform: scale(1) rotate(-4deg); opacity: 1; }
+    0% { transform: scale(2.4); opacity: 0; }
+    60% { opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  @keyframes wipe-r {
+    from { clip-path: inset(0 100% 0 0); }
+    to { clip-path: inset(0 0 0 0); }
+  }
+  @keyframes wipe-l {
+    from { clip-path: inset(0 0 0 100%); }
+    to { clip-path: inset(0 0 0 0); }
+  }
+  @keyframes in-l {
+    from { transform: translateX(-48px); opacity: 0; }
+    to { transform: none; opacity: 1; }
+  }
+  @keyframes in-r {
+    from { transform: translateX(48px); opacity: 0; }
+    to { transform: none; opacity: 1; }
+  }
+  @keyframes rise {
+    from { transform: translateY(16px); opacity: 0; }
+    to { transform: none; opacity: 1; }
+  }
+  @keyframes stripes {
+    to { background-position: 28px 0; }
+  }
+  @keyframes blink {
+    to { opacity: 0.45; }
   }
 }
 
@@ -39,14 +86,65 @@ html, body, #root {
   height: 100%;
   margin: 0;
   overflow: hidden;
-  background: var(--color-arena);
-  color: white;
+  background: var(--color-ink);
+  color: var(--color-paper);
   font-family: var(--font-sans);
 }
 
-/* Chunky comic outline for big display text. */
-.text-outline {
-  -webkit-text-stroke: 2px black;
-  paint-order: stroke fill;
-  text-shadow: 4px 4px 0 rgb(0 0 0 / 0.6);
+::selection {
+  background: var(--color-hp);
+  color: var(--color-ink);
+}
+
+/* Condensed Archivo for labels, tags and small caps text. */
+@utility font-cond {
+  font-stretch: 70%;
+}
+
+/* Notched corners: top-right and bottom-left cut at --cut. */
+@utility cut {
+  clip-path: polygon(
+    0 0,
+    calc(100% - var(--cut, 14px)) 0,
+    100% var(--cut, 14px),
+    100% 100%,
+    var(--cut, 14px) 100%,
+    0 calc(100% - var(--cut, 14px))
+  );
+}
+
+/* Parallelograms. --slant is the horizontal offset of the angled edge. */
+@utility slant {
+  clip-path: polygon(var(--slant, 14px) 0, 100% 0, calc(100% - var(--slant, 14px)) 100%, 0 100%);
+}
+
+/* Fine diagonal hatching: a print-like texture for flat surfaces. */
+@utility tex-hatch {
+  background-image: repeating-linear-gradient(-45deg, rgb(255 255 255 / 0.035) 0 1px, transparent 1px 7px);
+}
+
+/* Halftone dots. */
+@utility tex-dots {
+  background-image: radial-gradient(rgb(255 255 255 / 0.07) 1px, transparent 1.4px);
+  background-size: 7px 7px;
+}
+
+/* Diagonal warning stripes for in-progress bars; pair with animate-stripes. */
+@utility tex-stripes {
+  background-image: repeating-linear-gradient(-45deg, rgb(0 0 0 / 0.22) 0 7px, transparent 7px 14px);
+  background-size: 28px 100%;
+}
+
+/* Hollow display type for oversized background numerals. */
+@utility text-hollow {
+  color: transparent;
+  -webkit-text-stroke: 2px var(--hollow, rgb(255 255 255 / 0.12));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
 }
