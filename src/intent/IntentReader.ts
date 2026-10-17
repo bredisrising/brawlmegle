@@ -211,8 +211,12 @@ export class IntentReader {
     if (s.phase === 'onset') {
       if (disp > s.peakDisp) Object.assign(s, { peakDisp: disp, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt });
       s.peakSpeed = Math.max(s.peakSpeed, outward);
+      // Confirm as soon as it has traveled far enough (don't wait for the arm to slow down: that costs most
+      // of the punch). Give up if it slows down short of that.
+      // Arms only: a leg needs its full rise to tell a knee from a kick.
+      const farEnough = def.kind === 'arm' && s.peakDisp >= cfg.strikeDist && t - s.since >= 30;
       const slowing = outward < s.peakSpeed * 0.35 && t - s.since > 40;
-      if (!slowing && t - s.since < cfg.maxWindupMs) return;
+      if (!farEnough && !slowing && t - s.since < cfg.maxWindupMs) return;
 
       // Legs must also lift (knee or foot) above where they usually sit, so stepping isn't kicking.
       const lift = Math.max(s.peak.y, s.peakMidRise);
@@ -231,8 +235,9 @@ export class IntentReader {
         limb: name,
         t,
         onsetT: s.since,
-        // Mostly elbow straightening with little visible hand travel: a straight punch at the camera.
-        style: s.peakExt > len(s.peak) ? 'straight' : classify(def.kind, dir, strikeOut, s.peakTip, s.peakMid),
+        // The elbow straightened a lot: a straight punch, even if the hand also rose (punching from a low,
+        // seated rest looks like an uppercut otherwise). Uppercuts and hooks keep the elbow bent.
+        style: s.peakExt > len(s.peak) || s.peakExt > 0.2 ? 'straight' : classify(def.kind, dir, strikeOut, s.peakTip, s.peakMid),
         height: heightOf(def.kind, s.peakTip, body),
         dir: { out: strikeOut, up: dir.y, fwd: dir.z },
         speed: clamp(0.8 + 0.5 * (speedRatio - 0.6), 0.8, 1.3),

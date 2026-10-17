@@ -79,9 +79,9 @@ export class CameraSource implements InputSource {
       const options = {
         baseOptions: { modelAssetPath: POSE_MODEL, delegate: 'GPU' as const },
         runningMode: 'VIDEO' as const,
-        // One person: MediaPipe then tracks frame to frame instead of re-running its person detector every
-        // frame (faster), and applies its own light smoothing. `?poses=2` if bystanders steal the tracking.
-        numPoses: new URLSearchParams(window.location.search).get('poses') === '2' ? 2 : 1,
+        // 2 on purpose: with numPoses 1, MediaPipe adds its own hidden smoothing (more lag on top of ours).
+        // With 2 it re-runs person detection each frame (a few ms) but stays unsmoothed. `?poses=1` to compare.
+        numPoses: new URLSearchParams(window.location.search).get('poses') === '1' ? 1 : 2,
         minPoseDetectionConfidence: 0.5,
         minPosePresenceConfidence: 0.5,
         minTrackingConfidence: 0.5,
