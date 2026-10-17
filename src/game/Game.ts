@@ -7,7 +7,7 @@ import { IntentReader } from '../intent/IntentReader';
 import { InputHub, createLocalSource, type InputSource } from '../input';
 import { MockSource } from '../input/sources/MockSource';
 import { captureScan, forgeFighter } from '../forge/forge';
-import { scanStatus, forgeStatus } from '../forge/status';
+import { forgeStatus, onChange, scanStatus } from '../forge/status';
 import { maskedFighter, saveFighter } from '../forge/roster';
 import { Peer } from '../net/Peer';
 import { Signaling } from '../net/Signaling';
@@ -115,10 +115,11 @@ export class Game {
 
       let fighter: ForgedFighter;
       if (choice.kind === 'scan') {
-        updatePlayer(id, { statusDetail: 'Turn slowly' });
-        const frames = await captureScan(source.video, source, (p) => updatePlayer(id, { statusDetail: scanStatus(p) }));
+        const show = onChange((statusDetail) => updatePlayer(id, { statusDetail }));
+        show('Turn slowly');
+        const frames = await captureScan(source.video, source, (p) => show(scanStatus(p)));
         updatePlayer(id, { status: 'forging', statusDetail: 'Forging fighter' });
-        fighter = await forgeFighter(name, frames, (f) => updatePlayer(id, { statusDetail: forgeStatus(f) }));
+        fighter = await forgeFighter(name, frames, (f) => show(forgeStatus(f)));
         if (fighter.status === 'ready') saveFighter(fighter); // they said yes to "save fighter to memory card"
         // A failed forge still fights: no glbUrl means the default model (SPEC fallback ladder).
         else console.warn('forge failed, using the default fighter:', fighter.error);

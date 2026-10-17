@@ -24,3 +24,11 @@ export function forgeStatus(f: ForgedFighter): string {
   if (f.status === 'ready') return 'Fighter ready';
   return f.step ? FORGE_STEPS[f.step] : 'Forging your fighter';
 }
+
+/** Wraps a setter so it only fires when the text changes (scan progress arrives every camera frame). */
+export function onChange(set: (text: string) => void): (text: string) => void {
+  let last: string | null = null;
+  return (text) => {
+    if (text !== last) set((last = text));
+  };
+}

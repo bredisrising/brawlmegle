@@ -1,6 +1,6 @@
 import { createLocalSource, type InputSource } from '../input';
 import { captureScan } from '../forge/forge';
-import { FORGE_STEPS, scanStatus } from '../forge/status';
+import { FORGE_STEPS, onChange, scanStatus } from '../forge/status';
 import { Peer } from '../net/Peer';
 import { Signaling } from '../net/Signaling';
 import { PROTOCOL_VERSION, type ClientMessage, type HostMessage } from '../net/protocol';
@@ -65,7 +65,8 @@ export class ClientSession {
 
       if (choice.kind === 'scan') {
         updatePlayer(PLAYER, { statusDetail: 'Turn slowly' });
-        const frames = await captureScan(this.source.video, this.source, (p) => updatePlayer(PLAYER, { statusDetail: scanStatus(p) }));
+        const show = onChange((statusDetail) => updatePlayer(PLAYER, { statusDetail }));
+        const frames = await captureScan(this.source.video, this.source, (p) => show(scanStatus(p)));
         const scan: ClientMessage = { type: 'scan', frames };
         this.setup.push(scan);
         this.send(scan);
