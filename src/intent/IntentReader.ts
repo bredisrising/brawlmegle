@@ -277,7 +277,8 @@ export class IntentReader {
     }
 
     // Jump: the hips rise above their usual height. A little bounce counts; nobody has to leave the floor.
-    if (body.root.y > cfg.jump.rise && body.root.vy > cfg.jump.speed && t - this.lastCore.jump > cfg.coreCooldownMs) {
+    // Needs visible hips: when sitting, "hips" are estimated from the shoulders and every bob would count.
+    if (body.fullBody && body.root.y > cfg.jump.rise && body.root.vy > cfg.jump.speed && t - this.lastCore.jump > cfg.coreCooldownMs) {
       this.lastCore.jump = t;
       out.push({ kind: 'jump', t, power: clamp(body.root.y / (cfg.jump.rise * 3), 0.3, 1) });
     }
