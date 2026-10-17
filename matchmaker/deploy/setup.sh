@@ -179,10 +179,10 @@ server {
     proxy_set_header Host \$host;
     proxy_read_timeout 120s;
   }
-  # Static dev tools (the intent tuner), copied to /var/www/brawlegle/ separately.
-  location /tuner/ {
-    alias /var/www/brawlegle/tuner/;
-    try_files \$uri \$uri/ /tuner/index.html;
+  # Static dev tools (intent tuner, depth test, scan test), each copied to /var/www/brawlegle/<name>/.
+  location ~ ^/(tuner|depth|scan)/ {
+    root /var/www/brawlegle;
+    try_files \$uri \$uri/ /\$1/index.html;
   }
   location / {
     proxy_pass http://127.0.0.1:3000;
