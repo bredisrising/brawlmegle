@@ -3,7 +3,7 @@ import { BRIEF_PROMPT, sheetPrompt, cardPrompt } from "./prompts.js";
 
 const API = "https://api.openai.com/v1";
 const BRIEF_MODEL = process.env.FORGE_BRIEF_MODEL ?? "gpt-5.4-mini";
-const IMAGE_MODEL = process.env.FORGE_IMAGE_MODEL ?? "gpt-image-2";
+const IMAGE_MODEL = process.env.FORGE_IMAGE_MODEL ?? "gpt-image-2.5-flare";
 const IMAGE_QUALITY = process.env.FORGE_IMAGE_QUALITY ?? "medium";
 /** "high" keeps faces closer to the photos. Only gpt-image-1 models accept it; gpt-image-2 rejects it. */
 const INPUT_FIDELITY = process.env.FORGE_INPUT_FIDELITY ?? (IMAGE_MODEL.startsWith("gpt-image-1") ? "high" : "");

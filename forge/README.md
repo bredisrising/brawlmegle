@@ -32,7 +32,7 @@ Prompts live in `prompts.js`. They're v1 and the look isn't decided, so tune the
 
 | Variable | Default |
 |---|---|
-| `FORGE_IMAGE_MODEL` | `gpt-image-2` (also available: `gpt-image-2.5-flare`, `gpt-image-2.5-sunburst`, `gpt-image-1.5`) |
+| `FORGE_IMAGE_MODEL` | `gpt-image-2.5-flare` (about 12 s at medium; also `gpt-image-2.5-sunburst`, `gpt-image-2`) |
 | `FORGE_IMAGE_QUALITY` | `medium` (`low` is cheaper and faster for testing) |
 | `FORGE_BRIEF_MODEL` | `gpt-5.4-mini` |
 | `FORGE_PORT` / `FORGE_BIND` | `8787` / `127.0.0.1` |
