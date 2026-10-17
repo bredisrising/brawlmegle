@@ -5,7 +5,7 @@ const STALE_AFTER_MS = 300;
 const ATTACK_COOLDOWN_MS = 350;
 
 type Point = { x: number; y: number; z: number };
-type HandState = { extension: number; elbowAngle: number; wrist: Point; t: number };
+type HandState = { forward: number; elbowAngle: number; wrist: Point; t: number };
 
 /** Turns camera landmarks into the lightweight attack and defense commands used by FightEngine. */
 export class IntentReader {
@@ -38,17 +38,20 @@ export class IntentReader {
     if (frame.t <= this.lastFrameTime) return { commands: [], stance: this.stance };
     this.lastFrameTime = frame.t;
 
-    const points = frame.image.map((p) => ({ x: p.x, y: p.y, z: p.z }));
+    // Canonical 2.5D controls: X is the dodge lane, Y is height, and +Z is
+    // a punch moving out toward the opponent. MediaPipe's smaller Z is closer
+    // to the camera, so the conversion flips it into positive forward motion.
+    const points = frame.world.map(toFighterSpace);
     const visible = (i: number) => frame.image[i]?.visibility >= VISIBILITY;
     const nose = points[0];
     const leftShoulder = points[11];
     const rightShoulder = points[12];
     const leftHip = points[23];
     const rightHip = points[24];
-    const shoulderWidth = distance2(leftShoulder, rightShoulder);
+    const shoulderWidth = distance(leftShoulder, rightShoulder);
     const armLength = mean([
-      distance2(points[11], points[13]) + distance2(points[13], points[15]),
-      distance2(points[12], points[14]) + distance2(points[14], points[16]),
+      distance(points[11], points[13]) + distance(points[13], points[15]),
+      distance(points[12], points[14]) + distance(points[14], points[16]),
     ]) / 2;
     const scale = Math.max(armLength, 0.001);
     const commands: Command[] = [];
@@ -58,7 +61,7 @@ export class IntentReader {
     this.headHistory = this.headHistory.filter((sample) => frame.t - sample.t <= 300);
     const oldHead = this.headHistory[0];
     const headDx = oldHead ? (nose.x - oldHead.point.x) / scale : 0;
-    const headDrop = oldHead ? (nose.y - oldHead.point.y) / scale : 0;
+    const headDrop = oldHead ? (oldHead.point.y - nose.y) / scale : 0;
     if (oldHead && frame.t - oldHead.t <= 250 && Math.abs(headDx) > 0.35) {
       commands.push({ kind: 'defend', player: this.player, t: frame.t, move: 'slip', dir: headDx < 0 ? 'L' : 'R' });
       this.headHistory = [{ point: nowHead, t: frame.t }];
@@ -68,8 +71,8 @@ export class IntentReader {
     }
 
     const bothNearFace = visible(15) && visible(16)
-      && distance2(points[15], nose) < scale * 0.55
-      && distance2(points[16], nose) < scale * 0.55;
+      && distance(points[15], nose) < scale * 0.55
+      && distance(points[16], nose) < scale * 0.55;
     if (bothNearFace) {
       this.guardSince ??= frame.t;
       if (!this.blocking && frame.t - this.guardSince >= 120) {
@@ -89,31 +92,31 @@ export class IntentReader {
       const shoulder = points[shoulderIndex];
       const elbow = points[elbowIndex];
       const wrist = points[wristIndex];
-      const extension = distance2(shoulder, wrist) / scale;
+      const forward = (wrist.z - shoulder.z) / scale;
       const angle = elbowAngle(shoulder, elbow, wrist);
       const previous = this.hands[hand];
 
-      const rise = previous ? (previous.wrist.y - wrist.y) / scale : 0;
+      const rise = previous ? (wrist.y - previous.wrist.y) / scale : 0;
       const sweep = previous ? Math.abs(wrist.x - previous.wrist.x) / scale : 0;
       const hook = angle >= 70 && angle <= 125 && sweep > 0.35;
-      const uppercut = rise > 0.3 && wrist.y < midpoint(leftShoulder, rightShoulder).y;
-      if (previous && frame.t - previous.t <= 250 && previous.extension < 0.62 && extension > 0.82
+      const uppercut = rise > 0.3 && wrist.y > midpoint(leftShoulder, rightShoulder).y;
+      if (previous && frame.t - previous.t <= 250 && previous.forward < 0.15 && forward > 0.42
         && (angle > 145 || hook || uppercut) && frame.t - this.lastAttack[hand] >= ATTACK_COOLDOWN_MS) {
         let move: AttackMove = hand === 'L' ? 'jab' : 'cross';
         if (hook) move = 'hook';
         else if (uppercut) move = 'uppercut';
 
         const dt = Math.max(0.001, (frame.t - previous.t) / 1000);
-        const wristSpeed = distance2(previous.wrist, wrist) / scale / dt;
+        const wristSpeed = distance(previous.wrist, wrist) / scale / dt;
         commands.push({
           kind: 'attack', player: this.player, t: frame.t, move, hand,
-          height: wrist.y < nose.y + scale * 0.1 ? 'head' : 'body',
+          height: wrist.y > midpoint(leftShoulder, rightShoulder).y ? 'head' : 'body',
           speed: clamp(0.8 + wristSpeed / 12, 0.8, 1.3),
-          windup: clamp(0.8 + Math.max(0, 0.62 - previous.extension), 0.8, 1.3),
+          windup: clamp(0.8 + Math.max(0, 0.15 - previous.forward), 0.8, 1.3),
         });
         this.lastAttack[hand] = frame.t;
       }
-      this.hands[hand] = { extension, elbowAngle: angle, wrist: { ...wrist }, t: frame.t };
+      this.hands[hand] = { forward, elbowAngle: angle, wrist: { ...wrist }, t: frame.t };
     }
 
     const hipCenter = midpoint(leftHip, rightHip);
@@ -137,8 +140,8 @@ function hasVisibleBody(frame: PoseFrame) {
   return [0, 11, 12, 13, 14, 15, 16, 23, 24].every((i) => (frame.image[i]?.visibility ?? 0) >= VISIBILITY);
 }
 
-function distance2(a: Point, b: Point) {
-  return Math.hypot(a.x - b.x, a.y - b.y);
+function distance(a: Point, b: Point) {
+  return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 }
 
 function midpoint(a: Point, b: Point): Point {
@@ -152,12 +155,18 @@ function mean(values: number[]) {
 function elbowAngle(shoulder: Point, elbow: Point, wrist: Point) {
   const ax = shoulder.x - elbow.x;
   const ay = shoulder.y - elbow.y;
+  const az = shoulder.z - elbow.z;
   const bx = wrist.x - elbow.x;
   const by = wrist.y - elbow.y;
-  const denom = Math.max(0.000001, Math.hypot(ax, ay) * Math.hypot(bx, by));
-  return Math.acos(clamp((ax * bx + ay * by) / denom, -1, 1)) * 180 / Math.PI;
+  const bz = wrist.z - elbow.z;
+  const denom = Math.max(0.000001, Math.hypot(ax, ay, az) * Math.hypot(bx, by, bz));
+  return Math.acos(clamp((ax * bx + ay * by + az * bz) / denom, -1, 1)) * 180 / Math.PI;
 }
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
+}
+
+function toFighterSpace(point: Point): Point {
+  return { x: point.x, y: -point.y, z: -point.z };
 }

@@ -15,11 +15,11 @@ export const MP_INDEX: Record<Exclude<JointName, 'neck'>, number> = {
 };
 
 /**
- * PoseFrame.world landmarks (meters, hip-centered, y down, -z toward camera)
- * -> display Pose (y up, +z toward opponent, 1m tall, feet on y=0).
+ * PoseFrame.world landmarks (meters, hip-centered, y down, smaller z toward camera)
+ * -> fighter-local 2.5D pose: X = lateral dodge lane, Y = height,
+ * +Z = forward toward opponent; height is normalized to 1 m and feet sit at y=0.
  * Feeds the live-pose layer (~30% blend during idle/guard, 0% during attacks).
  *
- * TODO: implement (flip y/z, scale to FIGHTER_HEIGHT, drop feet to the floor).
  */
 export function worldLandmarksToPose(world: Landmark[], out: Pose): Pose {
   const landmark = (joint: Exclude<JointName, 'neck'>) => world[MP_INDEX[joint]];

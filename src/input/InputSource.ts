@@ -17,4 +17,6 @@ export interface InputSource {
   /** Latest local frame and tracking state, used by the developer pose monitor. */
   readonly latestFrame?: PoseFrame | null;
   readonly tracking?: boolean;
+  /** Camera model selected for the local pose source. */
+  readonly modelName?: string;
 }

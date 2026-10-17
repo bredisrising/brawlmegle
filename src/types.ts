@@ -56,6 +56,7 @@ export type Stance = {
   player: PlayerId;
   guard: boolean;
   advance: number; // -1 (backing off) to 1 (stepping in)
+  /** Fighter-local X/Y: lateral dodge lane and vertical lean. Forward actions use landmark Z. */
   lean: { x: number; y: number };
   tracked: boolean; // false when the player is lost
 };
