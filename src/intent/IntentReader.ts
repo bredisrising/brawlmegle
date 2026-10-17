@@ -1,7 +1,11 @@
 import type { AttackMove, Command, PlayerId, PoseFrame, Stance } from '../types';
 import { LM, PosePreprocessor, type Body, type BodyPoint, type Vec3 } from './preprocess';
 import { DEFAULT_INTENT, type Intent, type IntentConfig, type LimbConfig, type LimbName, type StrikeStyle } from './intents';
-import type { StyleMatcher } from './StyleMatcher';
+import { StyleMatcher, type Template } from './StyleMatcher';
+import styleModel from './styleModel.json';
+
+/** The shared style model, trained from everyone's guided-test sessions (test/intent/train.test.ts). */
+const SHARED_MODEL = (styleModel as Template[]).length ? StyleMatcher.fromJSON(styleModel as Template[]) : null;
 
 /**
  * PoseFrames -> what the player meant. One per player, runs on the host.
@@ -103,7 +107,7 @@ export class IntentReader {
   private stance: Stance;
   private debug: IntentDebug | null = null;
   /** The player's calibration examples, if any. Decides straight/hook/upper instead of the built-in rules. */
-  private matcher: StyleMatcher | null = null;
+  private matcher: StyleMatcher | null = SHARED_MODEL;
 
   constructor(player: PlayerId, config: IntentConfig = DEFAULT_INTENT) {
     this.player = player;
