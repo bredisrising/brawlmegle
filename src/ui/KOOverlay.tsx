@@ -5,6 +5,7 @@ import { ACCENT } from './accent';
 import { ArcadeButton, TextButton } from './ArcadeButton';
 import { useGame } from './GameContext';
 import { Tips } from './Tips';
+import { DeleteCode } from './DeleteCode';
 
 export function KOOverlay() {
   const game = useGame();
@@ -73,6 +74,7 @@ export function KOOverlay() {
           <TextButton onClick={() => game.toTitle()}>Title</TextButton>
         </div>
         {role !== 'spectator' && <Tips width="max-w-3xl" className="bg-ink/70 px-3 py-2" />}
+        {role !== 'spectator' && <DeleteCode />}
       </div>
     </div>
   );

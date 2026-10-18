@@ -5,6 +5,7 @@ import type { ForgedFighter } from '../../types';
 import { Arrow, ArcadeButton, TextButton } from '../ArcadeButton';
 import { useGame } from '../GameContext';
 import { HighlightReel } from '../HighlightReel';
+import { DeleteWithCode } from '../DeleteFighter';
 import { TitleCam } from '../TitleCam';
 
 /**
@@ -134,12 +135,20 @@ export function TitleScreen() {
           </div>
         </div>
       </div>
-      {mode === 'leaderboard' && <Leaderboard fighters={fighters} records={records} onBack={() => setMode('pick')} />}
+      {mode === 'leaderboard' && (
+        <Leaderboard
+          fighters={fighters}
+          records={records}
+          onBack={() => setMode('pick')}
+          onDeleted={(id) => setFighters((list) => list?.filter((f) => f.id !== id) ?? null)}
+        />
+      )}
     </div>
   );
 }
 
-function Leaderboard({ fighters, records, onBack }: { fighters: ForgedFighter[] | null; records: Readonly<Record<string, FighterRecord>>; onBack: () => void }) {
+function Leaderboard(props: { fighters: ForgedFighter[] | null; records: Readonly<Record<string, FighterRecord>>; onBack: () => void; onDeleted: (id: string) => void }) {
+  const { fighters, records, onBack, onDeleted } = props;
   const ranked = (fighters ?? []).map((fighter) => ({ fighter, record: records[fighter.id] ?? emptyRecord() }))
     .sort((a, b) => compareRecords(a.record, b.record) || a.fighter.name.localeCompare(b.fighter.name));
 
@@ -177,6 +186,10 @@ function Leaderboard({ fighters, records, onBack }: { fighters: ForgedFighter[] 
             {ranked.length === 0 && <p className="grid h-full place-items-center px-5 text-center font-cond text-xl font-bold uppercase tracking-[0.2em] text-paper/55">No fighters saved yet</p>}
           </div>
         )}
+        {/* Lost the browser the scan was in? The delete code from after the forge works here, no camera needed. */}
+        <div className="shrink-0 border-t border-paper/15 px-5 py-3 sm:px-7">
+          <DeleteWithCode onDeleted={onDeleted} />
+        </div>
       </section>
     </div>
   );

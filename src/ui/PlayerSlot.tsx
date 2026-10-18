@@ -3,6 +3,7 @@ import type { PlayerId } from '../types';
 import { ACCENT } from './accent';
 import { ArcadeButton, TextButton } from './ArcadeButton';
 import { CamToggle } from './CamToggle';
+import { DeleteCode } from './DeleteCode';
 import { Tips } from './Tips';
 import { ForgePreview } from './ForgePreview';
 import { ForgeSteps } from './ForgeSteps';
@@ -59,6 +60,7 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
         <span className="bg-ink px-3 py-1 font-cond text-sm font-bold uppercase tracking-[0.25em] text-paper/60">
           {rejoining ? 'Reconnecting…' : quick && searching ? 'Looking for an opponent…' : 'Waiting for opponent'}
         </span>
+        {!remote && <DeleteCode />}
       </div>
     );
   }

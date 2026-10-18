@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { findProfile, normalizeUsername } from '../../forge/forge';
-import { listFighters } from '../../forge/roster';
+import { listFighters, ownedFighters } from '../../forge/roster';
+import { DeleteWithCode, MyFighters } from '../DeleteFighter';
 import { preloadModel } from '../../forge/models';
 import { fighterRecord, totalMatches, winRate } from '../../forge/leaderboard';
 import { localPlayerId, useGameStore } from '../../game/store';
@@ -278,6 +279,14 @@ function RosterStep({ player }: { player: PlayerId }) {
   const fighters = fromHost ? hostRoster : localRoster;
   const preview = focused ?? fighters?.[0] ?? null;
   const accent = ACCENT[player];
+  // Fighters scanned in this browser (it holds their owner keys): marked on the card, deletable below it.
+  const [owned, setOwned] = useState(() => new Set(ownedFighters().map((o) => o.id)));
+  const deleted = (id: string) => {
+    setOwned((ids) => new Set([...ids].filter((x) => x !== id)));
+    if (focused?.id === id) setFocused(null);
+    if (fromHost) useGameStore.setState((s) => ({ roster: s.roster?.filter((f) => f.id !== id) ?? null }));
+    else setLocalRoster((list) => list?.filter((f) => f.id !== id) ?? null);
+  };
 
   // A fighter they stop on is a likely pick: start downloading its model (not every tile the mouse crosses).
   useEffect(() => {
@@ -302,6 +311,12 @@ function RosterStep({ player }: { player: PlayerId }) {
         <p className="font-cond text-xl font-bold uppercase tracking-[0.15em] text-paper/60">
           {fighters ? 'No saved fighters yet. Go back and scan one.' : 'Loading fighters…'}
         </p>
+        {fighters && (
+          <div className="flex max-w-xl flex-col gap-4">
+            <MyFighters fighters={fighters} onDeleted={deleted} />
+            <DeleteWithCode onDeleted={deleted} />
+          </div>
+        )}
       </div>
     );
   }
@@ -353,6 +368,7 @@ function RosterStep({ player }: { player: PlayerId }) {
               key={f.id}
               fighter={f}
               selected={preview?.id === f.id}
+              mine={owned.has(f.id)}
               accent={accent.bg}
               delay={i * 40}
               onFocus={() => setFocused(f)}
@@ -360,13 +376,15 @@ function RosterStep({ player }: { player: PlayerId }) {
             />
           ))}
         </div>
+        <MyFighters fighters={fighters} onDeleted={deleted} />
+        <DeleteWithCode className="shrink-0 self-start" onDeleted={deleted} />
       </div>
     </div>
   );
 }
 
-function RosterTile(props: { fighter: ForgedFighter; selected: boolean; accent: string; delay: number; onFocus: () => void; onPick: () => void }) {
-  const { fighter, selected, accent, delay, onFocus, onPick } = props;
+function RosterTile(props: { fighter: ForgedFighter; selected: boolean; mine: boolean; accent: string; delay: number; onFocus: () => void; onPick: () => void }) {
+  const { fighter, selected, mine, accent, delay, onFocus, onPick } = props;
   const record = fighterRecord(fighter.id);
   return (
     <button
@@ -396,6 +414,9 @@ function RosterTile(props: { fighter: ForgedFighter; selected: boolean; accent: 
         <span className={`absolute right-0 top-0 ${accent} px-2 py-1 font-cond text-xs font-extrabold uppercase tracking-[0.2em] text-ink`}>
           Pick
         </span>
+      )}
+      {mine && (
+        <span className="absolute left-0 top-0 bg-paper px-2 py-1 font-cond text-xs font-extrabold uppercase tracking-[0.2em] text-ink">Yours</span>
       )}
     </button>
   );

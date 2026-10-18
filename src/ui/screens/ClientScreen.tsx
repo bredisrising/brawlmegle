@@ -6,6 +6,7 @@ import { MoveGuide } from '../MoveGuide';
 import { ForgePreview } from '../ForgePreview';
 import { PLAYER_COLORS } from '../../game/constants';
 import { TextButton } from '../ArcadeButton';
+import { DeleteCode } from '../DeleteCode';
 import { useGame } from '../GameContext';
 
 /** Headline once P2 is ready, following the host's phase. */
@@ -77,6 +78,7 @@ export function ClientScreen() {
           </div>
         )}
 
+        {player.status === 'ready' && <DeleteCode />}
         {player.status === 'ready' && <MoveGuide inline />}
 
         {player.status === 'waiting' && player.statusDetail && (
