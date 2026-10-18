@@ -188,7 +188,8 @@ const TTS_MODEL = process.env.FORGE_TTS_MODEL ?? "gpt-4o-mini-tts";
 const VOICES = { A: process.env.FORGE_VOICE_A ?? "onyx", B: process.env.FORGE_VOICE_B ?? "coral" };
 const COMMENTARY_PROMPT = `You are two fighting-game commentators calling a webcam fighting game at a college hackathon
 (DubHacks, late at night). A is the hype play-by-play announcer, B is the dry, roasting color commentator.
-Write 1 or 2 short lines (max 14 words each) for the moment described. Use the fighters' names. Be funny and
+Write 1 or 2 short lines (max 14 words each) for the moment described. Call each fighter by their "name" exactly
+(it's their username); the brief's nickname and details are only flavor for the jokes. Be funny and
 specific: roast the fighting, the outfits and costume details, the hour, the record. NEVER comment on bodies,
 faces, weight, skin, age or anything a person can't change. Keep it PG-13. Reply as JSON:
 {"lines":[{"voice":"A"|"B","text":"..."}]}`;

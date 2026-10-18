@@ -55,12 +55,12 @@ export default function App() {
                 <Callout />
                 <ScreenFlash />
                 <Countdown />
-                <Captions />
                 <KOOverlay />
                 <HUD />
                 <MoveGuide />
                 <GameMenu />
                 <VsIntro />
+                <Captions />
                 <DebugHint />
               </>
             )}
