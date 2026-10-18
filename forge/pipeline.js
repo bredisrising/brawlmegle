@@ -12,13 +12,15 @@ const IMAGE_QUALITY = process.env.FORGE_IMAGE_QUALITY ?? "medium";
 /** "high" keeps faces closer to the photos. Only gpt-image-1 models accept it; gpt-image-2 rejects it. */
 const INPUT_FIDELITY = process.env.FORGE_INPUT_FIDELITY ?? "high";
 
-export const models = { brief: BRIEF_MODEL, sheet: IMAGE_MODEL, card: CARD_MODEL, quality: IMAGE_QUALITY, threeD: process.env.TRIPO_API_KEY ? "tripo P1 + mixamo rig" : "off (no TRIPO_API_KEY)" };
+export const models = { brief: BRIEF_MODEL, sheet: IMAGE_MODEL, card: CARD_MODEL, quality: IMAGE_QUALITY, threeD: process.env.TRIPO_API_KEY ? `tripo ${TRIPO_MODEL}, ${FACE_LIMIT} faces + mixamo rig` : "off (no TRIPO_API_KEY)" };
 
 // --- Tripo (image -> low-poly 3D model -> Mixamo-rigged GLB) ------------------------------------------
 // https://developers.tripo3d.ai/llms.txt. Output URLs expire after 5 minutes, so models are downloaded at once.
 const TRIPO = "https://openapi.tripo3d.ai/v3";
-const TRIPO_MODEL = process.env.FORGE_TRIPO_MODEL ?? "P1-20260311"; // P series: low poly, clean topology
-const FACE_LIMIT = Number(process.env.FORGE_FACE_LIMIT ?? 6000);
+// Picked from a side-by-side on 2026-10-17: H v3.1 at 30k faces with detailed textures had the best face and hair
+// detail (40 credits, ~67 s); P1 at 6k faces with fast textures was blurry, P1 at 20k detailed cost 60 credits.
+const TRIPO_MODEL = process.env.FORGE_TRIPO_MODEL ?? "v3.1-20260211";
+const FACE_LIMIT = Number(process.env.FORGE_FACE_LIMIT ?? 30000);
 /** v1.0 is Tripo's humanoid (biped) rigger; v3.0-20260909 is newer and opt-in. */
 const RIG_MODEL = process.env.FORGE_RIG_MODEL ?? "v1.0-20240301";
 
@@ -70,12 +72,12 @@ export async function makeModel(sheet, onStep) {
     model: TRIPO_MODEL,
     face_limit: FACE_LIMIT,
     texture: true,
-    pbr: false,
+    pbr: true,
     texture_version: "v3.5-20260815",
-    texture_quality: "fast",
+    texture_quality: "detailed",
   });
   const genOut = await tripoWait(gen.task_id);
-  const model = await download(genOut.model_url ?? genOut.pbr_model_url);
+  const model = await download(genOut.pbr_model_url ?? genOut.model_url);
 
   onStep("rig");
   let rigged = null;
