@@ -46,6 +46,8 @@ export class Renderer {
 
   private readonly container: HTMLElement;
   private readonly callbacks = new Set<FrameCallback>();
+  /** Called right after a frame is drawn, while the canvas still holds it (the highlight recorder copies it then). */
+  onDrawn: (() => void) | null = null;
   private readonly resizeObserver = new ResizeObserver(() => this.resize());
   private readonly cameraHome = new THREE.Vector3(0, 0.62, 1.8);
   private readonly lookTarget = new THREE.Vector3(0, 0.5, 0);
@@ -238,6 +240,7 @@ export class Renderer {
     this.lastDrawn = now;
     this.arena.update(this.camera);
     this.composer.render(dt);
+    this.onDrawn?.();
     this.perf?.end();
   };
 
