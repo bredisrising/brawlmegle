@@ -22,17 +22,18 @@ import path from "node:path";
  */
 
 /**
- * Forged fighters. Textures by slot: longest side and WebP quality. A fighter is ~40-90% of the screen height
- * (fight camera to K.O. replay close-up), where 2048 base color is indistinguishable from Tripo's 4096.
+ * Forged fighters. Textures by slot: longest side and WebP quality. Base color keeps Tripo's full 4096: the entrance's
+ * tight close-ups showed 2048 going soft on faces and clothes. Normals at 2048, the rest at 1024 (~3-4 MB a fighter
+ * instead of ~10.5, or ~1 MB with everything at 2048/1024).
  * Positions stay float: quantizing them rescales the mesh's local units (folded into the skin), and the game's ink
  * outline is pushed out along the normals in those units, so it would come out thinner.
  * @type {GlbProfile}
  */
 export const FIGHTER = {
   textures: {
-    baseColorTexture: { size: 2048, quality: 88 },
-    normalTexture: { size: 1024, quality: 90 },
-    default: { size: 1024, quality: 85 },
+    baseColorTexture: { size: 4096, quality: 90 },
+    normalTexture: { size: 2048, quality: 90 },
+    default: { size: 1024, quality: 88 },
   },
   geometry: "meshopt",
   quantizePosition: false,

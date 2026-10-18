@@ -82,7 +82,7 @@ describe('forge server', () => {
     const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
     const f = await until(id, (x) => x.status !== 'scanning' && x.status !== 'forging');
     expect(f.status).toBe('ready');
-    expect(f.glbUrl).toMatch(/rigged\.glb$/);
+    expect(f.glbUrl).toMatch(/rigged\.glb(\?v=\d+)?$/);
     expect(f.cardUrl).toBeUndefined();
     expect(String(f.cardError)).toMatch(/safety/);
   });
@@ -116,7 +116,7 @@ describe('forge server', () => {
       expect(f.status).toBe('ready');
       expect(f.engine3d).toBe('local');
       expect(f.rigged).toBe(true);
-      expect(f.glbUrl).toMatch(/rigged\.glb$/);
+      expect(f.glbUrl).toMatch(/rigged\.glb(\?v=\d+)?$/);
       expect(await (await fetch(`${base}/api/forge/${id}/rigged.glb`)).text()).toBe('glTF-local-rigged');
       expect(await (await fetch(`${base}/api/forge/${id}/model.glb`)).text()).toBe('glTF-local');
     });
@@ -128,7 +128,7 @@ describe('forge server', () => {
       expect(f.status).toBe('ready');
       expect(f.engine3d).toBe('tripo');
       expect(String(f.localError)).toMatch(/blender/);
-      expect(f.glbUrl).toMatch(/rigged\.glb$/);
+      expect(f.glbUrl).toMatch(/rigged\.glb(\?v=\d+)?$/);
     });
 
     it('falls back to Tripo when the GPU job takes too long', async () => {
@@ -137,7 +137,7 @@ describe('forge server', () => {
       const f = await until(id, done);
       expect(f.engine3d).toBe('tripo');
       expect(String(f.localError)).toMatch(/timed out/);
-      expect(f.glbUrl).toMatch(/rigged\.glb$/);
+      expect(f.glbUrl).toMatch(/rigged\.glb(\?v=\d+)?$/);
     });
 
     it('sends the HF token to a private Space', async () => {

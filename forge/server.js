@@ -131,6 +131,15 @@ function view(fighter, base) {
   const out = { ...fighter };
   for (const key of ["sheetUrl", "cardUrl"]) if (out[key]) out[key] = preferWebp(out[key]);
   for (const key of ["sheetUrl", "cardUrl", "glbUrl", "modelUrl"]) if (out[key]?.startsWith("/")) out[key] = base + out[key];
+  // Files are cached as immutable, so a GLB re-optimized in place (optimize-all.js) gets a new URL by its write time.
+  for (const key of ["glbUrl", "modelUrl"]) {
+    if (!out[key]) continue;
+    try {
+      out[key] += `?v=${Math.round(fs.statSync(new URL(`${fighter.id}/${out[key].split("/").pop()}`, DATA)).mtimeMs)}`;
+    } catch {
+      // Not written yet (still forging), or a URL that isn't one of ours.
+    }
+  }
   return out;
 }
 
