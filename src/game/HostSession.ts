@@ -31,6 +31,10 @@ export type HostHooks = {
   watched?: () => void;
   /** P2's player left for good (said so, or never came back): free the slot for someone else. */
   left?: () => void;
+  /** "Find a fight": the server sent us to join someone who's waiting (this session is done). */
+  quickJoin?: (code: string) => void;
+  /** The client player's "Hide my camera". */
+  cam?: (hidden: boolean) => void;
 };
 type Deferred<T> = { resolve: (value: T) => void; reject: (err: Error) => void };
 
@@ -65,7 +69,11 @@ export class HostSession {
   private releaseTimer = 0;
   private readonly cleanup: (() => void)[] = [];
 
-  constructor(input: InputHub, setup: SetupRemote, private readonly hooks: HostHooks = {}) {
+  /**
+   * `quick`: "Find a fight" with this player id. The room waits for a stranger (its code isn't shown), and whoever
+   * leaves frees the slot at once: there's no rejoin, both go find someone new.
+   */
+  constructor(input: InputHub, setup: SetupRemote, private readonly hooks: HostHooks = {}, private readonly quick?: string) {
     this.input = input;
     this.setup = setup;
   }
@@ -97,6 +105,9 @@ export class HostSession {
       this.peer.onConnected(this.onConnected),
       this.peer.onClose(this.onDrop),
       this.peer.onRoom((roomCode) => useGameStore.setState({ roomCode })),
+      this.peer.onQuickJoin((code) => this.hooks.quickJoin?.(code)),
+      // A matched stranger who never connects: back to searching.
+      this.peer.onConnectFailed(() => this.quick && this.release()),
       this.peer.onWatchers((count) => {
         const more = count > this.watchers;
         this.watchers = count;
@@ -111,7 +122,7 @@ export class HostSession {
       }),
     );
     try {
-      return await this.peer.host();
+      return await this.peer.host({ quick: this.quick });
     } catch (err) {
       console.warn('[host] signaling server not reachable yet, retrying:', err);
       return '';
@@ -150,6 +161,7 @@ export class HostSession {
     // Not back in time: they've gone, not blipped. The lobby frees the slot quickly so the next person can join;
     // mid-fight it waits longer for a Wi-Fi blip to recover.
     window.clearTimeout(this.releaseTimer);
+    if (this.quick) return this.release();
     this.releaseTimer = window.setTimeout(() => this.release(), useGameStore.getState().phase === 'lobby' ? 10_000 : 45_000);
   };
 
@@ -187,6 +199,9 @@ export class HostSession {
         break;
       case 'leave':
         this.release();
+        break;
+      case 'cam':
+        this.hooks.cam?.(msg.hidden);
         break;
       case 'intents':
         this.hooks.read?.(msg.intents, msg.stance);

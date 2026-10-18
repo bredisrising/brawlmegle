@@ -23,6 +23,8 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
   const role = useGameStore((s) => s.role);
   const roomCode = useGameStore((s) => s.roomCode);
   const connection = useGameStore((s) => s.connection);
+  const quick = useGameStore((s) => s.quick);
+  const searching = useGameStore((s) => s.searching);
   const right = id === 'p2';
   const accent = ACCENT[id];
   const busy = player.status === 'scanning' || player.status === 'forging';
@@ -53,7 +55,7 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
           </span>
         </div>
         <span className="bg-ink px-3 py-1 font-cond text-sm font-bold uppercase tracking-[0.25em] text-paper/60">
-          {rejoining ? 'Reconnecting…' : 'Waiting for opponent'}
+          {rejoining ? 'Reconnecting…' : quick && searching ? 'Looking for an opponent…' : 'Waiting for opponent'}
         </span>
       </div>
     );
@@ -91,7 +93,7 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
               {accent.tag}
             </span>
             <span className="slant -mx-1 bg-paper px-4 py-1.5 font-cond text-sm font-extrabold uppercase tracking-[0.25em] text-ink [--slant:8px]">
-              {busy ? player.status : watching ? 'Getting ready' : remote ? (connection === 'open' ? 'Challenger connected' : 'Waiting for challenger') : 'Waiting'}
+              {busy ? player.status : watching ? 'Getting ready' : remote ? (connection === 'open' ? (quick ? 'Opponent found' : 'Challenger connected') : quick ? 'Online' : 'Waiting for challenger') : 'Waiting'}
             </span>
           </div>
 
@@ -132,22 +134,27 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
             </div>
           )}
 
-          {!busy && remote && !watching && (
+          {!busy && remote && !watching && quick && <QuickSearch right={right} found={connection === 'open'} searching={searching} />}
+
+          {!busy && remote && !watching && !quick && (
             <div className={`animate-rise flex flex-col gap-3 [animation-delay:160ms] ${right ? 'items-end' : 'items-start'}`}>
               <p className="font-cond text-lg font-semibold uppercase tracking-[0.15em] text-paper/70">
                 {connection === 'open' ? (
-                  'Picking a fighter on the other laptop'
+                  'Your friend is picking a fighter'
                 ) : rejoining ? (
-                  'Lost the other laptop. Rejoin with'
+                  'Lost your friend. They can rejoin with'
                 ) : (
-                  <>
-                    On the other laptop, tap <span className="text-paper">Connect</span> and enter
-                  </>
+                  <span className="text-paper">Send this code to your friend</span>
                 )}
               </p>
               <RoomCode code={roomCode} />
               {!roomCode && (
-                <p className="font-cond text-sm font-semibold uppercase tracking-[0.15em] text-paper/40">Signaling server not connected yet</p>
+                <p className="font-cond text-sm font-semibold uppercase tracking-[0.15em] text-paper/40">Getting a code…</p>
+              )}
+              {roomCode && connection !== 'open' && !rejoining && (
+                <p className="max-w-sm font-cond text-sm font-semibold uppercase tracking-[0.12em] text-paper/50">
+                  They open {location.host.replace(/^www\./, '')}, tap <span className="text-paper/80">Play a friend</span>, then <span className="text-paper/80">Join with a code</span>
+                </p>
               )}
             </div>
           )}
@@ -156,7 +163,7 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
             <p className="border-l-4 border-dmg bg-ink-2 px-3 py-2 font-semibold text-paper">{player.statusDetail}</p>
           )}
 
-          {!busy && remote && !watching && connection !== 'open' && (
+          {!busy && remote && !watching && !quick && connection !== 'open' && (
             <div className={`animate-rise flex flex-col gap-2 [animation-delay:240ms] ${right ? 'items-end' : 'items-start'}`}>
               <p className="font-cond text-sm font-semibold uppercase tracking-[0.2em] text-paper/60">No one around? Fight the CPU</p>
               <div className="flex flex-wrap gap-2">
@@ -179,6 +186,45 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/** Matchmaking: the opponent's side while we look for one (no code to share: the server pairs strangers). */
+function QuickSearch({ right, found, searching }: { right: boolean; found: boolean; searching: boolean }) {
+  const game = useGame();
+  return (
+    <div className={`animate-rise flex flex-col gap-3 [animation-delay:160ms] ${right ? 'items-end' : 'items-start'}`}>
+      {found ? (
+        <p className="font-cond text-2xl font-bold uppercase tracking-[0.12em] text-hp">Opponent found! Getting their fighter ready</p>
+      ) : searching ? (
+        <>
+          <p data-testid="searching" className="flex items-center gap-3 font-display text-3xl uppercase tracking-tight sm:text-4xl">
+            <Radar />
+            Looking for an opponent<span className="animate-blink">…</span>
+          </p>
+          <p className="max-w-sm font-cond text-base font-semibold uppercase tracking-[0.12em] text-paper/60">
+            Stay on this screen: the fight starts as soon as someone's found. You'll see each other's camera.
+          </p>
+        </>
+      ) : (
+        <p className="max-w-sm font-cond text-lg font-semibold uppercase tracking-[0.12em] text-paper/60">
+          We'll find you an opponent as soon as your fighter is ready
+        </p>
+      )}
+      <TextButton className="text-sm" onClick={() => game.toTitle()}>
+        Cancel
+      </TextButton>
+    </div>
+  );
+}
+
+/** A sweeping ring: we're looking. */
+function Radar() {
+  return (
+    <span aria-hidden className="relative grid size-8 shrink-0 place-items-center">
+      <span className="absolute inset-0 animate-ping rounded-full border-2 border-p2" />
+      <span className="size-2.5 rounded-full bg-p2" />
+    </span>
   );
 }
 

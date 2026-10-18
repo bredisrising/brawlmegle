@@ -23,7 +23,20 @@ export type ClientMirror = {
   events(events: MirrorEvent[]): void;
   /** This laptop's own read of its player, for instant feedback on its own screen. */
   local?(intents: Intent[]): void;
+  /** A connection to the host opened (each rejoin is a new Peer): for the camera share. */
+  peer?(peer: Peer): void;
+  /** The host player's "Hide my camera". */
+  cam?(hidden: boolean): void;
+  /** After a K.O.: who wants a rematch, and (matchmade) ms until both go find someone new. */
+  votes?(votes: Record<PlayerId, boolean>, nextIn: number | null): void;
+  /** Matchmade: the host is off to find a new opponent (so are we). */
+  next?(): void;
+  /** Matchmade: the link dropped (no rejoin: we go find someone new). */
+  lost?(): void;
 };
+
+/** "Find a fight" sessions: the camera comes from the Game (it stays on between opponents), and there's no rejoin. */
+export type ClientOptions = { source?: InputSource; player?: string; quick?: boolean };
 
 /**
  * The client laptop's side of P2P. Joins the host's room, tracks + scans P2 on this camera,
@@ -53,8 +66,18 @@ export class ClientSession {
   /** This laptop's latest camera frame (P2's own pose, blended into its fighter on this screen). */
   lastFrame: PoseFrame | null = null;
 
-  constructor(code: string, private readonly mirror?: ClientMirror) {
+  /** The camera was handed in (matchmaking): it outlives this session, so it's not stopped here. */
+  private readonly borrowed: boolean;
+
+  constructor(code: string, private readonly mirror?: ClientMirror, private readonly opts: ClientOptions = {}) {
     this.code = code;
+    this.source = opts.source ?? null;
+    this.borrowed = !!opts.source;
+  }
+
+  /** "Hide my camera" to the host player. */
+  sendCam(hidden: boolean) {
+    this.send({ type: 'cam', hidden });
   }
 
   /** Link quality to the host (see Peer.linkStats). */
@@ -95,7 +118,7 @@ export class ClientSession {
       }
     }
     try {
-      updatePlayer(PLAYER, { name, status: 'scanning', statusDetail: 'Starting camera' });
+      updatePlayer(PLAYER, { name, status: 'scanning', statusDetail: this.source ? 'Joining the fight' : 'Starting camera' });
       if (!this.source) {
         const source = createLocalSource();
         await source.start();
@@ -134,8 +157,10 @@ export class ClientSession {
       console.error(err);
       this.stopStream?.();
       this.stopStream = null;
-      this.source?.stop();
-      this.source = null;
+      if (!this.borrowed) {
+        this.source?.stop();
+        this.source = null;
+      }
       updatePlayer(PLAYER, { status: 'waiting', statusDetail: 'Something went wrong — try again' });
       useGameStore.setState({ screen: 'avatar' });
     }
@@ -155,7 +180,8 @@ export class ClientSession {
     window.removeEventListener('pagehide', this.onPageHide);
     this.disposed = true;
     this.stopStream?.();
-    this.source?.stop();
+    if (!this.borrowed) this.source?.stop();
+    this.clip.stop('p2');
     this.peer?.close();
     this.peer = null;
   }
@@ -165,13 +191,14 @@ export class ClientSession {
     // Listen before joining: the host may send welcome + roster the moment the channels open.
     peer.onMessage((msg) => this.onHostMessage(msg as HostMessage));
     try {
-      await peer.join(this.code);
+      await peer.join(this.code, this.opts.player);
     } catch (err) {
       peer.close();
       throw err;
     }
     peer.onClose(this.onDrop);
     peer.send({ type: 'hello', version: PROTOCOL_VERSION });
+    this.mirror?.peer?.(peer);
     window.addEventListener('pagehide', this.onPageHide);
     return peer;
   }
@@ -234,6 +261,15 @@ export class ClientSession {
         this.confirmed = true;
         this.showFighter(msg.fighter, msg.detail, msg.preview);
         break;
+      case 'cam':
+        this.mirror?.cam?.(msg.hidden);
+        break;
+      case 'votes':
+        this.mirror?.votes?.(msg.votes, msg.nextIn);
+        break;
+      case 'next':
+        this.mirror?.next?.();
+        break;
     }
   }
 
@@ -267,6 +303,8 @@ export class ClientSession {
     this.peer = null;
     this.stopStream?.();
     this.stopStream = null;
+    // Matchmade: the stranger is gone (or their Wi-Fi is): find someone new rather than wait.
+    if (this.opts.quick) return this.mirror?.lost?.();
     useGameStore.setState({ connection: 'reconnecting' });
     void this.reconnect();
   };

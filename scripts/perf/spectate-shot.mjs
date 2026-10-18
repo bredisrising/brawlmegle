@@ -5,7 +5,8 @@ const browser = await chromium.connectOverCDP(`http://127.0.0.1:${process.argv[3
 const host = await ctx.newPage();
 host.on("pageerror", (e) => console.log("host pageerror", e.message));
 await host.goto("http://localhost:5182/?input=mock&perf=1&record=0&video=0&walkout=0");
-await host.getByRole("button", { name: /Host/ }).click();
+await host.getByRole("button", { name: /Play a friend/ }).click();
+await host.getByRole("button", { name: /Create a room/ }).click();
 await host.getByRole("button", { name: /Load fighter/ }).click();
 await host.locator("[data-fighter]").first().click();
 await host.waitForFunction(() => window.__brawl?.store.getState().roomCode, null, { timeout: 30000 });

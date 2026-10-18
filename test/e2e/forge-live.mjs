@@ -1,7 +1,7 @@
 // ONE real scan + forge through the game, like a new player: costs OpenAI + Tripo credits, so it only runs with
 // E2E_PAID=1 and E2E_VIDEO (a .y4m of a person turning around). Logs each status line with its time.
 //   E2E_PAID=1 E2E_VIDEO=person.y4m node test/e2e/forge-live.mjs
-import { BASE, FORGE, PERSON_VIDEO, assert, done, http, launch, note, open, shot, sleep, test } from "./lib.mjs";
+import { BASE, FORGE, PERSON_VIDEO, assert, createRoom, done, http, launch, note, open, shot, sleep, test } from "./lib.mjs";
 
 const paid = process.env.E2E_PAID === "1";
 const skip = !paid ? "set E2E_PAID=1 (spends forge credits)" : !PERSON_VIDEO ? "set E2E_VIDEO" : undefined;
@@ -13,7 +13,7 @@ await test("new username: consent, scan, forge, 3D fighter in the arena, saved t
     const page = await open(browser, `${BASE}/?pose=lite`);
     const glb = [];
     page.on("response", (r) => r.url().endsWith(".glb") && glb.push(`${r.status()} ${r.url().split("/").pop()}`));
-    await page.getByRole("button", { name: /Host/ }).click();
+    await createRoom(page);
     await page.locator("button", { hasText: "Type your username" }).click();
     await page.locator("#fighter-name").fill(username);
     await page.getByText("Save fighter to memory card?").waitFor({ timeout: 10_000 });

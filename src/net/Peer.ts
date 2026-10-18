@@ -16,6 +16,11 @@ const POSE_BUFFER_LIMIT = 64 * 1024;
 const CONNECT_TIMEOUT_MS = 15_000;
 /** 'disconnected' can recover by itself; only treat it as a drop if it lasts this long. */
 const DISCONNECT_GRACE_MS = 3_000;
+/**
+ * The camera video to the other laptop: a light track (Game shrinks it to ~320x240 at 15 fps), capped here too, so it
+ * never competes with the pose tracker for the GPU or with the game data for the link.
+ */
+const VIDEO_ENCODING: RTCRtpEncodingParameters = { maxBitrate: 250_000, maxFramerate: 15 };
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -39,6 +44,15 @@ export class Peer {
   private readonly connectListeners = new Set<() => void>();
   private readonly roomListeners = new Set<(code: string) => void>();
   private readonly watcherListeners = new Set<(count: number) => void>();
+  private readonly quickJoinListeners = new Set<(code: string) => void>();
+  private readonly failListeners = new Set<(reason: string) => void>();
+  private readonly videoListeners = new Set<(stream: MediaStream | null) => void>();
+  /** What the host asks the server for: a room for a code, or ("Find a fight") an opponent. */
+  private hostRequest: SignalMessage = { type: 'host' };
+  /** This laptop's camera for the other one (null: nothing sent). Kept across connections. */
+  private videoTrack: MediaStreamTrack | null = null;
+  /** The other laptop's camera, while it sends one. */
+  remoteVideo: MediaStream | null = null;
   /** Remote ICE candidates that arrived before the remote description. */
   private readonly pendingIce: RTCIceCandidateInit[] = [];
   /** Chunked messages being reassembled, by chunk id. */
@@ -66,7 +80,9 @@ export class Peer {
    * get connected in the background: see onConnected / onClose. Throws if the signaling server
    * can't be reached, but keeps retrying and reports the code through onRoom when it gets one.
    */
-  async host(): Promise<string> {
+  async host(opts: { quick?: string } = {}): Promise<string> {
+    // "Find a fight": the server may answer with someone to join instead of a room (onQuickJoin; this resolves '').
+    if (opts.quick) this.hostRequest = { type: 'quick', player: opts.quick };
     this.signaling.onMessage((msg) => this.queueSignal(msg));
     // Losing signaling deletes the room on the server: open a new one (new code) so P2 can still rejoin.
     this.signaling.onDrop(() => void this.reopenRoom());
@@ -78,13 +94,13 @@ export class Peer {
     }
   }
 
-  /** Client only. Resolves once both data channels are open. */
-  async join(code: string): Promise<void> {
+  /** Client only. Resolves once both data channels are open. `player`: "Find a fight", the room is held for it. */
+  async join(code: string, player?: string): Promise<void> {
     await this.signaling.connect();
     const opened = this.whenOpen();
     this.signaling.onMessage((msg) => this.queueSignal(msg));
     this.createConnection();
-    this.signaling.send({ type: 'join', code });
+    this.signaling.send(player ? { type: 'join', code, player } : { type: 'join', code });
     try {
       await opened;
     } finally {
@@ -126,6 +142,49 @@ export class Peer {
   /** Host: send a message to every screen watching this room (through the signaling server, see Spectate). */
   cast(msg: HostMessage): void {
     this.signaling.send({ type: 'cast', data: msg });
+  }
+
+  /** Host ("Find a fight"): the server sent us to join someone who's waiting, instead of waiting ourselves. */
+  onQuickJoin(cb: (code: string) => void): () => void {
+    this.quickJoinListeners.add(cb);
+    return () => this.quickJoinListeners.delete(cb);
+  }
+
+  /** Host: a client was sent to us but never connected. */
+  onConnectFailed(cb: (reason: string) => void): () => void {
+    this.failListeners.add(cb);
+    return () => this.failListeners.delete(cb);
+  }
+
+  /**
+   * This laptop's camera for the other laptop, or null to stop sending. Every connection has a video transceiver from
+   * the start (sendrecv), so this only swaps the track: no renegotiation.
+   */
+  setVideo(track: MediaStreamTrack | null) {
+    if (track === this.videoTrack) return;
+    this.videoTrack = track;
+    void this.videoSender()?.replaceTrack(track).catch((err) => console.warn('[peer] could not swap the video track', err));
+  }
+
+  /** The video this laptop is sending right now (null: none). */
+  get sendingVideo(): MediaStreamTrack | null {
+    return this.videoSender()?.track ?? null;
+  }
+
+  /** The other laptop's camera arriving (a stream) or going (null: the connection closed). */
+  onRemoteVideo(cb: (stream: MediaStream | null) => void): () => void {
+    this.videoListeners.add(cb);
+    return () => this.videoListeners.delete(cb);
+  }
+
+  private videoSender(): RTCRtpSender | undefined {
+    return this.pc?.getTransceivers().find((t) => t.receiver.track?.kind === 'video')?.sender;
+  }
+
+  private setRemoteVideo(stream: MediaStream | null) {
+    if (stream === this.remoteVideo) return;
+    this.remoteVideo = stream;
+    for (const cb of this.videoListeners) cb(stream);
   }
 
   /** Host: how many screens watch this room, whenever it changes. */
@@ -209,7 +268,7 @@ export class Peer {
         reject: (err) => (clearTimeout(timer), reject(err)),
       };
     });
-    this.signaling.send({ type: 'host' });
+    this.signaling.send(this.hostRequest);
     try {
       return await room;
     } finally {
@@ -258,6 +317,9 @@ export class Peer {
       if (e.candidate) this.signaling.send({ type: 'signal', data: e.candidate.toJSON() });
     };
     pc.ondatachannel = (e) => this.attach(e.channel);
+    pc.ontrack = (e) => {
+      if (e.track.kind === 'video' && this.pc === pc) this.setRemoteVideo(e.streams[0] ?? new MediaStream([e.track]));
+    };
     pc.onconnectionstatechange = () => {
       clearTimeout(this.disconnectTimer);
       if (pc.connectionState === 'failed') this.drop('Connection failed');
@@ -281,8 +343,12 @@ export class Peer {
     const pc = this.createConnection(iceServers);
     this.whenOpen().catch((err: Error) => {
       console.warn('[peer] client did not connect:', err.message);
-      if (this.pc === pc) this.teardown();
+      if (this.pc !== pc) return;
+      this.teardown();
+      for (const cb of this.failListeners) cb(err.message);
     });
+    // Video first, so it's in the offer: both ways from the start, the camera swapped in later with replaceTrack.
+    pc.addTransceiver(this.videoTrack ?? 'video', { direction: 'sendrecv', sendEncodings: [VIDEO_ENCODING] });
     this.attach(pc.createDataChannel('poses', { ordered: false, maxRetransmits: 0 }));
     this.attach(pc.createDataChannel('control'));
     await pc.setLocalDescription();
@@ -301,10 +367,11 @@ export class Peer {
     }
     const pc = this.pc;
     if (pc) {
-      pc.onicecandidate = pc.ondatachannel = pc.onconnectionstatechange = null;
+      pc.onicecandidate = pc.ondatachannel = pc.onconnectionstatechange = pc.ontrack = null;
       pc.close();
     }
     this.pc = null;
+    this.setRemoteVideo(null);
     this.pendingIce.length = 0;
     this.partial.clear();
   }
@@ -321,6 +388,8 @@ export class Peer {
 
   private checkOpen() {
     if (!this.opening || this.channels.poses?.readyState !== 'open' || this.channels.control?.readyState !== 'open') return;
+    // A matched quick host isn't looking any more: if signaling drops now, it just reopens a room (no new match).
+    this.hostRequest = { type: 'host' };
     this.opening.resolve();
     for (const cb of this.connectListeners) cb();
   }
@@ -336,6 +405,11 @@ export class Peer {
         if (this.role === 'client') throw new Error(msg.message);
         if (this.roomWaiter) this.roomWaiter.reject(new Error(msg.message));
         else console.warn('[peer] signaling error:', msg.message);
+        return;
+      }
+      if (msg.type === 'quick-join') {
+        this.roomWaiter?.resolve('');
+        for (const cb of this.quickJoinListeners) cb(msg.code);
         return;
       }
       if (msg.type === 'room') {
@@ -357,8 +431,21 @@ export class Peer {
         await pc.setRemoteDescription(msg.data);
         for (const candidate of this.pendingIce.splice(0)) await pc.addIceCandidate(candidate);
         if (msg.data.type === 'offer') {
+          // The host's offer has a video transceiver: send this laptop's camera back on it.
+          const video = pc.getTransceivers().find((t) => t.receiver.track?.kind === 'video');
+          if (video) {
+            video.direction = 'sendrecv';
+            if (this.videoTrack) await video.sender.replaceTrack(this.videoTrack);
+          }
           await pc.setLocalDescription();
           this.signaling.send({ type: 'signal', data: pc.localDescription!.toJSON() });
+          if (video) {
+            const params = video.sender.getParameters();
+            if (params.encodings?.length) {
+              params.encodings = params.encodings.map((e) => ({ ...e, ...VIDEO_ENCODING }));
+              await video.sender.setParameters(params).catch((err) => console.warn('[peer] video encoding not capped', err));
+            }
+          }
         }
       } else if (pc.remoteDescription) {
         await pc.addIceCandidate(msg.data);

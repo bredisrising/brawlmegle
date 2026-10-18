@@ -26,14 +26,15 @@ import {
   type Command, type FightEvent, type FighterState, type ForgedFighter, type PlayerId, type PoseFrame, type Stance,
 } from '../types';
 import { COUNTDOWN_FROM, KO_FREEZE, MAX_HP, PLAYER_COLORS, PLAYER_NAMES, ROUND_SECONDS, SIM_DT } from './constants';
-import { ClientSession } from './ClientSession';
+import { ClientSession, type ClientMirror, type ClientOptions } from './ClientSession';
+import { CameraShare } from './CameraShare';
 import { SpectatorSession } from './SpectatorSession';
 import type { HostMessage, MatchPlayer, MirrorEvent, MirrorFrame } from '../net/protocol';
 import { HostSession } from './HostSession';
 import { MatchRecorder, recordingEnabled } from './MatchRecorder';
 import { HighlightRecorder } from './HighlightRecorder';
 import { Commentary, TEMPLATES, fill, spoken, type Line } from './Commentary';
-import { localPlayerId, pushPopup, updatePlayer, useGameStore } from './store';
+import { NO_VOTES, localPlayerId, pushPopup, updatePlayer, useGameStore } from './store';
 
 /** Round length: shorter at a demo booth (`?demo=1`). */
 const ROUND = config.demo ? 45 : ROUND_SECONDS;
@@ -62,6 +63,14 @@ type ReplayFrame = MirrorFrame & { live: Record<PlayerId, PoseFrame | null>; eve
 /** Roughly head height between the two fighters. */
 /** How long a fresh forge shows itself off in the forging card (textured, then the rig flashes) before it's ready. */
 const REVEAL_MS = 2200;
+/** Matchmade fights: after the K.O. screen comes back from the replay, this long to vote for a rematch. */
+const NEXT_MS = 4000;
+/** ...measured from here when there's no replay to wait for (a time-out), or the replay never came. */
+const NEXT_AFTER_TIME_MS = 2000;
+const NEXT_REPLAY_BACKSTOP_MS = 12_000;
+
+/** One id per tab for the matchmaker (it prefers a new opponent over the last one). */
+const playerId = () => (crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 const ARENA_CENTER = new THREE.Vector3(0, 0.5, 0);
@@ -158,6 +167,23 @@ export class Game {
   private phaseTimer = 0;
   /** Aborted on dispose: stops in-flight scans and forge polling (HMR / unmount), so no camera is left running. */
   private readonly lifetime = new AbortController();
+  /** The two players see each other's camera; "Hide my camera" stops both ways. */
+  private readonly cam = new CameraShare();
+  /** Test hook: a camera stream to share when the local input has none (the mock input in dev and tests). */
+  cameraOverride: MediaStream | null = null;
+  /**
+   * "Find a fight": this tab's matchmaker id, the fighter picked once and kept for every opponent (as host it's set up
+   * as P1; as client it's sent as a pick), and the camera, kept running as the role flips between host and client.
+   * `gen` is bumped per search / join / rehost, so a stale one gives way.
+   */
+  private quick: { player: string; choice: FighterChoice | null; camera: InputSource | null; gen: number } | null = null;
+  /** Host: rematch votes after a K.O. (both must; a CPU or test player always does), and the auto-next deadline. */
+  private votes: Record<PlayerId, boolean> = NO_VOTES;
+  private nextAt: number | null = null;
+  private koAt = 0;
+  private replayEndedAt: number | null = null;
+  /** Slots driven by addTestPlayer (dev): nobody there to click Rematch. */
+  private readonly testSlots = new Set<PlayerId>();
 
   constructor(container: HTMLElement) {
     this.renderer = new Renderer(container);
@@ -183,7 +209,13 @@ export class Game {
     window.addEventListener('keydown', this.onMuteKey);
     // Countdown beeps, then the "go" (both laptops: the client's store follows the host's countdown).
     this.unsubscribe = useGameStore.subscribe((s, prev) => {
+      if (prev.phase === 'ko' && s.phase !== 'ko' && (s.votes !== NO_VOTES || s.nextAt !== null)) {
+        this.votes = NO_VOTES;
+        this.nextAt = null;
+        useGameStore.setState({ votes: NO_VOTES, nextAt: null });
+      }
       if (s.phase === 'ko' && prev.phase !== 'ko') {
+        if (!this.mirroring) this.startVotes(s.ending);
         void this.recorder.stop({ winner: s.winner, ending: s.ending });
         this.announceFinish(s.winner, s.ending);
         if (!this.mirroring) {
@@ -241,21 +273,173 @@ export class Game {
    * laptop connects, HostSession streams its poses into p2 and sets p2 up from what it sends.
    */
   async host() {
+    const session = this.openHost();
+    const code = await session.open();
+    useGameStore.setState({ role: 'host', roomCode: code || null, screen: 'avatar' });
+  }
+
+  /** A fresh HostSession (closing any old one). `quick`: "Find a fight", waiting for a stranger. */
+  private openHost(quick?: string) {
     this.hostSession?.dispose();
-    const session = new HostSession(this.input, (choice, source, scan) => this.setupPlayer('p2', choice, source, scan), {
-      rematch: () => this.rematch(),
-      connected: () => this.sendMatch(),
+    const mine = () => this.hostSession === session;
+    const session: HostSession = new HostSession(this.input, (choice, source, scan) => this.setupPlayer('p2', choice, source, scan), {
+      rematch: () => this.vote('p2'),
+      connected: () => {
+        if (!mine()) return;
+        if (this.quick) useGameStore.setState({ searching: false });
+        this.cam.connected();
+        this.sendMatch();
+        if (useGameStore.getState().phase === 'ko') this.publishVotes();
+      },
       skip: () => this.skipForgeWait('p2'),
       watched: () => this.sendMatch(),
-      left: () => this.releaseRemote(),
+      left: () => {
+        if (!mine()) return;
+        this.releaseRemote();
+        this.cam.connected(); // nobody to hide from: back to defaults
+        // Matchmade: the stranger's gone, find the next one.
+        if (this.quick) setTimeout(() => mine() && void this.search(), 0);
+      },
+      quickJoin: (code) => mine() && void this.joinQuick(code),
+      cam: (hidden) => mine() && this.cam.remoteHidden(hidden),
       read: (intents, stance) => {
         this.remoteIntents.push(...intents);
         this.remoteStance = { stance: { ...stance, player: 'p2' }, at: performance.now() };
       },
-    });
+    }, quick);
     this.hostSession = session;
-    const code = await session.open();
-    useGameStore.setState({ role: 'host', roomCode: code || null, screen: 'avatar' });
+    this.cam.attach(session.peer, (hidden) => session.send({ type: 'cam', hidden }));
+    return session;
+  }
+
+  /**
+   * Title screen: "Find a fight". Pick or scan a fighter (once: it's kept for every opponent), then the matchmaker
+   * pairs this laptop with a stranger: one waits as the host, the other joins it like Connect does.
+   */
+  findFight() {
+    this.quick = { player: playerId(), choice: null, camera: null, gen: 0 };
+    useGameStore.setState({ quick: true, role: 'host', roomCode: null, screen: 'avatar' });
+  }
+
+  /** Matchmaking: look for an opponent (P1 is set up on this laptop). Waits as a host unless someone's waiting. */
+  private async search() {
+    const q = this.quick;
+    if (!q || this.client) return;
+    const gen = ++q.gen;
+    useGameStore.setState({ searching: true, connection: null, roomCode: null });
+    const session = this.openHost(q.player);
+    await session.open();
+    if (gen !== q.gen) return;
+  }
+
+  /** Matchmaking: the server sent us to a waiting player. This laptop becomes the client; fighter and camera come along. */
+  private async joinQuick(code: string) {
+    const q = this.quick;
+    if (!q?.choice) return;
+    const gen = ++q.gen;
+    const camera = q.camera ?? this.input.source('p1') ?? null;
+    this.hostSession?.dispose();
+    this.hostSession = null;
+    this.cam.attach(null, null);
+    this.input.unassign('p1'); // the camera keeps running: the ClientSession streams it now
+    this.clearMatch();
+    useGameStore.setState({ role: 'client', roomCode: code, searching: false, screen: 'game' });
+    const client = this.newClient(code, { source: camera ?? undefined, player: q.player, quick: true });
+    this.client = client;
+    try {
+      await client.connect();
+    } catch (err) {
+      console.warn('[quick] could not join the waiting player, searching again', err);
+      if (gen === q.gen) void this.rehost();
+      return;
+    }
+    if (gen !== q.gen || this.client !== client) return client.dispose();
+    await client.choose(q.choice);
+  }
+
+  /** Matchmaking, on the client laptop: the opponent left (or we did). Back to hosting P1 here, then search again. */
+  private async rehost() {
+    const q = this.quick;
+    if (!q?.choice) return;
+    ++q.gen;
+    const client = this.client;
+    this.client = null;
+    client?.dispose();
+    this.cam.attach(null, null);
+    this.clearMatch();
+    useGameStore.setState({ role: 'host', roomCode: null, connection: null, searching: true, screen: 'game' });
+    q.camera ??= createLocalSource();
+    // setupPlayer starts the search once P1 is ready again.
+    await this.setupPlayer('p1', q.choice, q.camera);
+  }
+
+  /**
+   * Matchmaking: "Next" on the K.O. screen (or nobody voted in time). Both go find someone new: the host tells the
+   * client, which searches again on its own.
+   */
+  nextOpponent() {
+    if (!this.quick) return;
+    if (this.client) {
+      this.client.leave();
+      void this.rehost();
+      return;
+    }
+    const session = this.hostSession;
+    session?.send({ type: 'next' });
+    // A moment for 'next' to go out before the connection closes.
+    setTimeout(() => {
+      if (this.hostSession !== session || this.client) return;
+      this.releaseRemote();
+      void this.search();
+    }, 150);
+  }
+
+  /** Matchmaking: forget the last match (fight, both slots, the mirror) before the next one. P1's camera stays on. */
+  private clearMatch() {
+    this.stopReplay();
+    this.fight.reset();
+    this.fightTicks = 0;
+    for (const id of PLAYER_IDS) {
+      ++this.setupGen[id];
+      delete this.cpu[id];
+      delete this.skipForge[id];
+      delete this.fighters[id];
+      delete this.mirrorShown[id];
+      this.views[id].reset();
+      this.views[id].setVisible(false);
+      updatePlayer(id, { name: PLAYER_NAMES[id], status: 'waiting', statusDetail: '', portraitUrl: null, forge: null, hp: MAX_HP, meter: 0 });
+    }
+    this.input.unassign('p2');
+    this.mirrored = null;
+    this.remoteIntents = [];
+    this.remoteStance = null;
+    this.votes = NO_VOTES;
+    this.nextAt = null;
+    useGameStore.setState({
+      phase: 'lobby', countdown: null, winner: null, ending: null, timeLeft: null, combo: null, callout: null, replay: false,
+      link: null, votes: NO_VOTES, nextAt: null, lastMove: null,
+    });
+  }
+
+  /** The client side of a link to a host (Connect or matchmaking): it mirrors the host's fight here. */
+  private newClient(code: string, opts: ClientOptions = {}) {
+    const mine = () => this.client === client;
+    const mirror: ClientMirror = {
+      match: (players) => mine() && this.mirrorMatch(players),
+      frame: (frame) => mine() && (this.mirrored = frame),
+      events: (events) => mine() && this.mirrorEvents(events),
+      local: (intents) => mine() && this.localRead(intents),
+      peer: (peer) => {
+        this.cam.attach(peer, (hidden) => client.sendCam(hidden));
+        this.cam.connected();
+      },
+      cam: (hidden) => mine() && this.cam.remoteHidden(hidden),
+      votes: (votes, nextIn) => mine() && useGameStore.setState({ votes, nextAt: nextIn === null ? null : performance.now() + nextIn }),
+      next: () => mine() && void this.rehost(),
+      lost: () => mine() && void this.rehost(),
+    };
+    const client: ClientSession = new ClientSession(code, mirror, opts);
+    return client;
   }
 
   /** Title screen: "Practice". Hosts as usual (a friend can still join), and P2 is a CPU once P1 is ready. */
@@ -269,14 +453,14 @@ export class Game {
   /** Title screen: "Connect" with a room code. */
   async join(code: string) {
     if (config.signalUrl) {
-      const client = new ClientSession(code, {
-        match: (players) => this.mirrorMatch(players),
-        frame: (frame) => (this.mirrored = frame),
-        events: (events) => this.mirrorEvents(events),
-        local: (intents) => this.localRead(intents),
-      });
-      await client.connect();
+      const client = this.newClient(code);
       this.client = client;
+      try {
+        await client.connect();
+      } catch (err) {
+        this.client = null;
+        throw err;
+      }
     } else {
       console.warn('VITE_SIGNAL_URL not set: the client flow runs offline on this laptop');
     }
@@ -327,6 +511,7 @@ export class Game {
 
   /** Dev only: fill a slot with a house fighter driven by a MockSource. */
   addTestPlayer(id: PlayerId) {
+    this.testSlots.add(id);
     return this.setupPlayer(id, { kind: 'existing', fighter: { id: 'test', name: PLAYER_NAMES[id], status: 'ready' } }, new MockSource());
   }
 
@@ -431,6 +616,7 @@ export class Game {
   private async arriveLate(id: PlayerId, gen: number, fighter: ForgedFighter) {
     if (fighter.status !== 'ready') return console.warn('forge failed, keeping the stand-in:', fighter.error);
     saveFighter(fighter);
+    if (this.quick && id === 'p1') this.keepFighter({ kind: 'existing', fighter }, fighter);
     if (gen !== this.setupGen[id] || useGameStore.getState().players[id].status !== 'ready') return;
     await this.loadFighter(id, fighter);
     this.spawn(id);
@@ -456,6 +642,7 @@ export class Game {
   private async setupPlayer(id: PlayerId, choice: FighterChoice, source: InputSource = createLocalSource(), scan?: Promise<ScanFrames>) {
     const name = choice.kind === 'existing' ? choice.fighter.name : choice.name;
     delete this.cpu[id]; // a real player takes the slot
+    if (choice.kind !== 'existing' || choice.fighter.id !== 'test') this.testSlots.delete(id);
     const gen = ++this.setupGen[id];
     // A saved fighter's model downloads while the camera starts, instead of after; in practice, the CPU's too.
     if (choice.kind === 'existing') preloadModel(choice.fighter.glbUrl, 'high')?.catch(() => {});
@@ -522,11 +709,17 @@ export class Game {
       updatePlayer(id, { status: 'ready', statusDetail: '', portraitUrl: fighter.cardUrl ?? null, forge: null });
       this.fighters[id] = fighter;
       this.sendMatch();
+      // Matchmaking: this fighter is the player's for every opponent from now on; go find the first (or next) one.
+      if (this.quick && id === 'p1' && !this.client) {
+        this.keepFighter(choice, fighter);
+        this.quick.camera = source;
+        if (!this.hostSession && useGameStore.getState().players.p2.status === 'waiting') return void this.search();
+      }
       // Practice: bring in the CPU as soon as the player is set (unless someone's already in P2).
       const p2 = useGameStore.getState().players.p2;
       if (this.practiceLevel && id === 'p1' && p2.status === 'waiting') return void this.addCpuPlayer('p2', this.practiceLevel);
       // Hosting with nobody in yet: the lobby offers "Fight the CPU", so have its fighter ready.
-      if (id === 'p1' && p2.status === 'waiting') this.prepareCpu(name);
+      if (id === 'p1' && p2.status === 'waiting' && !this.quick) this.prepareCpu(name);
 
       const { players } = useGameStore.getState();
       if (PLAYER_IDS.every((p) => players[p].status === 'ready')) this.startCountdown();
@@ -554,10 +747,71 @@ export class Game {
     }
   }
 
-  rematch() {
-    // On the client laptop the host runs the fight: ask it.
-    if (this.client) return this.client.requestRematch();
-    if (this.spectator) return; // a watching screen doesn't run the match
+  /**
+   * Matchmaking: what to bring to the next opponent. A forged or saved fighter goes by its id (a pick, when this laptop
+   * is the client next time); a masked one stays masked; a stand-in (its forge still running) goes masked by name.
+   */
+  private keepFighter(choice: FighterChoice, fighter: ForgedFighter) {
+    if (!this.quick) return;
+    const masked = choice.kind === 'masked' || fighter.id.startsWith('stand-in-') || fighter.status !== 'ready';
+    this.quick.choice = masked ? { kind: 'masked', name: fighter.name } : { kind: 'existing', fighter: { ...fighter, brief: undefined } };
+  }
+
+  /** K.O. screen "Rematch": a vote. The rematch starts once both players have voted (the host counts them). */
+  voteRematch() {
+    if (this.spectator) return;
+    if (this.client) {
+      this.client.requestRematch();
+      useGameStore.setState((s) => ({ votes: { ...s.votes, p2: true } }));
+      return;
+    }
+    this.vote(localPlayerId(useGameStore.getState().role));
+  }
+
+  /** Host: a K.O. or time-out. Fresh votes (a CPU or test player votes yes at once); matchmade fights get a countdown. */
+  private startVotes(ending: 'ko' | 'time' | null) {
+    this.votes = { p1: !!this.cpu.p1 || this.testSlots.has('p1'), p2: !!this.cpu.p2 || this.testSlots.has('p2') };
+    this.nextAt = null;
+    this.koAt = performance.now();
+    this.replayEndedAt = ending === 'time' ? this.koAt + NEXT_AFTER_TIME_MS : null;
+    this.publishVotes();
+  }
+
+  private vote(id: PlayerId) {
+    if (this.mirroring || useGameStore.getState().phase !== 'ko' || this.votes[id]) return;
+    this.votes = { ...this.votes, [id]: true };
+    if (this.votes.p1 && this.votes.p2) return this.rematch();
+    this.publishVotes();
+  }
+
+  /** Host: the votes and the countdown, here and on the client laptop. */
+  private publishVotes() {
+    useGameStore.setState({ votes: this.votes, nextAt: this.nextAt });
+    const nextIn = this.nextAt === null ? null : Math.max(0, Math.round(this.nextAt - performance.now()));
+    this.hostSession?.send({ type: 'votes', votes: this.votes, nextIn });
+  }
+
+  /** Host, matchmade fight on the K.O. screen: start the "next opponent" countdown, and go when it runs out. */
+  private checkNext() {
+    const { phase, quick } = useGameStore.getState();
+    if (!quick || !this.quick || this.mirroring || phase !== 'ko' || !this.hostSession?.connected || this.cpu.p2) return;
+    const now = performance.now();
+    if (this.nextAt === null) {
+      const shown = this.replayEndedAt ?? this.koAt + NEXT_REPLAY_BACKSTOP_MS;
+      if (now < shown) return;
+      this.nextAt = now + NEXT_MS;
+      this.publishVotes();
+    } else if (now >= this.nextAt) {
+      this.nextAt = null;
+      this.nextOpponent();
+    }
+  }
+
+  /** Both voted: same two fighters again. */
+  private rematch() {
+    if (this.mirroring) return;
+    this.votes = NO_VOTES;
+    this.nextAt = null;
     this.stopReplay();
     this.fight.reset();
     this.fightTicks = 0;
@@ -581,6 +835,8 @@ export class Game {
     this.hostSession?.dispose();
     this.client?.dispose();
     this.spectator?.dispose();
+    this.cam.dispose();
+    this.quick?.camera?.stop();
     for (const id of PLAYER_IDS) {
       this.input.source(id)?.stop(); // release the camera, not just the hub's subscription
       this.input.unassign(id);
@@ -600,6 +856,9 @@ export class Game {
 
   private update = (dt: number, frozen: boolean) => {
     this.effects.update(dt);
+    const video = this.localInputSource()?.video?.srcObject;
+    this.cam.camera(video instanceof MediaStream ? video : this.cameraOverride);
+    this.checkNext();
     if (this.replayIn > 0 && !frozen && (this.replayIn -= dt) <= 0) {
       this.replayIn = -1;
       this.startReplay();
@@ -993,6 +1252,7 @@ export class Game {
     this.renderer.cinematic(null);
     this.fireballs.sync([]);
     useGameStore.setState({ replay: false });
+    if (useGameStore.getState().phase === 'ko') this.replayEndedAt ??= performance.now();
   }
 
   /** Hits in a row (within ~1 s of each other, unanswered) make a combo; the round's first hit gets a callout. */

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useGameStore } from '../game/store';
+import { setCamHidden, useGameStore } from '../game/store';
 import { TextButton } from './ArcadeButton';
 import { useGame } from './GameContext';
 import { recordingEnabled, setRecordingEnabled, setVideoEnabled, videoEnabled } from '../game/MatchRecorder';
@@ -23,6 +23,8 @@ export function GameMenu() {
   const [recording, setRecording] = useState(recordingEnabled);
   const [video, setVideo] = useState(videoEnabled);
   const rec = useGameStore((s) => s.recordingVideo);
+  const quick = useGameStore((s) => s.quick);
+  const camHidden = useGameStore((s) => s.camHidden);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen((o) => !o);
@@ -38,7 +40,16 @@ export function GameMenu() {
     <div className="pointer-events-auto absolute bottom-14 right-4 flex flex-col items-end gap-2">
       {open && (
         <div className="animate-rise flex flex-col items-end gap-3 bg-ink/90 px-4 py-3">
-          {role === 'host' && <TextButton onClick={() => (setOpen(false), game.changeFighter())}>Change fighter</TextButton>}
+          {quick && role !== 'spectator' && <TextButton onClick={() => (setOpen(false), game.nextOpponent())}>Next opponent</TextButton>}
+          {role === 'host' && !quick && <TextButton onClick={() => (setOpen(false), game.changeFighter())}>Change fighter</TextButton>}
+          {role !== 'spectator' && (
+            <TextButton
+              title="Hidden: your opponent doesn't see your camera, and you don't see theirs"
+              onClick={() => setCamHidden(!camHidden)}
+            >
+              Hide my camera: {camHidden ? 'on' : 'off'}
+            </TextButton>
+          )}
           {role === 'host' && (
             <TextButton
               title="Saves both players' movement points (no video) after each round, to improve move detection"

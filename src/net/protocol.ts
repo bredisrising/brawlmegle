@@ -9,7 +9,10 @@ export type SignalMessage =
   | { type: 'hello'; id: string } // server -> either, on connect
   | { type: 'host' } // host -> server: open a room
   | { type: 'room'; code: string; iceServers: RTCIceServer[] } // server -> host: room code to show on screen
-  | { type: 'join'; code: string } // client -> server
+  | { type: 'join'; code: string; player?: string } // client -> server (player: "Find a fight", the room is held for it)
+  // "Find a fight": wait as a host (the server answers 'room'), or join the waiting host it names.
+  | { type: 'quick'; player: string } // player -> server
+  | { type: 'quick-join'; code: string } // server -> player: join this room by code
   | { type: 'joined'; code: string; iceServers: RTCIceServer[] } // server -> client, before the offer
   | { type: 'peer-joined'; iceServers: RTCIceServer[] } // server -> host: create the connection and send the offer
   | { type: 'peer-left' } // server -> host: client left signaling (also sent once P2P is up), room is open again
@@ -31,6 +34,7 @@ export type ClientMessage =
   | { type: 'rematch' } // from the K.O. screen on the client laptop
   | { type: 'skip' } // "fight now": don't wait for P2's forge, use a stand-in until it's done
   | { type: 'leave' } // the player went back to the title (or closed the tab): free P2's slot for someone else
+  | { type: 'cam'; hidden: boolean } // "Hide my camera" (either way: if either player hides, neither sees the other)
   // The client reads its own player's moves from its own full-rate camera (the network only carries the result):
   | { type: 'intents'; intents: Intent[]; stance: Stance } // reliable: every frame that produced intents
   | { type: 'stance'; stance: Stance }; // lossy: the continuous stance (guard, lean, tracked) on the other frames
@@ -44,7 +48,11 @@ export type HostMessage =
   | { type: 'match'; players: Record<PlayerId, MatchPlayer> } // who's fighting as what; on connect and whenever it changes
   | { type: 'frame'; frame: MirrorFrame } // every sim tick while a fight is on ("poses" channel: lossy)
   | { type: 'events'; events: MirrorEvent[] } // hits, blocks, wind-ups, moves read: the moments that need effects
-  | { type: 'fighter'; fighter: ForgedFighter; detail?: string; preview?: ForgePreview }; // P2's forge progress (detail: the host's status text, preview: the live forge preview); sent with status 'ready' once P2's fighter is set (scan, masked or pick)
+  | { type: 'fighter'; fighter: ForgedFighter; detail?: string; preview?: ForgePreview } // P2's forge progress (detail: the host's status text, preview: the live forge preview); sent with status 'ready' once P2's fighter is set (scan, masked or pick)
+  | { type: 'cam'; hidden: boolean } // the host player's "Hide my camera"
+  // After a K.O.: who wants a rematch (both must), and in a matchmade fight the ms until both go find someone new.
+  | { type: 'votes'; votes: Record<PlayerId, boolean>; nextIn: number | null }
+  | { type: 'next' }; // matchmade fight: we're both off to find a new opponent (the client searches again)
 
 export type MatchPlayer = { name: string; fighter: ForgedFighter | null; hp: number };
 

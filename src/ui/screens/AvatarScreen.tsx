@@ -23,6 +23,7 @@ export function AvatarScreen() {
   const [step, setStep] = useState<Step>('choose');
   const role = useGameStore((s) => s.role);
   const roomCode = useGameStore((s) => s.roomCode);
+  const quick = useGameStore((s) => s.quick);
   const player = localPlayerId(role);
   const error = useGameStore((s) => (s.players[player].status === 'waiting' ? s.players[player].statusDetail : ''));
   const accent = ACCENT[player];
@@ -59,6 +60,12 @@ export function AvatarScreen() {
             </TextButton>
           )}
         </div>
+        {quick ? (
+          <div className="flex items-stretch font-cond text-sm font-bold uppercase tracking-[0.2em]">
+            <span className="slant bg-ink-3 px-4 py-2 text-paper/70 [--slant:8px]">Pick your fighter, then we find you an opponent</span>
+            <span className="slant -ml-1 bg-p1 px-4 py-2 font-display tracking-normal text-ink [--slant:8px]">Online</span>
+          </div>
+        ) : (
         <div className="flex items-stretch font-cond text-sm font-bold uppercase tracking-[0.2em]">
           <span className="slant bg-ink-3 px-4 py-2 text-paper/70 [--slant:8px]">{role === 'client' ? 'Connected' : 'Hosting'}</span>
           <span className="slant -ml-1 bg-paper px-4 py-2 text-ink [--slant:8px]">
@@ -66,6 +73,7 @@ export function AvatarScreen() {
           </span>
           <span className={`slant -ml-1 ${accent.bg} px-4 py-2 font-display tracking-normal text-ink [--slant:8px]`}>{accent.tag}</span>
         </div>
+        )}
       </header>
 
       {error && (

@@ -20,6 +20,7 @@ import { Callout, ComboCounter } from './ui/ComboCounter';
 import { Walkout } from './ui/Walkout';
 import { GameMenu } from './ui/GameMenu';
 import { Captions } from './ui/Captions';
+import { OpponentCam } from './ui/OpponentCam';
 
 export default function App() {
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -69,6 +70,7 @@ export default function App() {
           </div>
           <PoseDebugOverlay />
           <CameraPip />
+          <OpponentCam />
         </GameContext.Provider>
       )}
     </div>

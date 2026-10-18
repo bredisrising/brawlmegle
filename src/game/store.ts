@@ -81,7 +81,45 @@ export interface GameState {
   lastMove: { text: string; at: number } | null;
   /** This laptop's player's body scan while it runs (ui/ScanOverlay.tsx): the guide's state and the photos so far. */
   scan: { view: ScanView; thumbs: Partial<Record<Bucket, string>> } | null;
+  /** "Find a fight" (matchmaking): this laptop plays strangers, and keeps its fighter from one to the next. */
+  quick: boolean;
+  /** Matchmaking: looking for an opponent right now. */
+  searching: boolean;
+  /** After a K.O.: who wants a rematch (it happens when both do; a CPU always does). */
+  votes: Record<PlayerId, boolean>;
+  /** Matchmade fights: when (performance.now() ms) both go find a new opponent unless both voted; null = no countdown. */
+  nextAt: number | null;
+  /** "Hide my camera" on this laptop (saved in this browser). If either player hides, neither sees the other. */
+  camHidden: boolean;
+  /** The opponent hid their camera. */
+  opponentCamHidden: boolean;
+  /** The opponent's camera, while it's shown here. */
+  opponentVideo: MediaStream | null;
+  /** This laptop's camera is going to the opponent right now. */
+  camSending: boolean;
 }
+
+const CAM_KEY = 'brawlmegle.hideCam';
+
+function savedCamHidden() {
+  try {
+    return localStorage.getItem(CAM_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+/** "Hide my camera": takes effect at once (and tells the opponent), remembered in this browser. */
+export function setCamHidden(hidden: boolean) {
+  try {
+    localStorage.setItem(CAM_KEY, hidden ? '1' : '0');
+  } catch {
+    // Storage blocked: the toggle lasts for this page only.
+  }
+  useGameStore.setState({ camHidden: hidden });
+}
+
+export const NO_VOTES: Record<PlayerId, boolean> = { p1: false, p2: false };
 
 const initialPlayer = (id: PlayerId): PlayerState => ({
   name: PLAYER_NAMES[id],
@@ -118,6 +156,14 @@ export const useGameStore = create<GameState>(() => ({
   caption: null,
   lastMove: null,
   scan: null,
+  quick: false,
+  searching: false,
+  votes: NO_VOTES,
+  nextAt: null,
+  camHidden: savedCamHidden(),
+  opponentCamHidden: false,
+  opponentVideo: null,
+  camSending: false,
 }));
 
 /** The player slot tracked on this laptop: host = p1, client = p2. */

@@ -163,3 +163,15 @@ export const waitArena = (page, timeout = 90_000) =>
 
 /** "Couldn't set up your fighter: <reason>" from the fighter-select screen, or "". */
 export const setupError = (t) => (t.match(/couldn't set up your fighter[^\n]*/i) ?? [""])[0];
+
+/** Title screen: Play a friend -> Create a room (what used to be Host). */
+export async function createRoom(page) {
+  await page.getByRole("button", { name: /Play a friend/ }).click();
+  await page.getByRole("button", { name: /Create a room/ }).click();
+}
+
+/** Title screen: Play a friend -> Join with a code (what used to be Connect). */
+export async function openJoin(page) {
+  await page.getByRole("button", { name: /Play a friend/ }).click();
+  await page.getByRole("button", { name: /Join with a code/ }).click();
+}

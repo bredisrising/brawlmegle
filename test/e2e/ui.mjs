@@ -1,7 +1,7 @@
 // The game site like a stranger uses it: every screen and button, username validation, Welcome back, the roster,
 // masked, keyboard shortcuts, refresh, double clicks, back and forth, phone width. Fake camera (Chrome's test
 // pattern, so nobody is in view); nothing here scans or forges.
-import { BASE, assert, done, launch, note, open, pageText as text, shot, sleep, test, waitArena, waitText } from "./lib.mjs";
+import { BASE, assert, createRoom, done, launch, note, open, openJoin, pageText as text, shot, sleep, test, waitArena, waitText } from "./lib.mjs";
 
 const URL_ = `${BASE}/?pose=lite`;
 const browser = await launch({ camera: "fake" });
@@ -12,7 +12,7 @@ const back = (page) => page.getByRole("button", { name: /^\W*back$/i }); // not 
 const nameInput = (page) => page.locator("#fighter-name");
 
 async function host(page) {
-  await page.getByRole("button", { name: /Host/ }).click();
+  await createRoom(page);
   await enterCard(page).waitFor({ timeout: 15_000 });
 }
 async function toName(page) {
@@ -29,13 +29,13 @@ function noPageErrors(page) {
   assert.deepEqual(page.log.errors, [], "uncaught page errors");
 }
 
-await test("title: loads with Host, Connect and the tools links", async () => {
+await test("title: loads with Find a fight, Play a friend and the tools links", async () => {
   const page = await open(browser, URL_);
   note(`load event after ${page.log.loadMs} ms`);
   const t = await text(page);
   assert.match(t, /BRAWL\s*EGLE/i);
-  await page.getByRole("button", { name: /Host/ }).waitFor();
-  await page.getByRole("button", { name: /Connect/ }).waitFor();
+  await page.getByRole("button", { name: /Find a fight/ }).waitFor();
+  await page.getByRole("button", { name: /Play a friend/ }).waitFor();
   assert.equal(await page.getByRole("link", { name: "Move tester" }).getAttribute("href"), "/tuner/");
   assert.equal(await page.getByRole("link", { name: "Scan test" }).getAttribute("href"), "/scan/");
   assert.match(await page.title(), /\S/, "page has no <title>");
@@ -52,12 +52,12 @@ await test("title: tools links open the tuner and scan pages, and browser back r
     await page.waitForURL(`**${path}`);
     assert.match(await text(page), heading);
     await page.goBack();
-    await page.getByRole("button", { name: /Host/ }).waitFor();
+    await page.getByRole("button", { name: /Find a fight/ }).waitFor();
   }
   await page.context().close();
 });
 
-await test("Host: opens the fighter select with a room code", async () => {
+await test("Create a room: opens the fighter select with a room code", async () => {
   const page = await open(browser, URL_);
   const sockets = [];
   page.on("websocket", (ws) => sockets.push(ws.url()));
@@ -69,11 +69,12 @@ await test("Host: opens the fighter select with a room code", async () => {
   await page.context().close();
 }, { known: "E2E-08" });
 
-await test("Host: double click opens one room and stays on the first fighter-select step", async () => {
+await test("Create a room: double click opens one room and stays on the first fighter-select step", async () => {
   const page = await open(browser, URL_);
   const sockets = [];
   page.on("websocket", (ws) => sockets.push(ws.url()));
-  await dblclick(page, page.getByRole("button", { name: /Host/ }));
+  await page.getByRole("button", { name: /Play a friend/ }).click();
+  await dblclick(page, page.getByRole("button", { name: /Create a room/ }));
   await sleep(2000);
   await shot(page, "host-dblclick");
   assert.ok(sockets.length <= 1, `${sockets.length} signaling sockets`);
@@ -291,7 +292,7 @@ await test("refresh mid-flow returns to a working title screen", async () => {
   await toName(page);
   await nameInput(page).fill("demo");
   await page.reload();
-  await page.getByRole("button", { name: /Host/ }).waitFor();
+  await page.getByRole("button", { name: /Find a fight/ }).waitFor();
   await toName(page);
   await nameInput(page).fill("e2e-refresh");
   await page.getByRole("button", { name: /go masked/i }).click();
@@ -302,9 +303,9 @@ await test("refresh mid-flow returns to a working title screen", async () => {
   await page.context().close();
 });
 
-await test("Connect: code box keeps 4 letters/digits; Join enables at 4; Back works", async () => {
+await test("Join with a code: code box keeps 4 letters/digits; Join enables at 4; Back works", async () => {
   const page = await open(browser, URL_);
-  await page.getByRole("button", { name: /Connect/ }).click();
+  await openJoin(page);
   const code = page.locator("#room-code");
   await code.pressSequentially("ab-1!c9z", { delay: 10 });
   assert.equal(await code.inputValue(), "AB1C");
@@ -313,13 +314,13 @@ await test("Connect: code box keeps 4 letters/digits; Join enables at 4; Back wo
   assert.equal(await page.getByRole("button", { name: /Join/ }).isDisabled(), true);
   await shot(page, "connect");
   await back(page).click();
-  await page.getByRole("button", { name: /Host/ }).waitFor();
+  await page.getByRole("button", { name: /Create a room/ }).waitFor();
   await page.context().close();
 });
 
-await test("Connect: an unknown room code gives a clear error, and you can retry", async () => {
+await test("Join with a code: an unknown room code gives a clear error, and you can retry", async () => {
   const page = await open(browser, URL_);
-  await page.getByRole("button", { name: /Connect/ }).click();
+  await openJoin(page);
   await page.locator("#room-code").fill("ZZZQ");
   await page.getByRole("button", { name: /Join/ }).click();
   const t = await waitText(page, /could not connect|no such room|not found|room/i, 20_000);

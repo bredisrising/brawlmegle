@@ -1,10 +1,10 @@
 // Camera edge cases: permission denied, no camera at all, and nobody in view during a scan. Each must end in a
 // clear message and a way to try again. The nobody-in-view scan must not reach the (paid) forge.
-import { BASE, assert, done, launch, note, open, setupError, shot, sleep, test, waitArena, waitText } from "./lib.mjs";
+import { BASE, assert, createRoom, done, launch, note, open, setupError, shot, sleep, test, waitArena, waitText } from "./lib.mjs";
 
 const URL_ = `${BASE}/?pose=lite`;
 async function toName(page) {
-  await page.getByRole("button", { name: /Host/ }).click();
+  await createRoom(page);
   await page.locator("button", { hasText: "Type your username" }).click();
   await page.locator("#fighter-name").waitFor();
 }

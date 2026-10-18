@@ -6,10 +6,13 @@ import { Arrow, ArcadeButton, TextButton } from '../ArcadeButton';
 import { useGame } from '../GameContext';
 import { HighlightReel } from '../HighlightReel';
 
-/** Host / Connect. The host laptop runs the game; the client laptop joins with a room code. */
+/**
+ * The main menu, written so a first-time player needs no explanation: Find a fight (matchmaking) first, then Play a
+ * friend (create a room, join with a code, or watch one), Practice, Training and the Leaderboard.
+ */
 export function TitleScreen() {
   const game = useGame();
-  const [mode, setMode] = useState<'pick' | 'connect' | 'leaderboard'>('pick');
+  const [mode, setMode] = useState<'pick' | 'friend' | 'join' | 'watch' | 'leaderboard'>('pick');
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -40,10 +43,9 @@ export function TitleScreen() {
 
   const submitCode = (e: FormEvent) => {
     e.preventDefault();
-    if (code.length === 4) run(() => game.join(code));
-  };
-  const watchCode = () => {
-    if (code.length === 4) run(() => game.watch(code));
+    if (code.length !== 4) return;
+    if (mode === 'watch') run(() => game.watch(code));
+    else run(() => game.join(code));
   };
 
   // `?watch=ABCD`: a screen set up to show a room's fight (a TV or a third laptop) goes straight to watching it.
@@ -84,16 +86,24 @@ export function TitleScreen() {
           <div className="flex w-full flex-col items-start gap-5 md:w-md md:shrink-0 md:items-end">
             {mode === 'pick' ? (
               <nav className="flex w-full max-w-md flex-col gap-[clamp(0.3rem,1vh,0.5rem)]">
-                <MenuItem index="01" label="Host" hint="Run the fight on this screen" color="hover:bg-p1" bar="bg-p1" disabled={busy} onClick={() => run(() => game.host())} delay={100} />
-                <MenuItem index="02" label="Connect" hint="Join with a room code" color="hover:bg-p2" bar="bg-p2" disabled={busy} onClick={() => setMode('connect')} delay={180} />
-                <MenuItem index="03" label="Practice" hint="Fight the CPU on this screen" color="hover:bg-hp" bar="bg-hp" disabled={busy} onClick={() => run(() => game.practice())} delay={260} />
-                <MenuItem index="04" label="Training" hint="Practice moves on a dummy" color="hover:bg-hp" bar="bg-hp" disabled={busy} onClick={() => run(() => game.practice('dummy'))} delay={340} />
+                <MenuItem primary index="01" label="Find a fight" hint="Fight a random opponent online" color="hover:bg-paper" bar="bg-ink" disabled={busy} onClick={() => game.findFight()} delay={100} />
+                <MenuItem index="02" label="Play a friend" hint="Make a room or join one with a code" color="hover:bg-p2" bar="bg-p2" disabled={busy} onClick={() => setMode('friend')} delay={180} />
+                <MenuItem index="03" label="Practice vs CPU" hint="Fight the computer on this screen" color="hover:bg-hp" bar="bg-hp" disabled={busy} onClick={() => run(() => game.practice())} delay={260} />
+                <MenuItem index="04" label="Training" hint="Try your moves, no opponent" color="hover:bg-hp" bar="bg-hp" disabled={busy} onClick={() => run(() => game.practice('dummy'))} delay={340} />
                 <MenuItem index="05" label="Leaders" hint="See every fighter's record" color="hover:bg-paper" bar="bg-paper" disabled={busy} onClick={() => setMode('leaderboard')} delay={420} />
               </nav>
-            ) : mode === 'connect' ? (
+            ) : mode === 'friend' ? (
+              <div className="animate-rise flex w-full max-w-md flex-col gap-[clamp(0.3rem,1vh,0.5rem)]">
+                <p className="font-cond text-sm font-bold uppercase tracking-[0.3em] text-paper/60">Play a friend</p>
+                <MenuItem index="A" label="Create a room" hint="Get a code to send to your friend" color="hover:bg-p1" bar="bg-p1" disabled={busy} onClick={() => run(() => game.host())} delay={0} />
+                <MenuItem index="B" label="Join with a code" hint="Type the code your friend sent you" color="hover:bg-p2" bar="bg-p2" disabled={busy} onClick={() => setMode('join')} delay={60} />
+                <MenuItem index="C" label="Watch a room" hint="Show a room's fight on this screen, no camera" color="hover:bg-paper" bar="bg-paper" disabled={busy} onClick={() => setMode('watch')} delay={120} />
+                <TextButton className="mt-1 self-start" onClick={() => setMode('pick')}>← Back</TextButton>
+              </div>
+            ) : mode === 'join' || mode === 'watch' ? (
               <form onSubmit={submitCode} className="animate-rise flex w-full max-w-md flex-col gap-4 border-2 border-paper/15 bg-ink p-6">
                 <label htmlFor="room-code" className="font-cond text-sm font-bold uppercase tracking-[0.3em] text-paper/60">
-                  Room code from the host screen
+                  {mode === 'watch' ? 'Code of the room to watch' : 'The code your friend sent you'}
                 </label>
                 <input
                   id="room-code"
@@ -105,18 +115,15 @@ export function TitleScreen() {
                   className="w-full border-b-[6px] border-p2 bg-paper py-3 text-center font-display text-6xl tracking-[0.3em] text-ink caret-dmg outline-none placeholder:text-ink/15"
                 />
                 <p className="font-cond text-sm font-semibold uppercase tracking-[0.12em] text-paper/55">
-                  Join to play as Player 2. Watch to show the fight on this screen (no camera).
+                  {mode === 'watch'
+                    ? 'This screen shows the fight, like a TV. No camera needed.'
+                    : "You'll pick a fighter, then fight your friend. You'll see each other's camera."}
                 </p>
                 <div className="flex flex-wrap items-center justify-between gap-4">
-                  <TextButton onClick={() => setMode('pick')}>← Back</TextButton>
-                  <div className="flex gap-3">
-                    <ArcadeButton type="button" color="bg-paper" disabled={busy || code.length !== 4} onClick={watchCode}>
-                      Watch
-                    </ArcadeButton>
-                    <ArcadeButton type="submit" color="bg-p2" disabled={busy || code.length !== 4}>
-                      Join
-                    </ArcadeButton>
-                  </div>
+                  <TextButton onClick={() => setMode('friend')}>← Back</TextButton>
+                  <ArcadeButton type="submit" color={mode === 'watch' ? 'bg-paper' : 'bg-p2'} disabled={busy || code.length !== 4}>
+                    {mode === 'watch' ? 'Watch' : 'Join'}
+                  </ArcadeButton>
                 </div>
               </form>
             ) : null}
@@ -223,20 +230,24 @@ function Podium({ top }: { top: { fighter: ForgedFighter; record: FighterRecord 
   );
 }
 
-function MenuItem(props: { index: string; label: string; hint: string; color: string; bar: string; disabled: boolean; onClick: () => void; delay: number }) {
-  const { index, label, hint, color, bar, disabled, onClick, delay } = props;
+function MenuItem(props: { index: string; label: string; hint: string; color: string; bar: string; disabled: boolean; onClick: () => void; delay: number; primary?: boolean }) {
+  const { index, label, hint, color, bar, disabled, onClick, delay, primary } = props;
+  // The primary action is filled in, so it's the obvious first click; its hint always shows (it says what it does).
+  const fill = primary ? 'bg-p1 text-ink' : 'bg-ink-3';
+  const muted = primary ? 'text-ink/60' : 'text-paper/45';
+  const hintColor = primary ? 'text-ink/75' : 'text-paper/50 [@media(max-height:680px)]:hidden';
   return (
     <button
       disabled={disabled}
       onClick={onClick}
       style={{ animationDelay: `${delay}ms` }}
-      className={`animate-in-r group relative flex w-full items-center gap-5 bg-ink-3 py-[clamp(0.45rem,1.7vh,1rem)] pr-6 pl-8 text-left transition-[background-color,padding,gap,width] duration-150 hover:w-[calc(100vw-1.5rem)] hover:gap-0 hover:py-[clamp(0.7rem,2.6vh,1.5rem)] hover:pr-6 hover:pl-6 hover:text-ink sm:hover:w-[calc(100%+2rem)] disabled:pointer-events-none disabled:opacity-40 ${color}`}
+      className={`animate-in-r group relative flex w-full items-center gap-5 ${fill} py-[clamp(0.45rem,1.7vh,1rem)] pr-6 pl-8 text-left transition-[background-color,padding,gap,width] duration-150 hover:w-[calc(100vw-1.5rem)] hover:gap-0 hover:py-[clamp(0.7rem,2.6vh,1.5rem)] hover:pr-6 hover:pl-6 hover:text-ink sm:hover:w-[calc(100%+2rem)] disabled:pointer-events-none disabled:opacity-40 ${color}`}
     >
       <span className={`absolute inset-y-0 left-0 w-2 ${bar} group-hover:bg-ink`} />
-      <span className="font-cond text-sm font-bold tracking-[0.3em] text-paper/45 group-hover:hidden">{index}</span>
+      <span className={`font-cond text-sm font-bold tracking-[0.3em] ${muted} group-hover:hidden`}>{index}</span>
       <span className="min-w-0 flex-1">
         <span className="block truncate font-display text-[clamp(1.6rem,5vh,3rem)] uppercase leading-none tracking-tight">{label}</span>
-        <span className="mt-1 block truncate font-cond text-sm font-semibold uppercase tracking-[0.15em] text-paper/50 group-hover:text-ink/70 [@media(max-height:680px)]:hidden">{hint}</span>
+        <span className={`mt-1 block truncate font-cond text-sm font-semibold uppercase tracking-[0.15em] group-hover:text-ink/70 ${hintColor}`}>{hint}</span>
       </span>
       <Arrow className="text-3xl group-hover:hidden" />
     </button>
