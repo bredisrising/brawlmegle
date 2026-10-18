@@ -10,7 +10,7 @@ import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
  */
 const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
 const downloads = new Map<string, Promise<ArrayBuffer>>();
-/** Downloads kept for reuse (a rematch, both laptops' fighters): enough for a few matches, a few MB each at most. */
+/** Preloaded downloads not yet used, kept at most (a few MB each at most; the oldest is dropped). */
 const KEEP = 8;
 
 /** Start downloading a model (no-op if it's already downloading or downloaded). Returns its bytes. */
@@ -32,6 +32,9 @@ export function preloadModel(url: string | undefined | null, priority: RequestPr
 
 /** Download (or reuse the preloaded bytes) and parse a GLB. */
 export async function loadModel(url: string): Promise<GLTF> {
-  const data = await preloadModel(url, 'high')!;
+  const download = preloadModel(url, 'high')!;
+  const data = await download;
+  // Parsed: let the bytes go (a later load comes from the browser's cache: forged GLBs are cached as immutable).
+  if (downloads.get(url) === download) downloads.delete(url);
   return loader.parseAsync(data, url.slice(0, url.lastIndexOf('/') + 1));
 }
