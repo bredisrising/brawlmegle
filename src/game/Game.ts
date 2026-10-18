@@ -149,7 +149,7 @@ export class Game {
       } else {
         fighter = choice.fighter;
       }
-      await this.views[id].setFighter(fighter);
+      await this.loadFighter(id, fighter);
 
       this.views[id].setVisible(true);
       this.effects.burst(this.views[id].root.position, 'spawn');
@@ -166,6 +166,16 @@ export class Game {
       updatePlayer(id, { status: 'waiting', statusDetail: `Couldn't set up your fighter: ${reason}` });
       const { role } = useGameStore.getState();
       if (id === localPlayerId(role)) useGameStore.setState({ screen: 'avatar' });
+    }
+  }
+
+  /** Show the fighter's model. A GLB that won't load (gone, unreachable, corrupt) still fights, as the default model. */
+  private async loadFighter(id: PlayerId, fighter: ForgedFighter) {
+    try {
+      await this.views[id].setFighter(fighter);
+    } catch (err) {
+      console.warn(`fighter model ${fighter.glbUrl} failed to load, using the default fighter:`, err);
+      await this.views[id].setFighter({ ...fighter, glbUrl: undefined });
     }
   }
 
