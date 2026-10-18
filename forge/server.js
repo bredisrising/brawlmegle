@@ -32,11 +32,15 @@ const BIND = process.env.FORGE_BIND ?? "127.0.0.1";
 const MAX_ACTIVE = Number(process.env.FORGE_MAX_ACTIVE ?? 3);
 const ALLOWED_ORIGINS = (
   process.env.FORGE_ALLOWED_ORIGINS ??
-  "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173,https://54-149-60-196.sslip.io"
+  "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173,https://54-149-60-196.sslip.io,https://brawlmegle.vip,https://www.brawlmegle.vip"
 )
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
+/** The public names nginx serves the forge under (FORGE_PUBLIC_HOSTS, comma-separated). */
+const PUBLIC_HOSTS = new Set(
+  (process.env.FORGE_PUBLIC_HOSTS ?? "54-149-60-196.sslip.io,brawlmegle.vip,www.brawlmegle.vip").split(",").map((s) => s.trim()).filter(Boolean),
+);
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
 /** Files anyone may download. The raw scan photos (front/left/right) stay private: fighter ids are public. The preview-*
  * and sheet-partial-* files are the forging screen's live preview (see pipeline.js). */
@@ -228,7 +232,8 @@ function json(res, status, body) {
 
 async function handle(req, res) {
   const url = new URL(req.url ?? "/", "http://localhost");
-  const base = process.env.FORGE_PUBLIC_URL ?? `http://${req.headers.host}`;
+  // File URLs on the name the request came in on (brawlmegle.vip or the sslip.io one), so pages stay same-origin.
+  const base = PUBLIC_HOSTS.has(req.headers.host ?? "") ? `https://${req.headers.host}` : process.env.FORGE_PUBLIC_URL ?? `http://${req.headers.host}`;
   const parts = url.pathname.split("/").filter(Boolean);
 
   // Only listed page origins may call the API from a browser. The JSON content type forces a
