@@ -22,7 +22,8 @@ export type ClientMessage =
   | { type: 'profile'; name: string; consent: 'save' | 'masked'; username?: string } // after 'Scan new'; username: the forge saves the fighter under it
   | { type: 'pick'; fighterId: string } // after 'Choose existing'
   | { type: 'scan'; frames: [front: string, left: string, right: string] } // base64 JPEGs
-  | { type: 'rematch' }; // from the K.O. screen on the client laptop
+  | { type: 'rematch' } // from the K.O. screen on the client laptop
+  | { type: 'skip' }; // "fight now": don't wait for P2's forge, use a stand-in until it's done
 
 /** Host -> client, so the client UI knows what to show its player. */
 export type HostMessage =

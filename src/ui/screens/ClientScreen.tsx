@@ -4,6 +4,8 @@ import { ACCENT } from '../accent';
 import { ForgeSteps } from '../ForgeSteps';
 import { MoveGuide } from '../MoveGuide';
 import { DesignPreview } from '../PlayerSlot';
+import { TextButton } from '../ArcadeButton';
+import { useGame } from '../GameContext';
 
 /** Headline once P2 is ready, following the host's phase. */
 const READY_HEADLINE: Record<Phase, string> = {
@@ -15,6 +17,7 @@ const READY_HEADLINE: Record<Phase, string> = {
 
 /** What the client laptop shows after picking a fighter: its own player's progress. The fight is on the host screen. */
 export function ClientScreen() {
+  const game = useGame();
   const player = useGameStore((s) => s.players.p2);
   const roomCode = useGameStore((s) => s.roomCode);
   const connection = useGameStore((s) => s.connection);
@@ -54,6 +57,11 @@ export function ClientScreen() {
           </p>
         )}
         {player.status === 'forging' && player.portraitUrl && <DesignPreview url={player.portraitUrl} color={accent.bg} right={false} />}
+        {player.status === 'forging' && (
+          <TextButton className="self-start" onClick={() => game.skipForgeWait('p2')}>
+            Don't wait: fight now
+          </TextButton>
+        )}
 
         {player.status === 'ready' && (
           <div className="flex flex-col items-start gap-3">

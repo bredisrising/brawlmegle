@@ -20,7 +20,7 @@ export type SetupRemote = (choice: FighterChoice, source: InputSource, scan?: Pr
 
 type Choice = Extract<ClientMessage, { type: 'profile' | 'pick' }>;
 /** Game hooks: the client asked for a rematch; a client (re)connected and needs the match state. */
-export type HostHooks = { rematch?: () => void; connected?: () => void };
+export type HostHooks = { rematch?: () => void; connected?: () => void; skip?: () => void };
 type Deferred<T> = { resolve: (value: T) => void; reject: (err: Error) => void };
 
 /**
@@ -129,6 +129,9 @@ export class HostSession {
         break;
       case 'rematch':
         if (useGameStore.getState().phase === 'ko') this.hooks.rematch?.();
+        break;
+      case 'skip':
+        this.hooks.skip?.();
         break;
       // 'pose' goes to the RemoteSource.
     }

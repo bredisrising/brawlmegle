@@ -51,6 +51,11 @@ export class ClientSession {
     return this.peer?.linkStats() ?? Promise.resolve(null);
   }
 
+  /** "Fight now": ask the host not to wait for this player's forge. */
+  skipForge() {
+    this.send({ type: 'skip' });
+  }
+
   /** K.O. screen "Rematch" on this laptop: the host decides. */
   requestRematch() {
     this.send({ type: 'rematch' });

@@ -157,6 +157,7 @@ export class Game {
     const session = new HostSession(this.input, (choice, source, scan) => this.setupPlayer('p2', choice, source, scan), {
       rematch: () => this.rematch(),
       connected: () => this.sendMatch(),
+      skip: () => this.skipForgeWait('p2'),
     });
     this.hostSession = session;
     const code = await session.open();
@@ -239,6 +240,7 @@ export class Game {
 
   /** The local player chose not to wait for their forge (see setupPlayer). */
   skipForgeWait(id: PlayerId) {
+    if (this.client) return this.client.skipForge();
     this.skipForge[id]?.();
   }
 
