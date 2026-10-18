@@ -14,6 +14,7 @@ import { TitleScreen } from './ui/screens/TitleScreen';
 import { AvatarScreen } from './ui/screens/AvatarScreen';
 import { ClientScreen } from './ui/screens/ClientScreen';
 import { PoseDebugOverlay } from './ui/PoseDebugOverlay';
+import { CameraPip } from './ui/CameraPip';
 
 export default function App() {
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -55,6 +56,7 @@ export default function App() {
             <DebugEffects />
           </div>
           <PoseDebugOverlay />
+          <CameraPip />
         </GameContext.Provider>
       )}
     </div>

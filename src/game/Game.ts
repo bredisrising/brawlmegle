@@ -5,6 +5,7 @@ import { FighterView } from '../director/FighterView';
 import { FightEngine } from '../fight/FightEngine';
 import { Resolver } from '../fight/Resolver';
 import { IntentReader } from '../intent/IntentReader';
+import type { Intent } from '../intent/intents';
 import { InputHub, createLocalSource, type InputSource } from '../input';
 import { MockSource } from '../input/sources/MockSource';
 import { captureScan, forgeFighter } from '../forge/forge';
@@ -155,7 +156,9 @@ export class Game {
       console.error(err);
       this.input.unassign(id);
       source.stop();
-      updatePlayer(id, { status: 'waiting', statusDetail: 'Something went wrong — try again' });
+      // Say what actually broke (camera denied, nobody in view, forge down...), not just "something".
+      const reason = err instanceof Error ? err.message : String(err);
+      updatePlayer(id, { status: 'waiting', statusDetail: `Couldn't set up your fighter: ${reason}` });
       const { role } = useGameStore.getState();
       if (id === localPlayerId(role)) useGameStore.setState({ screen: 'avatar' });
     }
@@ -213,7 +216,10 @@ export class Game {
     for (const id of PLAYER_IDS) {
       const frame = this.input.latest(id);
       const out = frame ? this.intent[id].update(frame) : null;
-      if (out) commands.push(...this.resolver.resolve(id, out.intents, this.fight));
+      if (out) {
+        commands.push(...this.resolver.resolve(id, out.intents, this.fight));
+        if (id === localPlayerId(useGameStore.getState().role)) showMove(out.intents);
+      }
       stances[id] = out?.stance ?? { player: id, guard: true, advance: 0, lean: { x: 0, y: 0 }, tracked: false };
     }
     if (phase === 'fighting') {
@@ -269,4 +275,17 @@ export class Game {
       hitstopFrames: Math.min(14, 4 + damage / 2),
     });
   };
+}
+
+/** Name the last real move the camera read, for the camera picture-in-picture. */
+function showMove(intents: Intent[]) {
+  for (const i of intents) {
+    const text = i.kind === 'strike' ? `${i.limb.endsWith('L') ? 'Left' : 'Right'} ${i.style}`
+      : i.kind === 'duck' ? 'Duck'
+      : i.kind === 'dodge' ? `Dodge ${i.dir === 'L' ? 'left' : 'right'}`
+      : i.kind === 'jump' ? 'Jump'
+      : i.kind === 'guard' && i.up ? 'Guard up'
+      : null;
+    if (text) useGameStore.setState({ lastMove: { text, at: performance.now() } });
+  }
 }

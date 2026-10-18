@@ -5,8 +5,8 @@ const env = import.meta.env;
 const turnUrl = env.VITE_TURN_URL as string | undefined;
 
 export const config = {
-  /** Source for the player tracked on this machine. `?input=camera` overrides the env var. */
-  input: (params.get('input') ?? import.meta.env.VITE_INPUT ?? 'mock') as InputKind,
+  /** Source for the player tracked on this machine: the camera on the real site, a mock in local dev. `?input=` overrides. */
+  input: (params.get('input') ?? import.meta.env.VITE_INPUT ?? (import.meta.env.DEV ? 'mock' : 'camera')) as InputKind,
   /** AWS signaling server (WebSocket) that brokers the P2P handshake. */
   signalUrl: (import.meta.env.VITE_SIGNAL_URL as string | undefined) ?? 'wss://54-149-60-196.sslip.io/ws',
   /** STUN + optional TURN (coturn on the signaling box) for venue Wi-Fi that blocks direct P2P. */

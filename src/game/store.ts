@@ -48,6 +48,8 @@ export interface GameState {
   popups: HitPopup[];
   /** Bumped on big hits to retrigger the screen-flash animation. */
   flashKey: number;
+  /** The last move the camera read for this laptop's player (shown on the camera picture-in-picture). */
+  lastMove: { text: string; at: number } | null;
 }
 
 const initialPlayer = (id: PlayerId): PlayerState => ({
@@ -70,6 +72,7 @@ export const useGameStore = create<GameState>(() => ({
   players: Object.fromEntries(PLAYER_IDS.map((id) => [id, initialPlayer(id)])) as Record<PlayerId, PlayerState>,
   popups: [],
   flashKey: 0,
+  lastMove: null,
 }));
 
 /** The player slot tracked on this laptop: host = p1, client = p2. */
