@@ -29,11 +29,12 @@ export const QUALITY_LEVELS: readonly QualityLevel[] = [
   { ...FULL, name: 'msaa0', samples: 0, maxPixelRatio: 1 },
   // The fighters animate on twos (12 fps) anyway: 30 fps halves the GPU's work and the picture barely changes.
   { ...FULL, name: '30fps', samples: 0, maxPixelRatio: 1, maxFps: 30 },
-  { ...FULL, name: 'no bloom', samples: 0, maxPixelRatio: 1, maxFps: 30, bloom: false },
-  { ...FULL, name: 'px0.75', samples: 0, maxPixelRatio: 0.75, maxFps: 30, bloom: false },
-  { ...FULL, name: 'no outlines', samples: 0, maxPixelRatio: 0.75, maxFps: 30, bloom: false, outlines: false },
-  // Last, and not a render setting: the tracker itself gets cheaper (with MediaPipe's own smoothing, see poseWorker.ts).
-  { ...FULL, name: 'one pose', samples: 0, maxPixelRatio: 0.75, maxFps: 30, bloom: false, outlines: false, singlePose: true },
+  // Not a render setting: the tracker itself gets cheaper (with MediaPipe's own smoothing, see poseWorker.ts). It comes
+  // before the looks go: past this point render cuts barely bought poses on a 780M, and bloom and ink are the arcade look.
+  { ...FULL, name: 'one pose', samples: 0, maxPixelRatio: 1, maxFps: 30, singlePose: true },
+  { ...FULL, name: 'no bloom', samples: 0, maxPixelRatio: 1, maxFps: 30, singlePose: true, bloom: false },
+  { ...FULL, name: 'px0.75', samples: 0, maxPixelRatio: 0.75, maxFps: 30, singlePose: true, bloom: false },
+  { ...FULL, name: 'no outlines', samples: 0, maxPixelRatio: 0.75, maxFps: 30, singlePose: true, bloom: false, outlines: false },
 ];
 
 /** Phones / `?quality=low` start where full quality was never going to fit (no bloom, shadows or outlines there). */
