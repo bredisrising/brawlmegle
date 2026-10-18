@@ -204,7 +204,9 @@ export class Game {
     updatePlayer(id, { name: 'CPU', status: 'forging', statusDetail: 'Picking a fighter' });
     const opponent = useGameStore.getState().players[opponentOf(id)].name.toLowerCase();
     const pool = (await fetchServerFighters(undefined, 10_000)).filter((f) => f.glbUrl && f.name.toLowerCase() !== opponent);
-    const pick = pool[Math.floor(Math.random() * pool.length)];
+    // The server lists newest first: the CPU wears one of the recent (new-style) fighters.
+    const recent = pool.slice(0, 6);
+    const pick = recent[Math.floor(Math.random() * recent.length)];
     const fighter: ForgedFighter = pick ?? { id: 'cpu', name: 'Sparring Bot', status: 'ready', glbUrl: `${import.meta.env.BASE_URL}models/default.glb` };
     this.input.unassign(id);
     this.cpu[id] = new Cpu(id, level, Math.floor(Math.random() * 1e6));
