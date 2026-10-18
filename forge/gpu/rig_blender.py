@@ -14,18 +14,21 @@ falls back to its nearest bone. The output is about 1 m tall, feet at y=0, with 
 looks up (src/director/skeletonPose.ts).
 """
 import json
+import math
 import sys
 import time
 
 import bpy
 import bmesh
-from mathutils import Vector, kdtree
+from mathutils import Matrix, Vector, kdtree
 
 argv = sys.argv[sys.argv.index("--") + 1 :]
 IN_GLB, LANDMARKS, OUT_GLB = argv[:3]
 opts = dict(zip(argv[3::2], argv[4::2]))
 VOXEL = float(opts.get("--voxel", 0.008))  # proxy voxel size for a 1 m tall model
 DEBUG_BLEND = opts.get("--debug")
+STATIC_GLB = opts.get("--static")  # also write the oriented, normalized model without a skeleton
+YAW = float(opts.get("--yaw", 0))  # degrees about +y (glTF up) that turn the generator's front to +x
 PROXY_FACES = 40000
 t0 = time.time()
 marks = {}
@@ -68,9 +71,36 @@ if len(meshes) > 1:
 body = bpy.context.view_layer.objects.active
 body.name = "Body"
 
-# --- normalize: 1 m tall, feet on the ground, centered ----------------------------------------------------------
-# Blender axes after the glTF import: +x is the character's front, +y its left, +z up.
+# --- face +x ----------------------------------------------------------------------------------------------------
+# Blender axes after the glTF import: +x should be the character's front, +y its left, +z up. YAW turns a generator's
+# own convention into that; then two checks catch a model that still faces the wrong way: in an A-pose the arm
+# span is wider than the body is deep, and the feet stick out in front of the shins.
+def turn(deg):
+    if deg % 360:
+        body.data.transform(Matrix.Rotation(math.radians(deg), 4, "Z"))
+        body.data.update()
+
+
+turn(YAW)
 co = [v.co.copy() for v in body.data.vertices]
+span = lambda axis: max(c[axis] for c in co) - min(c[axis] for c in co)
+turned = 0
+if span(0) > span(1) * 1.15:
+    turn(90)
+    turned += 90
+    co = [v.co.copy() for v in body.data.vertices]
+zmin = min(c.z for c in co)
+h = max(c.z for c in co) - zmin
+feet = [c.x for c in co if c.z < zmin + 0.04 * h]
+shins = [c.x for c in co if zmin + 0.12 * h < c.z < zmin + 0.2 * h]
+toe_lead = (max(feet) - sum(shins) / len(shins)) - (sum(shins) / len(shins) - min(feet)) if feet and shins else 0.0
+if toe_lead < -0.02 * h:
+    turn(180)
+    turned += 180
+    co = [v.co.copy() for v in body.data.vertices]
+mark("orient")
+
+# --- normalize: 1 m tall, feet on the ground, centered ----------------------------------------------------------
 lo = Vector((min(c.x for c in co), min(c.y for c in co), min(c.z for c in co)))
 hi = Vector((max(c.x for c in co), max(c.y for c in co), max(c.z for c in co)))
 height = hi.z - lo.z
@@ -81,6 +111,11 @@ for v in body.data.vertices:
 body.data.update()
 co = [v.co.copy() for v in body.data.vertices]
 mark("normalize")
+if STATIC_GLB:
+    bpy.ops.object.select_all(action="DESELECT")
+    body.select_set(True)
+    bpy.ops.export_scene.gltf(filepath=STATIC_GLB, export_format="GLB", use_selection=True, export_animations=False, export_yup=True)
+    mark("static")
 
 # --- joints: sheet landmarks -> mesh space ----------------------------------------------------------------------
 with open(LANDMARKS) as f:
@@ -321,4 +356,4 @@ bpy.ops.export_scene.gltf(
     export_apply=False,
 )
 mark("export")
-print("RIG_RESULT " + json.dumps({"timings": marks, "verts": len(body.data.vertices), "proxy_faces": proxy_faces, "orphans": orphans, "heat_empty": heat_empty, "heat_unweighted": heat_unweighted, "height_in": round(height, 4)}))
+print("RIG_RESULT " + json.dumps({"timings": marks, "verts": len(body.data.vertices), "proxy_faces": proxy_faces, "orphans": orphans, "turned": turned, "toe_lead": round(toe_lead, 4), "heat_empty": heat_empty, "heat_unweighted": heat_unweighted, "height_in": round(height, 4)}))
