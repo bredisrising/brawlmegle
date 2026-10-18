@@ -60,12 +60,17 @@ function saveSample(req, res) {
     } catch {
       return res.writeHead(400, cors).end(JSON.stringify({ error: "first line must be a JSON header" }));
     }
-    if (!Array.isArray(header.labels)) return res.writeHead(400, cors).end(JSON.stringify({ error: "header needs labels" }));
+    // A bare `null` header used to throw here and take the whole matchmaker (and every room) down.
+    if (!Array.isArray(header?.labels)) return res.writeHead(400, cors).end(JSON.stringify({ error: "header needs labels" }));
     if (samplesBytes + body.length > MAX_SAMPLES_BYTES_TOTAL) return res.writeHead(507, cors).end(JSON.stringify({ error: "storage full" }));
+    // Reserve the space now, so parallel uploads can't all squeeze in under the cap.
+    samplesBytes += body.length;
     const name = `${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomBytes(3).toString("hex")}.jsonl`;
     fs.writeFile(`${SAMPLES_DIR}/${name}`, body, (err) => {
-      if (err) return res.writeHead(500, cors).end(JSON.stringify({ error: "write failed" }));
-      samplesBytes += body.length;
+      if (err) {
+        samplesBytes -= body.length;
+        return res.writeHead(500, cors).end(JSON.stringify({ error: "write failed" }));
+      }
       res.writeHead(201, cors).end(JSON.stringify({ ok: true, name }));
     });
   });
