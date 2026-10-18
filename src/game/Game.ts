@@ -96,6 +96,8 @@ export class Game {
   private fightTicks = 0;
   /** "Fight now" while a forge runs: ends the wait early (the forged fighter swaps in when it's done). */
   private readonly skipForge: Partial<Record<PlayerId, () => void>> = {};
+  /** Ends the running local body scan early (set while one runs). */
+  private skipScanNow: (() => void) | null = null;
   /** Bumped per setup, so a late forge never swaps into a slot that has since picked someone else. */
   private readonly setupGen: Record<PlayerId, number> = { p1: 0, p2: 0 };
   /** Practice mode: the CPU level to bring in for P2 once the local player is ready ('dummy' = Training). */
@@ -395,6 +397,31 @@ export class Game {
   }
 
   /** The local player chose not to wait for their forge (see setupPlayer). */
+  /**
+   * The guided body scan on this laptop's camera: its live state goes to the store for the scan overlay, and
+   * "Done: forge with the front photo" (skipScan) ends it early.
+   */
+  private async localScan(source: InputSource, show: (text: string) => void, signal: AbortSignal, current: () => boolean): Promise<ScanFrames> {
+    const skip = new AbortController();
+    this.skipScanNow = () => skip.abort();
+    try {
+      return await captureScan(source.video, source, (u) => {
+        if (!current()) return;
+        show(scanStatus(u.view));
+        useGameStore.setState({ scan: { view: u.view, thumbs: u.thumbs } });
+      }, { signal, skip: skip.signal });
+    } finally {
+      this.skipScanNow = null;
+      useGameStore.setState({ scan: null });
+    }
+  }
+
+  /** The scan overlay's "Done: forge with the front photo" (Enter): forge from what the scan has so far. */
+  skipScan() {
+    if (this.client) return this.client.skipScan();
+    this.skipScanNow?.();
+  }
+
   skipForgeWait(id: PlayerId) {
     if (this.client) return this.client.skipForge();
     this.skipForge[id]?.();
@@ -446,9 +473,9 @@ export class Game {
         const busy = scan ? null : await forgeBusy();
         if (busy) throw new Error(`the forge can't take a new scan right now (${busy}). Pick a saved fighter, go masked, or try again in a minute`);
         const show = onChange((statusDetail) => gen === this.setupGen[id] && updatePlayer(id, { statusDetail }));
-        show('Turn slowly');
+        show('Face the camera');
         const { signal } = this.lifetime;
-        const frames = await (scan ?? captureScan(source.video, source, (p) => show(scanStatus(p)), { signal }));
+        const frames = await (scan ?? this.localScan(source, show, signal, () => gen === this.setupGen[id]));
         // Say what the scan got: a partial scan still forges, the missing sides are filled in.
         const got = frames.filter(Boolean).length;
         updatePlayer(id, { status: 'forging', statusDetail: got < 3 ? `Got ${got} of 3 sides, forging anyway` : 'Forging fighter' });

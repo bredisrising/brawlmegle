@@ -1,7 +1,7 @@
 // 360° scan test page: webcam -> MediaPipe -> scan buckets (front / left / right, sharpest kept), then
 // optionally the real forge. Run `npm run dev` and open /test/scan/, or the hosted build (scripts/build-scan.mjs).
 //   ?forge=http://127.0.0.1:8787  forge server (default VITE_FORGE_API)
-//   ?timeout=15                   scan timeout in seconds
+//   ?turn=7                       seconds the 360 takes by time alone (the minimum pace)
 //   ?autoscan=1                   start scanning as soon as the camera is up
 import { CameraSource } from '../../src/input/sources/CameraSource';
 import { config } from '../../src/config';
@@ -20,6 +20,7 @@ let camera: CameraSource | null = null;
 let scanning = false;
 let frames: ScanFrames | null = null;
 let lastTiers: Record<Bucket, Tier> = { front: 0, left: 0, right: 0 };
+let skip = new AbortController();
 
 $<HTMLInputElement>('forgeUrl').value = params.get('forge') ?? config.forgeApi;
 $<HTMLInputElement>('name').value = params.get('name') ?? '';
@@ -52,13 +53,14 @@ async function scan() {
   if (!camera || scanning) return;
   scanning = true;
   frames = null;
+  skip = new AbortController();
   $<HTMLButtonElement>('scan').disabled = true;
   $<HTMLButtonElement>('forge').disabled = true;
   $('sizes').textContent = '';
   for (const b of BUCKETS) clearThumb(b);
-  const timeout = Number(params.get('timeout') ?? 15) * 1000;
+  const turnMs = Number(params.get('turn') ?? 7) * 1000;
   try {
-    frames = await captureScan(camera.video, camera, onScanUpdate, { durationMs: timeout });
+    frames = await captureScan(camera.video, camera, onScanUpdate, { turnMs, turnMaxMs: turnMs + 2500, skip: skip.signal });
   } catch (err) {
     $('status').textContent = `scan failed: ${(err as Error).message}`;
   }
@@ -78,12 +80,19 @@ async function scan() {
 }
 
 function onScanUpdate(u: ScanUpdate) {
-  $('hint').textContent = u.done ? '' : u.hint;
-  lastTiers = { front: u.buckets.front.tier, left: u.buckets.left.tier, right: u.buckets.right.tier };
-  drawRing(u.fraction, lastTiers, u.elapsedMs);
-  for (const b of BUCKETS) $(`thumb-${b}`).className = `thumb t${u.buckets[b].tier}`;
+  const v = u.view;
+  $('hint').textContent = v.done ? '' : `${v.count ?? ''} ${v.hint}`.trim();
+  $('coach').textContent = v.done ? '' : v.coach;
+  lastTiers = { ...v.shots };
+  drawRing(v.ring, lastTiers, v.elapsedMs);
+  for (const b of BUCKETS) $(`thumb-${b}`).className = `thumb t${v.shots[b]}`;
   if (u.changed && u.crops[u.changed]) drawThumb(u.changed, u.crops[u.changed]!);
 }
+
+// Enter or S: "Done: forge with the front photo" (once the front is in).
+window.addEventListener('keydown', (e) => {
+  if (scanning && (e.code === 'Enter' || e.code === 'KeyS') && !(e.target instanceof HTMLInputElement)) skip.abort();
+});
 
 async function forge() {
   if (!frames) return;

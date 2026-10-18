@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { PLAYER_IDS, type ForgedFighter, type ForgePreview, type Phase, type PlayerId, type PlayerStatus, type Role } from '../types';
 import { MAX_HP, PLAYER_NAMES } from './constants';
 import type { LinkStats } from '../net/Peer';
+import type { ScanView } from '../forge/scanGuide';
+import type { Bucket } from '../forge/scanBuckets';
 
 /** Popup style. Game maps FightEvents onto these. */
 export type HitKind = 'light' | 'heavy' | 'blocked';
@@ -77,6 +79,8 @@ export interface GameState {
   callout: { text: string; key: number } | null;
   /** The last move the camera read for this laptop's player (shown on the camera picture-in-picture). */
   lastMove: { text: string; at: number } | null;
+  /** This laptop's player's body scan while it runs (ui/ScanOverlay.tsx): the guide's state and the photos so far. */
+  scan: { view: ScanView; thumbs: Partial<Record<Bucket, string>> } | null;
 }
 
 const initialPlayer = (id: PlayerId): PlayerState => ({
@@ -113,6 +117,7 @@ export const useGameStore = create<GameState>(() => ({
   watchers: 0,
   caption: null,
   lastMove: null,
+  scan: null,
 }));
 
 /** The player slot tracked on this laptop: host = p1, client = p2. */

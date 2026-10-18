@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import {
-  ScanBuckets, classify, estimateFacing, fitLongSide, laplacianVariance, personBox, toGray,
-  type Bucket,
-} from '../../src/forge/scanBuckets';
-import { poseAt, swapSides } from './pose';
+import { classify, estimateFacing, fitLongSide, laplacianVariance, personBox, toGray } from '../../src/forge/scanBuckets';
+import { poseAt } from './pose';
 
 describe('estimateFacing', () => {
   it('reads square-on as front', () => {
@@ -60,106 +57,6 @@ describe('estimateFacing', () => {
     frame.image[23] = { ...frame.image[23], visibility: 0.1 };
     expect(estimateFacing(frame)).toBeNull();
     expect(estimateFacing(poseAt(0, { scale: 0.05 }))).toBeNull(); // too far away
-  });
-});
-
-/** Feeds a yaw track (deg per frame, 30 fps) through ScanBuckets. Sharpness comes from `sharp(yaw)`. */
-function run(yaws: number[], opts: { sharp?: (yaw: number, i: number) => number; flipBack?: boolean; duration?: number } = {}) {
-  const scan = new ScanBuckets({ durationMs: opts.duration ?? 15000 });
-  const kept: Partial<Record<Bucket, number>> = {};
-  let doneAt = -1;
-  yaws.forEach((yaw, i) => {
-    if (doneAt >= 0) return;
-    const t = (i * 1000) / 30;
-    let frame = poseAt(yaw, { t, noise: 0.002, seed: i + 1 });
-    // Worst case: MediaPipe reads a back view as a front view (left/right swapped, face guessed in front).
-    const back = Math.abs((((yaw % 360) + 360) % 360) - 180) < 50;
-    if (opts.flipBack && back) {
-      frame = swapSides(frame);
-      frame.world[0] = { ...frame.world[0], z: -0.1 };
-    }
-    const offer = scan.offer(frame, t);
-    if (offer && scan.submit(offer, opts.sharp?.(yaw, i) ?? 100 + (i % 7))) kept[offer.bucket] = yaw;
-    if (scan.progress.done) doneAt = t;
-  });
-  return { scan, kept, progress: scan.progress, doneAt };
-}
-
-/** Linear turn from `from` to `to` degrees over `seconds`, then hold `hold` seconds. */
-const turn = (from: number, to: number, seconds: number, hold = 0) => {
-  const n = Math.round(seconds * 30);
-  return [...Array.from({ length: n + 1 }, (_, i) => from + ((to - from) * i) / n), ...Array(Math.round(hold * 30)).fill(to)];
-};
-
-describe('ScanBuckets', () => {
-  it('fills all three buckets in a slow 360° turn and finishes early', () => {
-    const yaws = [...Array(30).fill(0), ...turn(0, -360, 10, 3)]; // 1 s facing the camera, turn to their left
-    const { progress, kept, doneAt } = run(yaws);
-    expect(progress.buckets.front.tier).toBe(2);
-    expect(progress.buckets.left.tier).toBe(2);
-    expect(progress.buckets.right.tier).toBe(2);
-    expect(progress.done).toBe(true);
-    expect(doneAt).toBeLessThan(15000);
-    expect(Math.abs(kept.right! + 90)).toBeLessThan(30); // right side toward camera at -90
-    expect(Math.abs(kept.left! + 270)).toBeLessThan(30); // ...and left at -270
-  });
-
-  it('never keeps a back view as the front, even a mislabeled and very sharp one', () => {
-    const yaws = [...Array(20).fill(0), ...turn(0, -360, 10, 1)];
-    const { kept } = run(yaws, { flipBack: true, sharp: (yaw) => (Math.abs(Math.abs(yaw) - 180) < 40 ? 10000 : 50) });
-    const front = ((kept.front! % 360) + 360) % 360;
-    expect(Math.min(front, 360 - front)).toBeLessThan(25);
-  });
-
-  it('keeps the sharpest frame in a bucket', () => {
-    const yaws = Array(60).fill(0);
-    const { kept, progress } = run(yaws.map((_, i) => (i === 37 ? 1 : 0)), { sharp: (yaw) => (yaw === 1 ? 500 : 100) });
-    expect(kept.front).toBe(1);
-    expect(progress.buckets.front.sharpness).toBe(500);
-  });
-
-  it('a true profile beats a sharper 3/4 view', () => {
-    const yaws = [...Array(20).fill(0), ...turn(0, -50, 1, 1), ...turn(-50, -90, 1, 0.5)];
-    const { kept, progress } = run(yaws, { sharp: (yaw) => (yaw > -60 ? 1000 : 10) });
-    expect(progress.buckets.right.tier).toBe(2);
-    expect(kept.right!).toBeLessThan(-60);
-  });
-
-  it('falls back to 3/4 views when a profile never comes', () => {
-    const yaws = [...Array(20).fill(0), ...turn(0, -50, 2, 1), ...turn(-50, 50, 4, 1)];
-    const { progress } = run(yaws);
-    expect(progress.buckets.left.tier).toBe(1);
-    expect(progress.buckets.right.tier).toBe(1);
-  });
-
-  it('times out with what it has', () => {
-    const yaws = [...Array(20).fill(0), ...turn(0, -90, 2, 20)]; // never shows the left side
-    const { progress, doneAt } = run(yaws, { duration: 8000 });
-    expect(progress.done).toBe(true);
-    expect(doneAt).toBeGreaterThanOrEqual(8000);
-    expect(progress.buckets.front.tier).toBe(2);
-    expect(progress.buckets.right.tier).toBe(2);
-    expect(progress.buckets.left.tier).toBe(0);
-    expect(progress.hint).toMatch(/time/i);
-  });
-
-  it('guides the player: face the camera, then turn left, then keep going', () => {
-    const scan = new ScanBuckets();
-    scan.offer(poseAt(0, { t: 0 }), 0);
-    expect(scan.progress.hint).toMatch(/face the camera/i);
-    for (let i = 0; i < 10; i++) {
-      const offer = scan.offer(poseAt(0, { t: i * 33 }), i * 33);
-      if (offer) scan.submit(offer, 100);
-    }
-    expect(scan.progress.hint).toMatch(/turn slowly to your left/i);
-    for (let i = 0; i < 10; i++) {
-      const offer = scan.offer(poseAt(-90, { t: 400 + i * 33 }), 400 + i * 33);
-      if (offer) scan.submit(offer, 100);
-    }
-    expect(scan.progress.hint).toMatch(/keep going/i);
-    expect(scan.progress.fraction).toBeCloseTo(2 / 3, 5);
-    scan.idle(2000);
-    expect(scan.progress.hint).toMatch(/step back/i);
   });
 });
 

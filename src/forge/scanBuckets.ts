@@ -2,7 +2,7 @@ import type { Landmark, PoseFrame } from '../types';
 
 /**
  * Scan logic with no DOM: which way the player faces, which bucket a frame belongs in, and how sharp
- * a crop is. src/forge/scan.ts feeds it live camera frames; the tests feed it synthetic poses.
+ * a crop is. The guided scan (scanGuide.ts) builds on it; the tests feed it synthetic poses.
  *
  * Directions are the player's own: `left` is the photo of their left side (left cheek toward the camera).
  * Landmark x is in the unmirrored camera image, the way MediaPipe sees it (the UI mirrors only the preview).
@@ -49,9 +49,6 @@ export const SCAN_DEFAULTS = {
   /** Torso must be at least this tall (fraction of image height) and in frame. */
   minTorso: 0.08,
   minVisibility: 0.5,
-  /** Done early once every bucket has this many tier-2 frames to pick the sharpest from. */
-  minGood: 3,
-  durationMs: 15000,
 };
 export type ScanOptions = typeof SCAN_DEFAULTS;
 
@@ -104,120 +101,6 @@ export function classify(f: Facing, opts: Partial<ScanOptions> = {}): { bucket: 
   // A profile is good from either side of 90°; a 3/4 view only from the front (a 3/4 back view is mostly back).
   if (f.side === 0 || f.turn < o.threeQuarterYaw || f.turn > 180 - o.profileYaw) return null;
   return { bucket: f.side > 0 ? 'left' : 'right', tier: f.turn >= o.profileYaw ? 2 : 1 };
-}
-
-export type BucketState = {
-  tier: Tier;
-  /** Frames seen at the current tier (the sharpest of them is kept). */
-  count: number;
-  sharpness: number;
-};
-
-export type ScanProgress = {
-  buckets: Record<Bucket, BucketState>;
-  /** 0–1 for a progress ring: each bucket counts a third, half of that for a 3/4 view. */
-  fraction: number;
-  elapsedMs: number;
-  done: boolean;
-  /** What to tell the player right now. */
-  hint: string;
-};
-
-export type Offer = { bucket: Bucket; tier: Tier; facing: Facing };
-
-/**
- * Bucketing over a whole scan. Call `offer(frame, t)` per tracked frame: it says which bucket the frame
- * is a candidate for (or null). Measure the candidate's sharpness and call `submit`; it returns true if
- * the frame is the new keeper for that bucket. A higher tier always wins, then the sharper frame.
- *
- * Back views look like the front (shoulders wide, nose guessed near the middle), so the front bucket
- * only takes frames before the player has turned to a side, or after they've shown both sides
- * (they've come all the way around).
- */
-export class ScanBuckets {
-  private readonly opts: ScanOptions;
-  private readonly state: Record<Bucket, BucketState> = {
-    front: { tier: 0, count: 0, sharpness: 0 },
-    left: { tier: 0, count: 0, sharpness: 0 },
-    right: { tier: 0, count: 0, sharpness: 0 },
-  };
-  private startT: number | null = null;
-  private lastT = 0;
-  private frontWidth: number;
-  private measuredFront = 0;
-  private sidesSeen = new Set<Bucket>();
-  private tracked = false;
-
-  constructor(opts: Partial<ScanOptions> = {}) {
-    this.opts = { ...SCAN_DEFAULTS, ...opts };
-    this.frontWidth = this.opts.frontWidth;
-  }
-
-  offer(frame: PoseFrame, t = frame.t): Offer | null {
-    this.startT ??= t;
-    this.lastT = t;
-    const facing = estimateFacing(frame, this.frontWidth, this.opts);
-    this.tracked = facing !== null;
-    if (!facing) return null;
-
-    // Learn this player's square-on shoulder width from frames where the nose is centered.
-    if (facing.frontal && Math.abs(facing.nose) < this.opts.frontNose[0] && facing.width > this.measuredFront) {
-      this.measuredFront = facing.width;
-      this.frontWidth = clamp(this.measuredFront, 0.45, 1.1);
-    }
-
-    const hit = classify(facing, this.opts);
-    if (!hit) return null;
-    if (hit.bucket !== 'front' && facing.turn >= this.opts.profileYaw - 10) this.sidesSeen.add(hit.bucket);
-    if (hit.bucket === 'front') {
-      const turnedAway = this.sidesSeen.size > 0;
-      const cameBack = this.sidesSeen.size === 2;
-      if (turnedAway && !cameBack) return null;
-    }
-    if (hit.tier < this.state[hit.bucket].tier) return null;
-    return { ...hit, facing };
-  }
-
-  /** No tracked person right now (the camera sends no frames then): keeps the clock and the hint current. */
-  idle(t: number) {
-    this.startT ??= t;
-    this.lastT = t;
-    this.tracked = false;
-  }
-
-  /** Record a candidate's sharpness. True if it's the new best for its bucket (keep its image). */
-  submit(offer: Offer, sharpness: number): boolean {
-    const s = this.state[offer.bucket];
-    if (offer.tier > s.tier) {
-      Object.assign(s, { tier: offer.tier, count: 1, sharpness });
-      return true;
-    }
-    if (offer.tier < s.tier) return false;
-    s.count++;
-    if (sharpness <= s.sharpness) return false;
-    s.sharpness = sharpness;
-    return true;
-  }
-
-  get progress(): ScanProgress {
-    const elapsedMs = this.startT === null ? 0 : this.lastT - this.startT;
-    const b = this.state;
-    const allGood = BUCKETS.every((k) => b[k].tier === 2 && b[k].count >= this.opts.minGood);
-    const done = allGood || elapsedMs >= this.opts.durationMs;
-    const fraction = BUCKETS.reduce((sum, k) => sum + (b[k].tier === 2 ? 1 : b[k].tier === 1 ? 0.5 : 0) / 3, 0);
-    return { buckets: structuredClone(b), fraction, elapsedMs, done, hint: this.hint(done) };
-  }
-
-  private hint(done: boolean): string {
-    const b = this.state;
-    if (done) return BUCKETS.every((k) => b[k].tier > 0) ? 'Got you!' : 'Time! Using what we got';
-    if (!this.tracked) return 'Step back so the camera sees you, head to hips';
-    if (this.sidesSeen.size === 0 && (b.front.tier < 2 || b.front.count < this.opts.minGood)) return 'Face the camera…';
-    if (b.right.tier < 2 && b.left.tier < 2) return 'Turn slowly to your left…';
-    if (b.right.tier < 2 || b.left.tier < 2) return 'Keep going, all the way around…';
-    if (b.front.tier < 2) return 'Back to facing the camera…';
-    return 'Hold it…';
-  }
 }
 
 // ---------------------------------------------------------------------------

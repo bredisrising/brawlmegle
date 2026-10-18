@@ -1,5 +1,5 @@
 import type { ForgedFighter, ForgePreview } from '../types';
-import type { ScanProgress } from './scanBuckets';
+import type { ScanView } from './scanGuide';
 
 /** Player-facing text for scan and forge progress (statusDetail on the lobby / client screens). */
 
@@ -11,12 +11,9 @@ export const FORGE_STEPS: Record<NonNullable<ForgedFighter['step']>, string> = {
   rig: 'Rigging your fighter',
 };
 
-const TICK = ['·', '½', '✓'] as const;
-
-/** "Turn slowly to your left… front ✓ left · right ½" */
-export function scanStatus(p: ScanProgress): string {
-  const b = p.buckets;
-  return `${p.hint}  front ${TICK[b.front.tier]} left ${TICK[b.left.tier]} right ${TICK[b.right.tier]}`;
+/** The scan's big line ("Turn slowly to your left…"); the camera view shows the rest (countdown, ring, coaching). */
+export function scanStatus(view: ScanView): string {
+  return view.hint;
 }
 
 export function forgeStatus(f: ForgedFighter): string {

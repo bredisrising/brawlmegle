@@ -41,6 +41,7 @@ export class ClientSession {
   private setup: ClientMessage[] = [];
   private confirmed = false;
   private disposed = false;
+  private skipScanNow: (() => void) | null = null;
   /**
    * P2's moves are read here, from this laptop's own camera at full rate, and only the result crosses the network
    * (the poses still stream for the host's live layer and recordings). Reading streamed poses on the host suffered
@@ -112,9 +113,17 @@ export class ClientSession {
       this.stream(this.source);
 
       if (choice.kind === 'scan') {
-        updatePlayer(PLAYER, { statusDetail: 'Turn slowly' });
+        updatePlayer(PLAYER, { statusDetail: 'Face the camera' });
         const show = onChange((statusDetail) => updatePlayer(PLAYER, { statusDetail }));
-        const frames = await captureScan(this.source.video, this.source, (p) => show(scanStatus(p)));
+        const skip = new AbortController();
+        this.skipScanNow = () => skip.abort();
+        const frames = await captureScan(this.source.video, this.source, (u) => {
+          show(scanStatus(u.view));
+          useGameStore.setState({ scan: { view: u.view, thumbs: u.thumbs } });
+        }, { skip: skip.signal }).finally(() => {
+          this.skipScanNow = null;
+          useGameStore.setState({ scan: null });
+        });
         const scan: ClientMessage = { type: 'scan', frames };
         this.setup.push(scan);
         this.send(scan);
@@ -130,6 +139,11 @@ export class ClientSession {
       updatePlayer(PLAYER, { status: 'waiting', statusDetail: 'Something went wrong — try again' });
       useGameStore.setState({ screen: 'avatar' });
     }
+  }
+
+  /** The scan overlay's "Done: forge with the front photo". */
+  skipScan() {
+    this.skipScanNow?.();
   }
 
   /** Going back to the title (or closing the tab): tell the host, so P2's slot opens for the next person right away. */
