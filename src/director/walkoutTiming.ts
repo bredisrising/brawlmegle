@@ -1,40 +1,41 @@
 /**
- * The walkout's beats, in seconds from its first frame, cut to the walkout track (public/walkout/walkout.mp3, made
- * with scripts/make-walkout-music.mjs). The hits were measured from the track: snare-roll build, the drop at 1.07,
- * a break at ~1.7, back in at 2.15, stabs at 3.21 / 3.86 / 4.07 / 4.50, and a hard stop at 5.5.
+ * The walkout: Street Fighter 6's in-stage character entrance, before round 1. Beats in seconds from its first frame,
+ * cut to the walkout track (public/walkout/walkout.mp3, made with scripts/make-walkout-music.mjs: a dark intro, then a
+ * 92 bpm groove, one bar per fighter, a snare roll and a hard stop):
  *
- *   0.00  P1's shot: fire, materialize, crouched power-up       (snare roll)
- *   1.07  P1's name slams, hero pose, punch-in                   (the drop)
- *   1.72  flame wipe across                                      (the break)
- *   2.15  P2's shot (P2 materialized under the wipe)             (back in)
- *   3.21  P2's name slams                                        (stab)
- *   3.62  flame wipe back, "ARE YOU READY?"
- *   3.86  VS: both fighters, the split, VS slams                 (stab)
- *   4.50  READY? tag                                             (stab, on the bark's "READY")
- *   5.50  the music stops: ROUND 1 (the countdown's next beat), then FIGHT
+ *   0.00  the stage, dark: spotlights find both fighters walking up to their marks       (drone)
+ *   1.71  fighter 1's shot: a slow low 3/4 push-in during their signature action          (the groove lands)
+ *   4.32  fighter 2's shot, the same                                                       (next bar)
+ *   6.93  the two-shot: they turn to face each other and drop into their stance            (next bar)
+ *   8.25  white flash, fire VS in the stage                                               (the snare roll)
+ *   9.55  the music stops: ROUND 1 (the countdown's next beat), then FIGHT
  *
- * Both laptops run the same table from the same moment (the host's countdown), so they see the same thing.
+ * A custom track (public/walkout/custom.json) can move the beats onto its own hits. Both laptops run the same beats
+ * from the same moment (the host's countdown), so they see the same thing.
  */
-export const WALKOUT = {
-  p1: 0,
-  p1Slam: 1.07,
-  p1Hit: 1.51,
-  wipe1: 1.72,
-  /** P2 starts materializing under the wipe, so they're up to the chest when the wipe clears. */
-  p2Spawn: 1.98,
-  p2: 2.15,
-  p2Slam: 3.21,
-  p2Hit: 3.86,
-  wipe2: 3.6,
-  readyBark: 3.62,
-  vs: 3.86,
-  ready: 4.5,
-  flash: 5.38,
-  end: 5.5,
-  /** How long each flame wipe takes to cover the screen and burn away again. */
-  wipeIn: 0.26,
-  wipeOut: 0.3,
-} as const;
+export type Beats = { p1: number; p2: number; two: number; vs: number; end: number };
+
+export const DEFAULT_BEATS: Beats = { p1: 1.71, p2: 4.32, two: 6.93, vs: 8.25, end: 9.55 };
+
+/**
+ * Beats for a track from its cue file: `beats` (any of p1/p2/two/vs/end, seconds after `start`) are taken as given;
+ * otherwise `drop` (when fighter 1's shot should start) moves the whole default timing to it. Anything that doesn't
+ * make sense (out of order, too short or long) falls back to the defaults.
+ */
+export function beatsFor(cue: { drop?: unknown; beats?: unknown } | null): Beats {
+  if (!cue) return DEFAULT_BEATS;
+  const shift = typeof cue.drop === 'number' && Number.isFinite(cue.drop) ? cue.drop - DEFAULT_BEATS.p1 : 0;
+  const out = { ...DEFAULT_BEATS };
+  for (const k of Object.keys(out) as (keyof Beats)[]) out[k] = Math.max(0.5, out[k] + shift);
+  const given = cue.beats && typeof cue.beats === 'object' ? (cue.beats as Record<string, unknown>) : {};
+  for (const k of Object.keys(out) as (keyof Beats)[]) {
+    const v = given[k];
+    if (typeof v === 'number' && Number.isFinite(v)) out[k] = v;
+  }
+  const order = [out.p1, out.p2, out.two, out.vs, out.end];
+  const sane = order.every((v, i) => i === 0 || v - order[i - 1] >= 0.4) && out.p1 >= 0.5 && out.end <= 14;
+  return sane ? out : DEFAULT_BEATS;
+}
 
 /** ROUND 1 holds this long before FIGHT. */
 export const ROUND_CALL_SECONDS = 1.15;
@@ -42,8 +43,6 @@ export const ROUND_CALL_SECONDS = 1.15;
 const params = new URLSearchParams(typeof window === 'undefined' ? '' : window.location.search);
 /** `?walkout=0` skips the walkout (straight to ROUND 1). */
 export const walkoutEnabled = params.get('walkout') !== '0';
-/** How long the countdown's first beat (the walkout) lasts. */
-export const WALKOUT_SECONDS = walkoutEnabled ? WALKOUT.end : 0;
 
 /** Keyframes: value at time t from [time, value] pairs (sorted), eased between them; holds the ends. */
 export function kf(t: number, keys: readonly (readonly [number, number])[], ease: (x: number) => number = smoothstep) {
@@ -63,6 +62,11 @@ export const smoothstep = (x: number) => {
   const k = clamp01(x);
   return k * k * (3 - 2 * k);
 };
+/** Slow in and out, gentler than smoothstep at the ends (camera moves). */
+export const easeInOut = (x: number) => {
+  const k = clamp01(x);
+  return k < 0.5 ? 4 * k * k * k : 1 - (-2 * k + 2) ** 3 / 2;
+};
 export const easeOut = (x: number) => 1 - (1 - clamp01(x)) ** 3;
 export const easeIn = (x: number) => clamp01(x) ** 3;
 export const linear = (x: number) => clamp01(x);
@@ -72,7 +76,7 @@ export const backOut = (x: number) => {
   return 1 + k * k * (2.9 * k + 1.9);
 };
 
-/** A name as shown big: "Avi (CPU hard)" -> { name: "Avi", tag: "CPU hard" }; "Training dummy" -> "Dummy" / "Training". */
+/** A name as shown: "Avi (CPU hard)" -> { name: "Avi", tag: "CPU hard" }; "Training dummy" -> "Dummy" / "Training". */
 export function splitName(full: string): { name: string; tag: string | null } {
   const cpu = full.match(/^(.*?)\s*\((CPU[^)]*)\)\s*$/i);
   if (cpu) return { name: cpu[1], tag: cpu[2] };
@@ -80,14 +84,17 @@ export function splitName(full: string): { name: string; tag: string | null } {
   return { name: full, tag: null };
 }
 
-/** The entrance pose each fighter strikes on their slam: picked from the name, so both laptops agree. */
-export type EntranceKind = 'point' | 'flex' | 'sky';
-const KINDS: EntranceKind[] = ['point', 'flex', 'sky'];
-export function entranceKinds(p1: string, p2: string): { p1: EntranceKind; p2: EntranceKind } {
-  const a = hash(p1) % KINDS.length;
-  let b = hash(p2) % KINDS.length;
-  if (b === a) b = (b + 1) % KINDS.length;
-  return { p1: KINDS[a], p2: KINDS[b] };
+/** The signature action each fighter does in their shot (walkoutPose.ts). */
+export const SIGNATURES = ['shadowbox', 'knuckles', 'neckroll', 'beckon', 'chestpound', 'gloves', 'flex'] as const;
+export type Signature = (typeof SIGNATURES)[number];
+
+/** Each fighter's signature, picked from their name (both laptops agree), never the same one for both. */
+export function signatures(p1: string, p2: string): { p1: Signature; p2: Signature } {
+  const n = SIGNATURES.length;
+  const a = hash(p1) % n;
+  let b = hash(p2) % n;
+  if (b === a) b = (b + 1) % n;
+  return { p1: SIGNATURES[a], p2: SIGNATURES[b] };
 }
 
 function hash(s: string) {

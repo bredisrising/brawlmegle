@@ -1,9 +1,8 @@
 import * as THREE from 'three';
 
 /**
- * The walkout's fire: a burning pillar around a fighter (flame sheets that always face the camera), a glow on the
- * floor, and embers drifting up; plus the full-screen flame wipe between shots. All additive and HDR, so the bloom
- * makes them burn. Presentation only.
+ * The walkout's stage: fire (cel-shaded flame sheets that always face the camera, a floor glow, embers) for the VS
+ * burst, the night stage (dome, spotlights and beams, haze, motes) and the burning VS letters. Presentation only.
  */
 
 const NOISE = /* glsl */ `
@@ -269,85 +268,280 @@ export class Fire {
   }
 }
 
-/** The flame wipe: a wall of fire that sweeps across the screen, holds it for the cut, and burns away. */
-const WIPE_FRAG = /* glsl */ `
-varying vec2 vUv;
-uniform float uIn, uOut, uDir, uTime, uAspect;
-uniform vec3 uHot, uMid, uCool, uTint;
+
+/**
+ * Night falls on the stage for the walkout: a dark dome around the arena with neon strips along its horizon, a
+ * spotlight on each fighter (with a visible beam through the haze), slow beams sweeping the back, haze drifting over the floor and dust motes hanging in the light. The arena's own
+ * lights are dimmed while it's up (the director does that). `amount` 0..1 fades it all.
+ */
+const DOME_FRAG = /* glsl */ `
+varying vec3 vDir;
+uniform float uTime, uAmount;
 ${NOISE}
 void main() {
-  vec2 uv = vUv;
-  float x = uDir > 0.0 ? uv.x : 1.0 - uv.x;
-  // A slanted front, ragged with turbulence that races along it.
-  float t = floor(uTime * 12.0) / 12.0;
-  vec2 q = vec2(uv.x * uAspect * 4.0, uv.y * 4.0 - t * 2.6);
-  float n = fbm(q + fbm(q * 2.1 + t * 1.3));
-  float front = x + (uv.y - 0.5) * 0.4 + (n - 0.5) * 0.55;
-  float cover = 1.0 - smoothstep(-0.12, 0.12, front - (uIn * 1.9 - 0.45));
-  float gone = smoothstep(-0.12, 0.12, front - (uOut * 1.9 - 0.45));
-  float m = cover * (1.0 - (1.0 - gone) * step(0.0001, uOut));
-  if (m <= 0.002) discard;
-  // Cel-shaded bands like the flames: a dark ragged rim in the player's color, then red, orange, a hot core.
-  float heat = m * (0.25 + 1.0 * n);
-  vec3 col = heat < 0.3 ? uTint : heat < 0.55 ? uCool : heat < 0.8 ? uMid : uHot;
-  gl_FragColor = vec4(col, smoothstep(0.0, 0.04, m));
+  vec3 d = normalize(vDir);
+  float az = atan(d.x, d.z);
+  float h = d.y;
+  // Near black, a dim violet haze at the horizon.
+  vec3 col = mix(vec3(0.012, 0.012, 0.022), vec3(0.06, 0.035, 0.09), exp(-abs(h - 0.04) * 9.0));
+  // Neon strips: short bars at a few heights around the back, teal and magenta, bright enough to bloom.
+  float seg = fract(az * 2.2 + 0.3);
+  float bar1 = smoothstep(0.004, 0.0, abs(h - 0.16)) * step(0.15, seg) * step(seg, 0.55);
+  float bar2 = smoothstep(0.004, 0.0, abs(h - 0.27)) * step(0.6, fract(az * 1.7)) * step(fract(az * 1.7), 0.85);
+  float bar3 = smoothstep(0.003, 0.0, abs(h - 0.09)) * step(0.7, fract(az * 3.1 + 0.5));
+  col += vec3(0.1, 1.6, 1.5) * bar1 + vec3(1.7, 0.15, 1.2) * bar2 + vec3(0.2, 1.2, 1.4) * bar3 * 0.7;
+  // Faint crowd glow: a band of noise under the strips, like phone lights and silhouettes.
+  float crowd = smoothstep(0.08, 0.0, abs(h - 0.02)) * (0.4 + 0.6 * noise(vec2(az * 40.0, floor(uTime * 6.0))));
+  col += vec3(0.08, 0.06, 0.1) * crowd;
+  gl_FragColor = vec4(col * uAmount, 1.0);
+}
+`;
+const DOME_VERT = /* glsl */ `
+varying vec3 vDir;
+void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
+`;
+
+/** A cone of light through the haze: brightest near the lamp and along the axis, fading out at the edges. */
+const BEAM_FRAG = /* glsl */ `
+varying vec2 vUv;
+varying vec3 vNormalV, vViewV;
+uniform vec3 uColor;
+uniform float uAmount, uTime;
+void main() {
+  float along = vUv.y; // 1 at the lamp (the tip), 0 at the far end
+  float edge = pow(abs(dot(normalize(vNormalV), normalize(vViewV))), 1.5);
+  float flicker = 0.92 + 0.08 * sin(uTime * 7.0 + along * 5.0);
+  float a = edge * smoothstep(0.0, 0.5, along) * (0.35 + 0.65 * along) * uAmount * flicker;
+  gl_FragColor = vec4(uColor * a, a);
+}
+`;
+const BEAM_VERT = /* glsl */ `
+varying vec2 vUv;
+varying vec3 vNormalV, vViewV;
+void main() {
+  vUv = uv;
+  vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  vNormalV = normalMatrix * normal;
+  vViewV = -mv.xyz;
+  gl_Position = projectionMatrix * mv;
 }
 `;
 
-export class FlameWipe {
+/** Haze: a soft sheet of drifting smoke. */
+const HAZE_FRAG = /* glsl */ `
+varying vec2 vUv;
+uniform float uTime, uAmount, uSeed;
+uniform vec3 uColor;
+${NOISE}
+void main() {
+  vec2 q = vUv * vec2(3.0, 1.5) + vec2(uTime * 0.05 + uSeed, uSeed);
+  float n = fbm(q + fbm(q * 1.5 - uTime * 0.03));
+  float fade = smoothstep(0.0, 0.3, vUv.x) * smoothstep(1.0, 0.7, vUv.x) * smoothstep(0.0, 0.25, vUv.y) * smoothstep(1.0, 0.4, vUv.y);
+  float a = smoothstep(0.35, 0.9, n) * fade * uAmount * 0.32;
+  gl_FragColor = vec4(uColor * a, a);
+}
+`;
+
+export class Stage {
+  readonly group = new THREE.Group();
+  /** 0 = gone, 1 = up. */
+  amount = 0;
+  readonly spots: THREE.SpotLight[] = [];
+  /** The spotlights: always in the scene, at zero when the stage is down (see the constructor). */
+  readonly lights = new THREE.Group();
+  private readonly beams: { mesh: THREE.Mesh; material: THREE.ShaderMaterial; sweep: number }[] = [];
+  private readonly hazes: { mesh: THREE.Mesh; material: THREE.ShaderMaterial }[] = [];
+  private readonly dome: THREE.Mesh;
+  private readonly domeMaterial: THREE.ShaderMaterial;
+  private readonly motes: THREE.Points;
+  private readonly moteMaterial: THREE.PointsMaterial;
+  private readonly geometries: THREE.BufferGeometry[] = [];
+  private time = 0;
+  private readonly spotPower = 6.5;
+
+  constructor(lowPower: boolean) {
+    this.group.visible = false;
+    this.domeMaterial = new THREE.ShaderMaterial({
+      vertexShader: DOME_VERT,
+      fragmentShader: DOME_FRAG,
+      uniforms: { uTime: { value: 0 }, uAmount: { value: 0 } },
+      side: THREE.BackSide,
+    });
+    const domeGeometry = new THREE.SphereGeometry(11, 48, 24);
+    this.geometries.push(domeGeometry);
+    this.dome = new THREE.Mesh(domeGeometry, this.domeMaterial);
+    this.group.add(this.dome);
+
+    const beamGeometry = new THREE.CylinderGeometry(0.0, 1, 1, 32, 1, true).translate(0, -0.5, 0);
+    this.geometries.push(beamGeometry);
+    const beam = (color: THREE.ColorRepresentation, intensity: number, sweep: number) => {
+      const material = new THREE.ShaderMaterial({
+        vertexShader: BEAM_VERT,
+        fragmentShader: BEAM_FRAG,
+        uniforms: { uColor: { value: hdr(color, intensity) }, uAmount: { value: 0 }, uTime: { value: 0 } },
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+      });
+      const mesh = new THREE.Mesh(beamGeometry, material);
+      mesh.renderOrder = 3;
+      this.group.add(mesh);
+      this.beams.push({ mesh, material, sweep });
+      return mesh;
+    };
+    for (let i = 0; i < 2; i++) {
+      // Key light from high in front, a little to the outside; its beam is drawn too. The lights stay in the scene
+      // (dark) between walkouts: adding or removing a light recompiles every lit material, a long hitch. No shadows
+      // for the same reason (the fighters' rim shader already separates them from the dark).
+      const spot = new THREE.SpotLight('#fff2dc', 0, 7, 0.32, 0.75, 1.1);
+      this.lights.add(spot, spot.target);
+      this.spots.push(spot);
+      beam('#ffe9c8', 0.16, 0);
+    }
+    // Background beams sweeping slowly through the haze.
+    if (!lowPower) {
+      beam('#5ee8ff', 0.09, 1).position.set(-1.6, 3.4, -3.2);
+      beam('#ff2d95', 0.09, -1).position.set(1.7, 3.4, -3.4);
+      beam('#b9a8ff', 0.07, 0.6).position.set(0.1, 3.6, -4.2);
+    }
+    // Haze low over the floor, around and behind the fighters.
+    const hazeGeometry = new THREE.PlaneGeometry(1, 1);
+    this.geometries.push(hazeGeometry);
+    const hazeAt: [number, number, number, number, number][] = lowPower
+      ? [[0, 0.3, -0.9, 4, 1.2]]
+      : [[0, 0.3, -0.9, 4.5, 1.3], [-0.9, 0.2, -0.3, 2.4, 0.7], [1.0, 0.25, -0.4, 2.6, 0.8], [0.2, 0.55, -2.0, 6, 2]];
+    hazeAt.forEach(([x, y, z, w, h], i) => {
+      const material = new THREE.ShaderMaterial({
+        vertexShader: VERT,
+        fragmentShader: HAZE_FRAG,
+        uniforms: { uTime: { value: 0 }, uAmount: { value: 0 }, uSeed: { value: i * 3.1 }, uColor: { value: new THREE.Color('#8f86b8') } },
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
+      const mesh = new THREE.Mesh(hazeGeometry, material);
+      mesh.position.set(x, y, z);
+      mesh.scale.set(w, h, 1);
+      mesh.renderOrder = 2;
+      this.group.add(mesh);
+      this.hazes.push({ mesh, material });
+    });
+    // Dust motes hanging in the light.
+    const n = lowPower ? 120 : 400;
+    const pos = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) pos.set([(Math.random() - 0.5) * 2.4, Math.random() * 1.6, (Math.random() - 0.6) * 1.8], i * 3);
+    const moteGeometry = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    this.geometries.push(moteGeometry);
+    this.moteMaterial = new THREE.PointsMaterial({ color: '#ffe8c8', size: 0.006, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
+    this.motes = new THREE.Points(moteGeometry, this.moteMaterial);
+    this.group.add(this.motes);
+  }
+
+  /** Aim fighter `i`'s spotlight, beam and rim at `at` (their feet). */
+  aim(i: number, at: THREE.Vector3) {
+    const spot = this.spots[i];
+    const side = i === 0 ? -1 : 1;
+    spot.position.set(at.x + side * 0.35, 2.3, at.z + 1.0);
+    spot.target.position.set(at.x, 0.35, at.z);
+    const beam = this.beams[i].mesh;
+    beam.position.copy(spot.position);
+    const dir = new THREE.Vector3().subVectors(spot.target.position, spot.position);
+    const len = dir.length() + 0.4;
+    beam.scale.set(Math.tan(0.24) * len, len, Math.tan(0.24) * len);
+    beam.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), dir.normalize());
+  }
+
+  update(dt: number, camera: THREE.Camera) {
+    this.time += dt;
+    const k = this.amount;
+    this.group.visible = k > 0.001;
+    for (const s of this.spots) s.intensity = this.spotPower * k;
+    if (!this.group.visible) return;
+    this.dome.position.copy(camera.position).setY(0);
+    this.domeMaterial.uniforms.uTime.value = this.time;
+    this.domeMaterial.uniforms.uAmount.value = k;
+    for (const b of this.beams) {
+      b.material.uniforms.uAmount.value = k;
+      b.material.uniforms.uTime.value = this.time;
+      if (b.sweep) {
+        const a = Math.sin(this.time * 0.35 * Math.abs(b.sweep) + b.sweep) * 0.5;
+        b.mesh.rotation.set(0.25 + 0.1 * Math.sin(this.time * 0.5), 0, a);
+        b.mesh.scale.set(0.8, 5, 0.8);
+      }
+    }
+    for (const h of this.hazes) {
+      h.material.uniforms.uTime.value = this.time;
+      h.material.uniforms.uAmount.value = k;
+      h.mesh.quaternion.copy(camera.quaternion);
+    }
+    this.moteMaterial.opacity = 0.7 * k;
+    this.motes.rotation.y = this.time * 0.02;
+    this.motes.position.y = Math.sin(this.time * 0.3) * 0.02;
+  }
+
+  dispose() {
+    this.group.removeFromParent();
+    for (const g of this.geometries) g.dispose();
+    this.domeMaterial.dispose();
+    this.moteMaterial.dispose();
+    for (const b of this.beams) b.material.dispose();
+    for (const h of this.hazes) h.material.dispose();
+    for (const s of this.spots) s.dispose();
+    this.lights.removeFromParent();
+  }
+}
+
+/** The fire VS: big burning letters standing in the stage behind the fighters, slammed in at the end of the walkout. */
+export class VsSign {
   readonly mesh: THREE.Mesh;
-  private readonly material: THREE.ShaderMaterial;
+  private readonly material: THREE.MeshBasicMaterial;
+  private readonly texture: THREE.CanvasTexture;
+  private drawn = false;
 
   constructor() {
-    this.material = new THREE.ShaderMaterial({
-      vertexShader: VERT,
-      fragmentShader: WIPE_FRAG,
-      uniforms: {
-        uIn: { value: 0 },
-        uOut: { value: 0 },
-        uDir: { value: 1 },
-        uTime: { value: 0 },
-        uAspect: { value: 1.6 },
-        uHot: { value: hdr('#ffe27a', 1.1) },
-        uMid: { value: hdr('#ff7a1a', 0.9) },
-        uCool: { value: hdr('#c4161c', 0.8) },
-        uTint: { value: hdr('#ff2d95', 1.2) },
-      },
-      transparent: true,
-      depthTest: false,
-      depthWrite: false,
-    });
-    this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.material);
-    this.mesh.renderOrder = 100;
-    this.mesh.frustumCulled = false;
+    const canvas = document.createElement('canvas');
+    canvas.width = 1024;
+    canvas.height = 512;
+    this.texture = new THREE.CanvasTexture(canvas);
+    this.texture.colorSpace = THREE.SRGBColorSpace;
+    // HDR tint: the letters bloom like they're burning.
+    this.material = new THREE.MeshBasicMaterial({ map: this.texture, transparent: true, depthWrite: false, color: new THREE.Color(1.5, 1.25, 1.0), toneMapped: true });
+    this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.8), this.material);
     this.mesh.visible = false;
+    this.mesh.renderOrder = 10; // after the fire behind it
   }
 
-  /** `cover` 0..1 sweeps it in, `uncover` 0..1 burns it away; `dir` 1 sweeps left to right. */
-  set(cover: number, uncover: number, dir: 1 | -1, time: number, tint: THREE.ColorRepresentation) {
-    const u = this.material.uniforms;
-    u.uIn.value = cover;
-    u.uOut.value = uncover;
-    u.uDir.value = dir;
-    u.uTime.value = time;
-    (u.uTint.value as THREE.Color).copy(hdr(tint, 0.9));
-    this.mesh.visible = cover > 0 && uncover < 1;
-  }
-
-  /** Glue it over the camera's view (call after the camera moved). */
-  fit(camera: THREE.PerspectiveCamera) {
-    const d = camera.near * 1.5;
-    const h = 2 * d * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
-    this.mesh.position.copy(camera.position);
-    this.mesh.quaternion.copy(camera.quaternion);
-    this.mesh.translateZ(-d);
-    this.mesh.scale.set(h * camera.aspect * 1.02, h * 1.02, 1);
-    this.material.uniforms.uAspect.value = camera.aspect;
+  /** Paint the letters (once the graffiti font is ready: call again later and it repaints). */
+  draw() {
+    if (this.drawn) return;
+    const canvas = this.texture.image as HTMLCanvasElement;
+    const g = canvas.getContext('2d');
+    if (!g) return;
+    const font = '400 400px "Rubik Wet Paint", "Archivo Black", sans-serif';
+    const ready = typeof document !== 'undefined' && document.fonts?.check?.(font);
+    g.clearRect(0, 0, canvas.width, canvas.height);
+    g.font = font;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    const fill = g.createLinearGradient(0, 80, 0, 440);
+    fill.addColorStop(0, '#fff6c8');
+    fill.addColorStop(0.45, '#ffc21a');
+    fill.addColorStop(1, '#ff4a1a');
+    g.lineJoin = 'round';
+    g.lineWidth = 26;
+    g.strokeStyle = '#2a0805';
+    g.strokeText('VS', 512, 270);
+    g.fillStyle = fill;
+    g.fillText('VS', 512, 270);
+    this.texture.needsUpdate = true;
+    this.drawn = !!ready;
   }
 
   dispose() {
     this.mesh.removeFromParent();
     this.mesh.geometry.dispose();
     this.material.dispose();
+    this.texture.dispose();
   }
 }

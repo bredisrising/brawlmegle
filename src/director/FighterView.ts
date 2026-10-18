@@ -204,6 +204,12 @@ export class FighterView {
     this.reveal.value = -0.05;
   }
 
+  /** Finish any materialize-in now (a cutscene takes over the entrance). */
+  settle() {
+    this.revealT = -1;
+    this.reveal.value = 100;
+  }
+
   /** Back to a fresh fighter (rematch). */
   reset() {
     this.wonTime = 0;

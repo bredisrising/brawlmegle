@@ -1,11 +1,6 @@
 @import "tailwindcss";
 
-/* The walkout's graffiti type, bundled (subset to Latin): Permanent Marker (Apache 2.0), Rubik Wet Paint (OFL). */
-@font-face {
-  font-family: "Permanent Marker";
-  src: url("./assets/fonts/permanent-marker.woff2") format("woff2");
-  font-display: block;
-}
+/* The walkout's fire VS lettering, bundled (subset to Latin): Rubik Wet Paint (OFL). */
 @font-face {
   font-family: "Rubik Wet Paint";
   src: url("./assets/fonts/rubik-wet-paint.woff2") format("woff2");
@@ -15,7 +10,6 @@
 @theme {
   --font-display: "Archivo Black", "Arial Black", system-ui, sans-serif;
   --font-sans: "Archivo", system-ui, sans-serif;
-  --font-brush: "Permanent Marker", "Archivo Black", system-ui, sans-serif;
   --font-drip: "Rubik Wet Paint", "Archivo Black", system-ui, sans-serif;
 
   --color-ink: #0b0b0d;

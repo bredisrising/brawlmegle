@@ -7,7 +7,7 @@ import { Sfx } from '../director/Sfx';
 import { Announcer } from '../director/Announcer';
 import { Fireballs } from '../director/Fireballs';
 import { Walkout } from '../director/Walkout';
-import { ROUND_CALL_SECONDS, WALKOUT_SECONDS } from '../director/walkoutTiming';
+import { ROUND_CALL_SECONDS } from '../director/walkoutTiming';
 import { Cpu, type CpuLevel, type CpuOutput } from '../fight/Cpu';
 import { FightEngine } from '../fight/FightEngine';
 import { Resolver } from '../fight/Resolver';
@@ -343,7 +343,7 @@ export class Game {
   private skipWalkout() {
     const { phase, countdown } = useGameStore.getState();
     if (this.client || phase !== 'countdown' || countdown !== COUNTDOWN_FROM) return;
-    this.phaseTimer = WALKOUT_SECONDS;
+    this.phaseTimer = Infinity;
   }
 
   /** The local player chose not to wait for their forge (see setupPlayer). */
@@ -534,7 +534,7 @@ export class Game {
     this.phaseTimer += SIM_DT;
 
     // The first beat is the walkout, then ROUND 1, then FIGHT.
-    if (phase === 'countdown' && this.phaseTimer >= (countdown === COUNTDOWN_FROM ? (this.walkout.hold === null ? WALKOUT_SECONDS : Infinity) : ROUND_CALL_SECONDS)) {
+    if (phase === 'countdown' && this.phaseTimer >= (countdown === COUNTDOWN_FROM ? this.walkout.length : ROUND_CALL_SECONDS)) {
       this.phaseTimer = 0;
       const next = (countdown ?? 1) - 1;
       useGameStore.setState(next <= 0 ? { phase: 'fighting', countdown: 0 } : { countdown: next });

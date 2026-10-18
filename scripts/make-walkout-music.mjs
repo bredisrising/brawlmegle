@@ -2,6 +2,11 @@
 // of a fighting-game walkout, never Capcom's tracks. Needs ELEVENLABS_API_KEY in the repo root .env (never printed).
 //   node scripts/make-walkout-music.mjs <outDir> [takes=3]
 // Writes <outDir>/take-<n>-<plan>.mp3. Listen-check, trim the pick (ffmpeg) and ship it as public/walkout/walkout.mp3.
+// The shipped track is a take-1-plan: its groove lands 2.60 s in at 92 bpm (bars of 2.61 s) and it stops dead on a
+// bar line at 13.04 s. Started 0.9 s in, with one bar (7.82-10.43 s) cut out on the downbeats, its hits fall on the
+// default beats in director/walkoutTiming.ts (groove at 1.71, bars at 4.32 and 6.93, snare roll 8.25, stop 9.55):
+//   ffmpeg -i take.mp3 -filter_complex "[0]atrim=0.9:7.84,asetpts=PTS-STARTPTS[a];[0]atrim=10.41:13.9,
+//     asetpts=PTS-STARTPTS[b];[a][b]acrossfade=d=0.02,afade=t=in:d=0.3,afade=t=out:st=9.75:d=0.2" -b:a 128k walkout.mp3
 import fs from "node:fs";
 import path from "node:path";
 
@@ -23,32 +28,35 @@ const out = path.resolve(process.argv[2] ?? "walkout-takes");
 const takes = Number(process.argv[3] ?? 3);
 fs.mkdirSync(out, { recursive: true });
 
+// The entrance scene (~10 s, see director/walkoutTiming.ts): a dark intro while the stage is shown, a heavy groove that
+// lands as fighter 1's shot starts (one bar each fighter at ~92 bpm), a snare build for the face-off, one big hit for
+// the fire VS and a hard stop for ROUND 1.
 const STYLE = [
-  "hype fighting game walkout theme",
-  "aggressive hip-hop funk rock fusion",
-  "slap bass, distorted power chords, brass stabs, record scratches",
-  "hard boom bap drums, 140 bpm, arena energy",
+  "fighting game character entrance theme",
+  "heavy hip-hop funk rock fusion, swaggering",
+  "slap bass, distorted guitar, brass stabs, record scratches",
+  "hard boom bap drums, 92 bpm, arena energy",
   "instrumental",
 ];
-const AVOID = ["vocals", "singing", "rap verse", "ambient", "slow", "lo-fi", "orchestral only", "fade in"];
+const AVOID = ["vocals", "singing", "rap verse", "lo-fi", "orchestral only", "fade in", "fast tempo"];
 
-/** The plans: a 3 s build (riser, snare roll) into a big drop, then the riff that rides it, then a hard stop stinger. */
 const PLANS = {
   plan: {
     positive_global_styles: STYLE,
     negative_global_styles: AVOID,
     sections: [
-      { section_name: "Build", positive_local_styles: ["tension riser", "snare roll accelerating", "reverse cymbal", "bass drone", "crowd noise"], negative_local_styles: ["full drums"], duration_ms: 3000, lines: [] },
-      { section_name: "Drop", positive_local_styles: ["huge drop on the downbeat", "full band hits", "slap bass riff", "brass stabs on every bar", "heavy kick and snare"], negative_local_styles: ["quiet", "build up"], duration_ms: 4000, lines: [] },
-      { section_name: "Stinger", positive_local_styles: ["band hits a final stab", "big cymbal crash", "hard stop then silence"], negative_local_styles: ["new melody", "fade out"], duration_ms: 3000, lines: [] },
+      { section_name: "Stage", positive_local_styles: ["dark tense intro", "low synth drone", "distant arena crowd", "single heartbeat kick", "reverse cymbal swell into the downbeat"], negative_local_styles: ["full drums", "melody"], duration_ms: 3000, lines: [] },
+      { section_name: "Groove", positive_local_styles: ["heavy groove hits hard on the downbeat", "slap bass riff", "boom bap drums", "brass stab on the first beat of every bar", "swagger"], negative_local_styles: ["quiet", "build up"], duration_ms: 5200, lines: [] },
+      { section_name: "Build", positive_local_styles: ["snare roll building", "rising guitar", "tension", "crowd rising"], negative_local_styles: ["drop"], duration_ms: 3000, lines: [] },
+      { section_name: "Hit", positive_local_styles: ["one huge band hit with explosion", "big cymbal crash", "hard stop then silence"], negative_local_styles: ["new melody", "fade out", "groove"], duration_ms: 3000, lines: [] },
     ],
   },
 };
 const PROMPT =
-  "An original, hard-hitting fighting-game player walkout jingle, 10 seconds. Hip-hop / funk / rock fusion: slap bass, " +
-  "distorted guitar power chords, brass stabs, record scratches, punchy boom-bap drums, 140 bpm. It opens on a short " +
-  "tense riser and snare roll, then a HUGE drop with the whole band hitting at about 2 seconds, a swaggering riff with " +
-  "stabs on every bar, and ends on one big final stab and cymbal crash. Instrumental, no vocals, arena energy.";
+  "An original fighting-game character entrance theme, 14 seconds. Starts dark: a low drone, distant crowd and a lone " +
+  "kick for 3 seconds, then a heavy 92 bpm hip-hop / funk / rock groove hits on the downbeat (slap bass, boom-bap drums, " +
+  "brass stabs, distorted guitar) for two bars, then a snare roll builds for a bar, then one huge band hit and cymbal " +
+  "crash and a hard stop. Instrumental, no vocals, arena energy.";
 
 async function compose(body, file) {
   const res = await fetch("https://api.elevenlabs.io/v1/music?output_format=mp3_44100_128", {
@@ -71,6 +79,6 @@ for (let i = start; i < start + takes; i++) {
   const prompt = path.join(out, `take-${i}-prompt.mp3`);
   await Promise.all([
     fs.existsSync(plan) ? null : compose({ composition_plan: PLANS.plan, model_id: "music_v1" }, plan),
-    fs.existsSync(prompt) ? null : compose({ prompt: PROMPT, music_length_ms: 10000, force_instrumental: true, model_id: "music_v1" }, prompt),
+    fs.existsSync(prompt) ? null : compose({ prompt: PROMPT, music_length_ms: 14000, force_instrumental: true, model_id: "music_v1" }, prompt),
   ]);
 }
