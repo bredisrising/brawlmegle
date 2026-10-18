@@ -38,8 +38,11 @@ const EXT_WEIGHT = 0.6;
 const EXT_DEADBAND = 0.1;
 const LIMB_NAMES = Object.keys(LIMBS) as LimbName[];
 
-/** Tip and middle joint relative to the limb root, plus (arms) how open the elbow is, scaled by EXT_WEIGHT. */
-type Pair = { tip: Vec3; mid: Vec3; ext: number };
+/**
+ * Tip and middle joint relative to the limb root, plus (arms) how open the elbow is, scaled by EXT_WEIGHT, and
+ * (arms) where the head is relative to the same shoulder.
+ */
+type Pair = { tip: Vec3; mid: Vec3; ext: number; head: Vec3 };
 type LimbState = {
   phase: 'idle' | 'onset' | 'recover';
   /** Usual position (guard or relaxed); "back near rest" means ready to strike again. */
@@ -122,8 +125,8 @@ export class IntentReader {
   private lastCore: Record<'jump' | 'duck' | 'dodge', number> = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
   /** A head move must hold for two frames in a row: one-frame tracking glitches throw the whole skeleton around. */
   private pendingCore: Record<'jump' | 'duck' | 'dodge', number> = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
-  /** Last time each arm threw (or started throwing) a strike. Punching moves the head; that isn't a dodge or a duck. */
-  private lastArmStrike = -Infinity;
+  /** Last time each arm was throwing a strike. Punching moves the head; that isn't a dodge or a duck. */
+  private lastArmStrike: Record<'armL' | 'armR', number> = { armL: -Infinity, armR: -Infinity };
   private guardSince: number | null = null;
   private guardUp = false;
   private stance: Stance;
@@ -229,13 +232,22 @@ export class IntentReader {
     const side = name === 'armL' ? 'L' : 'R';
     const ext = legs ? 0 : (body.elbow[side] / 90) * EXT_WEIGHT;
     const extV = legs ? 0 : (body.elbow[side === 'L' ? 'vL' : 'vR'] / 90) * EXT_WEIGHT;
-    const now: Pair = { tip: relOf(tipPt), mid: relOf(midPt), ext };
-    const vel = { tip: velOf(tipPt), mid: velOf(midPt) };
+    const nosePt = body.points[LM.nose];
+    const head = legs ? ZERO : { x: nosePt.p.x - root.p.x, y: nosePt.p.y - root.p.y, z: 0 };
+    const now: Pair = { tip: relOf(tipPt), mid: relOf(midPt), ext, head };
     if (!s.rest) s.rest = clonePair(now);
     if (!s.anchor) s.anchor = clonePair(now);
+    // A hand held up in guard rides along with the head: when the torso twists or leans (throwing the other hand,
+    // slipping, ducking), that isn't this hand punching. So a guard hand's travel is measured against the head.
+    const restFace = Math.hypot(s.rest.tip.x - s.rest.head.x, s.rest.tip.y - s.rest.head.y);
+    const guardHand = legs ? 0 : clamp((1.6 * this.config.guard.radius - restFace) / (0.6 * this.config.guard.radius), 0, 1);
+    const tipTravel = (a: Pair, b: Pair): Vec3 => ({ x: a.tip.x - b.tip.x - guardHand * (a.head.x - b.head.x), y: a.tip.y - b.tip.y - guardHand * (a.head.y - b.head.y), z: a.tip.z - b.tip.z });
+    const headVel = legs ? ZERO : { x: nosePt.vf.x - root.vf.x, y: nosePt.vf.y - root.vf.y, z: 0 };
+    const tipVel = velOf(tipPt);
+    const vel = { tip: { x: tipVel.x - guardHand * headVel.x, y: tipVel.y - guardHand * headVel.y, z: tipVel.z }, mid: velOf(midPt) };
 
     // Travel since the last pause, tip and middle joint together.
-    const tTip = sub(now.tip, s.anchor.tip);
+    const tTip = tipTravel(now, s.anchor);
     const tMid = sub(now.mid, s.anchor.mid);
     // Only opening the elbow counts (bending it back is a retraction).
     const tExt = Math.max(0, now.ext - s.anchor.ext - EXT_DEADBAND);
@@ -244,15 +256,14 @@ export class IntentReader {
     // Resting is judged on the smooth channel: the fast one is too jittery to ever look still.
     const smoothV = (p: BodyPoint) => Math.hypot(p.v.x - root.v.x, p.v.y - root.v.y);
     const speed = Math.hypot(smoothV(tipPt), MID_WEIGHT * smoothV(midPt));
-    const restDisp = Math.hypot(len(sub(now.tip, s.rest.tip)), MID_WEIGHT * len(sub(now.mid, s.rest.mid)), Math.abs(now.ext - s.rest.ext));
-    const nose = body.points[LM.nose].p;
-    if (!legs && Math.hypot(tipPt.p.x - nose.x, tipPt.p.y - nose.y) < this.config.guard.radius) s.nearFaceAt = t;
+    const restDisp = Math.hypot(len(tipTravel(now, s.rest)), MID_WEIGHT * len(sub(now.mid, s.rest.mid)), Math.abs(now.ext - s.rest.ext));
+    if (!legs && Math.hypot(tipPt.p.x - nosePt.p.x, tipPt.p.y - nosePt.p.y) < this.config.guard.radius) s.nearFaceAt = t;
     if (!legs && vel.tip.y > 1.0) s.risingAt = t;
     const retracting = restDisp < s.lastRestDisp - 0.004;
     s.lastRestDisp = restDisp;
     s.disp = disp;
     s.out = outward;
-    s.history.push({ t, d: sub(now.tip, s.rest.tip) });
+    s.history.push({ t, d: tipTravel(now, s.rest) });
     while (s.history.length && t - s.history[0].t > 500) s.history.shift();
 
     if (s.phase === 'idle') {
@@ -345,9 +356,9 @@ export class IntentReader {
     // Recover: ready again once the limb comes back near rest, or has clearly pulled back from its furthest
     // point (a combo: the next punch starts before the hand gets home), or after a timeout.
     const ext0 = s.extended ?? now;
-    const fromAnchor = (q: Pair) => Math.hypot(len(sub(q.tip, s.anchor!.tip)), MID_WEIGHT * len(sub(q.mid, s.anchor!.mid)), Math.max(0, q.ext - s.anchor!.ext - EXT_DEADBAND));
+    const fromAnchor = (q: Pair) => Math.hypot(len(tipTravel(q, s.anchor!)), MID_WEIGHT * len(sub(q.mid, s.anchor!.mid)), Math.max(0, q.ext - s.anchor!.ext - EXT_DEADBAND));
     if (fromAnchor(now) > fromAnchor(ext0)) s.extended = clonePair(now);
-    const pulledBack = Math.hypot(len(sub(now.tip, s.extended!.tip)), MID_WEIGHT * len(sub(now.mid, s.extended!.mid)), Math.abs(now.ext - s.extended!.ext));
+    const pulledBack = Math.hypot(len(tipTravel(now, s.extended!)), MID_WEIGHT * len(sub(now.mid, s.extended!.mid)), Math.abs(now.ext - s.extended!.ext));
     const home = restDisp < cfg.returnDist;
     if (home || pulledBack > Math.max(cfg.onsetDist, 0.35 * s.peakDisp) || t - s.since > cfg.recoverMs) {
       s.phase = 'idle';
@@ -377,9 +388,11 @@ export class IntentReader {
       this.shoulderRest.x += k * (shoulders.x - this.shoulderRest.x);
       this.shoulderRest.y += k * (shoulders.y - this.shoulderRest.y);
     }
-    // Throwing a punch twists the torso and dips the head. Right after one, a head move has to be bigger to count.
-    for (const n of ['armL', 'armR'] as const) if (this.limbs[n].phase === 'onset') this.lastArmStrike = t;
-    const punching = t - this.lastArmStrike < 300;
+    // Throwing a punch twists the torso and dips the head: a right punch swings the head to the player's left,
+    // a left punch to the right. Around a punch, a head move has to be much bigger to count.
+    for (const n of ['armL', 'armR'] as const) if (this.limbs[n].phase === 'onset') this.lastArmStrike[n] = t;
+    const since = (n: 'armL' | 'armR') => t - this.lastArmStrike[n];
+    const punching = Math.min(since('armL'), since('armR')) < 500;
     /** A head move starts on a frame that passes `start` and counts if the next frame still passes `hold`. */
     const held = (kind: 'jump' | 'duck' | 'dodge', start: boolean, hold: boolean) => {
       if (t - this.pendingCore[kind] <= 150 && hold) return true;
@@ -390,7 +403,7 @@ export class IntentReader {
     // Duck: the head drops, by bending the knees (hips drop) or the waist (head drops toward the hips).
     const headDrop = this.headRest.y - head.y;
     const dropSpeed = -headV.y;
-    const duckK = punching ? 1.4 : 1;
+    const duckK = punching ? 1.6 : 1;
     const dropping = headDrop > cfg.duck.drop * duckK;
     if (held('duck', dropping && dropSpeed > cfg.duck.speed, dropping && dropSpeed > -cfg.duck.speed) && t - this.lastCore.duck > cfg.coreCooldownMs) {
       this.lastCore.duck = t;
@@ -408,7 +421,9 @@ export class IntentReader {
     // Dodge: the head leans sideways, and the shoulders go with it (turning or tilting just the head isn't a slip).
     const lean = head.x - this.headRest.x;
     const shoulderLean = shoulders.x - this.shoulderRest.x;
-    const dodgeK = punching ? 1.6 : 1;
+    // The side a punch throws the head to needs the most, as long as that arm is still out.
+    const thrower = lean > 0 ? 'armR' : 'armL';
+    const dodgeK = this.limbs[thrower].phase !== 'idle' ? 3 : since(thrower) < 500 ? 2.5 : punching ? 1.6 : 1;
     // Not while ducking: a duck usually tilts the head too.
     const leaning = Math.abs(lean) > cfg.dodge.shift * dodgeK && shoulderLean * Math.sign(lean) > 0.2 * Math.abs(lean) && headDrop < cfg.duck.drop * 0.6;
     const leaningFast = leaning && Math.sign(headV.x) === Math.sign(lean) && Math.abs(headV.x) > cfg.dodge.speed;
@@ -596,9 +611,11 @@ function newLimb(): LimbState {
   };
 }
 
-const clonePair = (p: Pair): Pair => ({ tip: { ...p.tip }, mid: { ...p.mid }, ext: p.ext });
+const ZERO: Vec3 = { x: 0, y: 0, z: 0 };
+const clonePair = (p: Pair): Pair => ({ tip: { ...p.tip }, mid: { ...p.mid }, ext: p.ext, head: { ...p.head } });
 const lerpPair = (a: Pair, b: Pair, k: number): Pair => ({
   ext: a.ext + k * (b.ext - a.ext),
+  head: { x: a.head.x + k * (b.head.x - a.head.x), y: a.head.y + k * (b.head.y - a.head.y), z: 0 },
   tip: { x: a.tip.x + k * (b.tip.x - a.tip.x), y: a.tip.y + k * (b.tip.y - a.tip.y), z: a.tip.z + k * (b.tip.z - a.tip.z) },
   mid: { x: a.mid.x + k * (b.mid.x - a.mid.x), y: a.mid.y + k * (b.mid.y - a.mid.y), z: a.mid.z + k * (b.mid.z - a.mid.z) },
 });
