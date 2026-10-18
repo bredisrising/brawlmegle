@@ -8,6 +8,8 @@ import { recordingEnabled, setRecordingEnabled, setVideoEnabled, videoEnabled } 
  * Bottom-right during a match (above the move guide chip): the link to the other laptop (ping, direct or relayed) and a small menu
  * (Esc) to change fighter or go back to the title.
  */
+const PATH_LABEL = { cable: 'Cable', lan: 'LAN', internet: 'P2P', relay: 'Relay' } as const;
+
 export function GameMenu() {
   const game = useGame();
   const role = useGameStore((s) => s.role);
@@ -72,8 +74,8 @@ export function GameMenu() {
           Menu [Esc]
         </button>
         {connection && (
-          <span className={`bg-ink/80 px-3 py-1.5 font-cond text-xs font-bold uppercase tracking-[0.2em] ${tone}`} title="Round trip to the other laptop">
-            {connection === 'reconnecting' ? 'Reconnecting…' : `${link?.relay ? 'Relay' : 'P2P'} ${rtt ?? '–'} ms`}
+          <span className={`bg-ink/80 px-3 py-1.5 font-cond text-xs font-bold uppercase tracking-[0.2em] ${tone}`} title={`Round trip to the other laptop${link?.address ? ` (from ${link.address})` : ''}`}>
+            {connection === 'reconnecting' ? 'Reconnecting…' : `${PATH_LABEL[link?.path ?? 'internet']} ${rtt ?? '–'} ms`}
           </span>
         )}
       </div>

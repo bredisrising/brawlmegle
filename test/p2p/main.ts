@@ -191,6 +191,12 @@ async function runHostPeer() {
     );
   });
 
+  await test('host Peer: link stats name a same-machine path as local (lan or cable), with a round trip', async () => {
+    const stats = await poll(async () => (await host.linkStats()) ?? undefined, 'link stats');
+    console.log(`[p2p] link ${JSON.stringify(stats)}`);
+    assert(stats.path === 'lan' || stats.path === 'cable', `path ${stats.path}`);
+  });
+
   await test("host Peer: client poses reach the host's RemoteSource", async () => {
     for (let t = 0; t < 30; t++) first.peer.send({ type: 'pose', frame: frame(t) });
     await poll(() => frames.length > 0 || undefined, 'remote frames');

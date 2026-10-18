@@ -562,7 +562,7 @@ export class Game {
   private async pollLink() {
     const stats = this.hostSession?.connected ? await this.hostSession.peer.linkStats() : this.client ? await this.client.linkStats() : null;
     const prev = useGameStore.getState().link;
-    if (stats?.rttMs !== prev?.rttMs || stats?.relay !== prev?.relay) useGameStore.setState({ link: stats });
+    if (stats?.rttMs !== prev?.rttMs || stats?.path !== prev?.path) useGameStore.setState({ link: stats });
   }
 
   /**

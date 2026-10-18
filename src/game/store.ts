@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { PLAYER_IDS, type ForgedFighter, type Phase, type PlayerId, type PlayerStatus, type Role } from '../types';
 import { MAX_HP, PLAYER_NAMES } from './constants';
+import type { LinkStats } from '../net/Peer';
 
 /** Popup style. Game maps FightEvents onto these. */
 export type HitKind = 'light' | 'heavy' | 'blocked';
@@ -58,8 +59,8 @@ export interface GameState {
   combo: { player: PlayerId; hits: number; key: number } | null;
   /** What a commentator is saying right now (captions are always on). */
   caption: { voice: 'A' | 'B'; text: string; key: number } | null;
-  /** The P2P link to the other laptop: round trip (ms) and whether it's relayed through TURN. */
-  link: { rttMs: number | null; relay: boolean } | null;
+  /** The P2P link to the other laptop: round trip (ms) and the path (cable, LAN, internet or a TURN relay). */
+  link: LinkStats | null;
   /** This laptop's camera is being recorded for training right now (the REC dot). */
   recordingVideo: boolean;
   /** Training: no opponent fighting back, no clock, health and meter refill. */

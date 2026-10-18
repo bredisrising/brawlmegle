@@ -3,6 +3,8 @@ import type { ChunkMessage, ClientMessage, HostMessage, SignalMessage } from './
 import type { Signaling } from './Signaling';
 import type { Role } from '../types';
 
+export type LinkStats = { rttMs: number | null; relay: boolean; path: 'cable' | 'lan' | 'internet' | 'relay'; address?: string };
+
 type Message = ClientMessage | HostMessage;
 type ChannelName = 'poses' | 'control';
 type Opening = { resolve: () => void; reject: (err: Error) => void };
@@ -94,7 +96,11 @@ export class Peer {
    * Link quality from WebRTC's own stats: round-trip time of the connection in use, and whether it goes through
    * the TURN relay (venue Wi-Fi that blocks direct P2P) or straight between the laptops. Null when not connected.
    */
-  async linkStats(): Promise<{ rttMs: number | null; relay: boolean } | null> {
+  /**
+   * The chosen path to the other laptop: 'cable' (a direct LAN path on an ethernet adapter, e.g. two laptops joined by a
+   * cable with their own IPs), 'lan' (same network), 'internet' (P2P through NAT) or 'relay' (TURN).
+   */
+  async linkStats(): Promise<LinkStats | null> {
     const pc = this.pc;
     if (!pc || !this.connected) return null;
     const report = await pc.getStats();
@@ -103,10 +109,17 @@ export class Peer {
       if (s.type === 'candidate-pair' && (s as RTCIceCandidatePairStats).nominated && (s as RTCIceCandidatePairStats).state === 'succeeded') pair = s as RTCIceCandidatePairStats;
     });
     if (!pair) return null;
-    const local = report.get(pair.localCandidateId) as { candidateType?: string } | undefined;
-    const remote = report.get(pair.remoteCandidateId) as { candidateType?: string } | undefined;
+    type Candidate = { candidateType?: string; address?: string; networkType?: string; networkAdapterType?: string };
+    const local = report.get(pair.localCandidateId) as Candidate | undefined;
+    const remote = report.get(pair.remoteCandidateId) as Candidate | undefined;
     const rtt = pair.currentRoundTripTime;
-    return { rttMs: rtt === undefined ? null : Math.round(rtt * 1000), relay: local?.candidateType === 'relay' || remote?.candidateType === 'relay' };
+    const relay = local?.candidateType === 'relay' || remote?.candidateType === 'relay';
+    // A LAN path sends from this laptop's own address (a 'host' candidate); over the internet it's the NAT's (srflx/prflx).
+    const lan = !relay && local?.candidateType === 'host';
+    const adapter = local?.networkType ?? local?.networkAdapterType ?? '';
+    const cable = lan && (adapter === 'ethernet' || /^169\.254\./.test(local?.address ?? ''));
+    const path = relay ? 'relay' : cable ? 'cable' : lan ? 'lan' : 'internet';
+    return { rttMs: rtt === undefined ? null : Math.round(rtt * 1000), relay, path, address: local?.address };
   }
 
   get connected(): boolean {
