@@ -67,7 +67,8 @@ export function TitleScreen() {
               <MenuItem index="01" label="Host" hint="Run the fight on this screen" color="hover:bg-p1" bar="bg-p1" disabled={busy} onClick={() => run(() => game.host())} delay={100} />
               <MenuItem index="02" label="Connect" hint="Join with a room code" color="hover:bg-p2" bar="bg-p2" disabled={busy} onClick={() => setMode('connect')} delay={180} />
               <MenuItem index="03" label="Practice" hint="Fight the CPU on this screen" color="hover:bg-hp" bar="bg-hp" disabled={busy} onClick={() => run(() => game.practice())} delay={260} />
-              <MenuItem index="04" label="Leaderboard" hint="See every fighter's record" color="hover:bg-paper" bar="bg-paper" disabled={busy} onClick={() => setMode('leaderboard')} delay={340} />
+              <MenuItem index="04" label="Training" hint="Try your moves on a dummy that doesn't fight back" color="hover:bg-hp" bar="bg-hp" disabled={busy} onClick={() => run(() => game.practice('dummy'))} delay={340} />
+              <MenuItem index="05" label="Leaderboard" hint="See every fighter's record" color="hover:bg-paper" bar="bg-paper" disabled={busy} onClick={() => setMode('leaderboard')} delay={420} />
               {/* Dev tools live on the same site (local dev serves them from /test/). */}
               <p className="mt-3 flex gap-5 font-cond text-sm font-bold uppercase tracking-[0.25em] text-paper/45">
                 <span>Tools</span>

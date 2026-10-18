@@ -5,7 +5,7 @@ import { FighterView } from '../director/FighterView';
 import { Sfx } from '../director/Sfx';
 import { Announcer } from '../director/Announcer';
 import { Fireballs } from '../director/Fireballs';
-import { Cpu, type CpuLevel } from '../fight/Cpu';
+import { Cpu, type CpuLevel, type CpuOutput } from '../fight/Cpu';
 import { FightEngine } from '../fight/FightEngine';
 import { Resolver } from '../fight/Resolver';
 import { IntentReader } from '../intent/IntentReader';
@@ -28,6 +28,18 @@ import { HostSession } from './HostSession';
 import { MatchRecorder, recordingEnabled } from './MatchRecorder';
 import { Commentary, TEMPLATES, fill, spoken, type Line } from './Commentary';
 import { localPlayerId, pushPopup, updatePlayer, useGameStore } from './store';
+
+/** What drives a CPU slot: the real CPU, or Training's dummy. */
+type Brain = { think(engine: FightEngine, tick: number): CpuOutput; reset(): void };
+
+/** Training's dummy: stands there with its guard down, never swings, never moves. */
+class Dummy implements Brain {
+  constructor(private readonly player: PlayerId) {}
+  think(): CpuOutput {
+    return { commands: [], stance: { player: this.player, guard: false, advance: 0, lean: { x: 0, y: 0 }, tracked: true } };
+  }
+  reset() {}
+}
 
 /** K.O. replay: ticks kept, ticks shown before and after the K.O., playback speed, and a hold on the end. */
 const REPLAY_KEEP = 240;
@@ -69,14 +81,14 @@ export class Game {
   private readonly views: Record<PlayerId, FighterView>;
   private readonly intent: Record<PlayerId, IntentReader>;
   /** CPU opponents by slot: they play through the same engine commands and stance a player's reader produces. */
-  private readonly cpu: Partial<Record<PlayerId, Cpu>> = {};
+  private readonly cpu: Partial<Record<PlayerId, Brain>> = {};
   private fightTicks = 0;
   /** "Fight now" while a forge runs: ends the wait early (the forged fighter swaps in when it's done). */
   private readonly skipForge: Partial<Record<PlayerId, () => void>> = {};
   /** Bumped per setup, so a late forge never swaps into a slot that has since picked someone else. */
   private readonly setupGen: Record<PlayerId, number> = { p1: 0, p2: 0 };
-  /** Practice mode: the CPU level to bring in for P2 once the local player is ready. */
-  private practiceLevel: CpuLevel | null = null;
+  /** Practice mode: the CPU level to bring in for P2 once the local player is ready ('dummy' = Training). */
+  private practiceLevel: CpuLevel | 'dummy' | null = null;
   /** Seconds left in the round (the store shows it rounded up). */
   private clock = ROUND_SECONDS;
   private hostSession: HostSession | null = null;
@@ -192,8 +204,9 @@ export class Game {
   }
 
   /** Title screen: "Practice". Hosts as usual (a friend can still join), and P2 is a CPU once P1 is ready. */
-  async practice(level: CpuLevel = 'normal') {
+  async practice(level: CpuLevel | 'dummy' = 'normal') {
     this.practiceLevel = level;
+    useGameStore.setState({ training: level === 'dummy' });
     await this.host();
   }
 
@@ -232,7 +245,7 @@ export class Game {
    * Fill a slot with a CPU opponent. It borrows a forged fighter from the server (not the one it's fighting), or
    * the house model without one. A client joining from another laptop takes the slot back (setupPlayer).
    */
-  async addCpuPlayer(id: PlayerId, level: CpuLevel = 'normal') {
+  async addCpuPlayer(id: PlayerId, level: CpuLevel | 'dummy' = 'normal') {
     updatePlayer(id, { name: 'CPU', status: 'forging', statusDetail: 'Picking a fighter' });
     const opponent = useGameStore.getState().players[opponentOf(id)].name.toLowerCase();
     const pool = (await fetchServerFighters(undefined, 10_000)).filter((f) => f.glbUrl && f.name.toLowerCase() !== opponent);
@@ -241,7 +254,7 @@ export class Game {
     const pick = recent[Math.floor(Math.random() * recent.length)];
     const fighter: ForgedFighter = pick ?? { id: 'cpu', name: 'Sparring Bot', status: 'ready', glbUrl: `${import.meta.env.BASE_URL}models/default.glb` };
     this.input.unassign(id);
-    this.cpu[id] = new Cpu(id, level, Math.floor(Math.random() * 1e6));
+    this.cpu[id] = level === 'dummy' ? new Dummy(id) : new Cpu(id, level, Math.floor(Math.random() * 1e6));
     try {
       await this.views[id].setFighter(fighter);
     } catch (err) {
@@ -250,7 +263,8 @@ export class Game {
     }
     this.spawn(id);
     const label = level === 'normal' ? 'CPU' : `CPU ${level}`;
-    updatePlayer(id, { name: `${fighter.name} (${label})`, status: 'ready', statusDetail: '', portraitUrl: fighter.cardUrl ?? null });
+    const shown = level === 'dummy' ? 'Training dummy' : `${fighter.name} (${label})`;
+    updatePlayer(id, { name: shown, status: 'ready', statusDetail: '', portraitUrl: fighter.cardUrl ?? null });
     this.fighters[id] = fighter;
     this.sendMatch();
     const { players } = useGameStore.getState();
@@ -564,6 +578,18 @@ export class Game {
     this.sendMatch();
   }
 
+  /** Training: health never runs out and the meter stays full, so any move can be tried any time. */
+  private refill() {
+    for (const id of PLAYER_IDS) {
+      const s = this.fight.state(id);
+      if (s.hp < 40) {
+        this.fight.heal(id);
+        updatePlayer(id, { hp: MAX_HP });
+      }
+      if (!this.cpu[id] && (s.meter ?? 0) < 100) this.fight.fillMeter(id);
+    }
+  }
+
   /** Drop a pending or running K.O. replay (a rematch, a new round). */
   private stopReplay() {
     this.replayIn = -1;
@@ -580,9 +606,11 @@ export class Game {
     if (perfect) setTimeout(() => this.announcer.bark('perfect', true), 1400);
   }
 
-  /** Round clock: when it runs out, more HP left wins (equal is a draw). */
+  /** Round clock: when it runs out, more HP left wins (equal is a draw). Training has no clock. */
   private tickClock() {
-    if (useGameStore.getState().phase !== 'fighting') return;
+    const { phase, training } = useGameStore.getState();
+    if (phase !== 'fighting') return;
+    if (training) return this.refill();
     this.clock -= SIM_DT;
     const shown = Math.max(0, Math.ceil(this.clock));
     if (shown !== useGameStore.getState().timeLeft) useGameStore.setState({ timeLeft: shown });

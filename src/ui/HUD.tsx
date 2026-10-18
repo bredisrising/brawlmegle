@@ -8,7 +8,8 @@ export function HUD() {
   const phase = useGameStore((s) => s.phase);
   const timeLeft = useGameStore((s) => s.timeLeft);
   const ending = useGameStore((s) => s.ending);
-  const label = phase === 'ko' ? (ending === 'time' ? 'TIME' : 'KO') : phase === 'fighting' && timeLeft !== null ? String(timeLeft) : 'VS';
+  const training = useGameStore((s) => s.training);
+  const label = phase === 'ko' ? (ending === 'time' ? 'TIME' : 'KO') : training && phase === 'fighting' ? '\u221e' : phase === 'fighting' && timeLeft !== null ? String(timeLeft) : 'VS';
   const urgent = phase === 'fighting' && timeLeft !== null && timeLeft <= 10;
   // The K.O. replay is a cutscene: no HUD over it.
   const replay = useGameStore((s) => s.replay);

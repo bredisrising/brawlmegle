@@ -60,6 +60,10 @@ export interface GameState {
   caption: { voice: 'A' | 'B'; text: string; key: number } | null;
   /** The P2P link to the other laptop: round trip (ms) and whether it's relayed through TURN. */
   link: { rttMs: number | null; relay: boolean } | null;
+  /** This laptop's camera is being recorded for training right now (the REC dot). */
+  recordingVideo: boolean;
+  /** Training: no opponent fighting back, no clock, health and meter refill. */
+  training: boolean;
   /** The K.O. replay is playing (the K.O. screen waits for it). */
   replay: boolean;
   /** A big announcer callout ("FIRST ATTACK", "PERFECT"), `key` changes with each. */
@@ -94,6 +98,8 @@ export const useGameStore = create<GameState>(() => ({
   combo: null,
   callout: null,
   replay: false,
+  recordingVideo: false,
+  training: false,
   link: null,
   caption: null,
   lastMove: null,

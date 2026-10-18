@@ -1,4 +1,5 @@
 import { config } from '../config';
+import { useGameStore } from './store';
 import type { Intent } from '../intent/intents';
 import type { FightEvent, PlayerId, PoseFrame } from '../types';
 
@@ -10,7 +11,7 @@ import type { FightEvent, PlayerId, PoseFrame } from '../types';
  * uploaded to /samples/video (saved locally if that fails), so what was really thrown can be checked against what
  * the game read.
  *
- * Off unless turned on (menu toggle, saved in this browser, or `?record=1`).
+ * On by default (pose points only); off with the menu toggle (saved in this browser) or `?record=0`.
  */
 const KEY = 'brawlegle.record';
 
@@ -18,9 +19,33 @@ export function recordingEnabled() {
   const param = new URLSearchParams(window.location.search).get('record');
   if (param !== null) return param !== '0';
   try {
-    return localStorage.getItem(KEY) === '1';
+    return localStorage.getItem(KEY) !== '0';
   } catch {
-    return false;
+    return true;
+  }
+}
+
+const VIDEO_KEY = 'brawlegle.video';
+
+/**
+ * Camera video with the recording: on by default while the team gathers training data (a REC dot shows on screen);
+ * `?video=0` or the menu turns it off. Turn it off before strangers play: their camera isn't covered by a scan's consent.
+ */
+export function videoEnabled() {
+  const param = new URLSearchParams(window.location.search).get('video');
+  if (param !== null) return param !== '0';
+  try {
+    return localStorage.getItem(VIDEO_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+
+export function setVideoEnabled(on: boolean) {
+  try {
+    localStorage.setItem(VIDEO_KEY, on ? '1' : '0');
+  } catch {
+    // Storage blocked: the toggle lasts for this page only.
   }
 }
 
@@ -52,7 +77,7 @@ export class MatchRecorder {
     this.names = { p1: who.p1.name, p2: who.p2.name };
     this.cpu = { p1: who.p1.cpu, p2: who.p2.cpu };
     this.active = true;
-    if (stream && new URLSearchParams(window.location.search).get('video') === '1') this.startVideo(stream);
+    if (stream && videoEnabled()) this.startVideo(stream);
   }
 
   private cpu: Record<PlayerId, boolean> = { p1: false, p2: false };
@@ -110,6 +135,7 @@ export class MatchRecorder {
       recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
       recorder.start(1000);
       this.video = { recorder, chunks };
+      useGameStore.setState({ recordingVideo: true });
     } catch (err) {
       console.warn('[record] video recording unavailable', err);
     }
@@ -119,6 +145,7 @@ export class MatchRecorder {
     const v = this.video;
     if (!v) return;
     this.video = null;
+    useGameStore.setState({ recordingVideo: false });
     const stamp = new Date(this.startedAt).toISOString().replace(/[:.]/g, '-');
     v.recorder.onstop = () => void uploadVideo(new Blob(v.chunks, { type: 'video/webm' }), `brawlmegle-match-${stamp}-p1.webm`);
     v.recorder.stop();
@@ -133,13 +160,14 @@ export class VideoClip {
   private rec: { recorder: MediaRecorder; chunks: Blob[]; started: number } | null = null;
 
   start(stream: MediaStream | null) {
-    if (!stream || this.rec || new URLSearchParams(window.location.search).get('video') !== '1') return;
+    if (!stream || this.rec || !videoEnabled()) return;
     try {
       const recorder = new MediaRecorder(stream, { mimeType: 'video/webm', videoBitsPerSecond: 400_000 });
       const chunks: Blob[] = [];
       recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
       recorder.start(1000);
       this.rec = { recorder, chunks, started: Date.now() };
+      useGameStore.setState({ recordingVideo: true });
     } catch (err) {
       console.warn('[record] video recording unavailable', err);
     }
@@ -149,6 +177,7 @@ export class VideoClip {
     const r = this.rec;
     if (!r) return;
     this.rec = null;
+    useGameStore.setState({ recordingVideo: false });
     const stamp = new Date(r.started).toISOString().replace(/[:.]/g, '-');
     r.recorder.onstop = () => void uploadVideo(new Blob(r.chunks, { type: 'video/webm' }), `brawlmegle-match-${stamp}-${tag}.webm`);
     r.recorder.stop();

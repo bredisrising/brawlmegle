@@ -254,3 +254,39 @@ describe('super meter and fireball', () => {
     expect(evD.find((ev) => ev.move === 'fireball' && (ev.type === 'hit' || ev.type === 'blocked'))).toBeUndefined();
   });
 });
+
+describe('mashing: flailing gets slower and weaker; a clean hit resets it', () => {
+  /** Ticks from a jab's command to its active frame, after `whiffs` jabs thrown into the air in a row. */
+  function jabAfterWhiffs(whiffs: number, land = false) {
+    const e = engineAt(land ? 0.7 : 1.4);
+    // Landing: the dummy blocks (it connects, and the small blockstun push keeps it in range).
+    const p2 = stance('p2', { guard: land });
+    const startOf = () => {
+      for (let i = 0; i < 60; i++) {
+        e.step(i === 0 ? [attack('p1', 'jab', { hand: 'L' })] : [], { p1: stance('p1'), p2 });
+        if (e.state('p1').phase === 'active') return i;
+      }
+      return -1;
+    };
+    const untilIdle = () => {
+      for (let i = 0; i < 90 && e.state('p1').phase !== 'idle'; i++) e.step([], { p1: stance('p1'), p2 });
+    };
+    for (let n = 0; n < whiffs; n++) {
+      startOf();
+      untilIdle(); // free again, still well inside the mash window
+    }
+    untilIdle();
+    return startOf();
+  }
+
+  test('each whiffed swing in quick succession adds startup, up to a cap', () => {
+    const fresh = jabAfterWhiffs(0);
+    expect(jabAfterWhiffs(2)).toBe(fresh + 2 * FIGHT.mashStartup);
+    // Capped (five in a row, not more: by then stamina would run out and tiredness adds its own startup).
+    expect(jabAfterWhiffs(5)).toBe(fresh + FIGHT.mashMax * FIGHT.mashStartup);
+  });
+
+  test('punches that connect never build it up', () => {
+    expect(jabAfterWhiffs(4, true)).toBe(jabAfterWhiffs(0, true));
+  });
+});

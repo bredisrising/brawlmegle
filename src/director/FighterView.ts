@@ -33,6 +33,8 @@ const LIVE_WEIGHT: Record<JointName, number> = {
   lHip: 0.5, rHip: 0.5, lKnee: 0.6, rKnee: 0.6, lAnkle: 0.6, rAnkle: 0.6,
 };
 const LEG_JOINTS = new Set<JointName>(['lKnee', 'rKnee', 'lAnkle', 'rAnkle']);
+const FOLLOW_L = new Set<JointName>(['lShoulder', 'lElbow', 'lWrist']);
+const FOLLOW_R = new Set<JointName>(['rShoulder', 'rElbow', 'rWrist']);
 
 /**
  * How one fighter looks on screen: an arcade fighter, not a puppet. It stands in a fighting stance; moves, hits,
@@ -75,6 +77,8 @@ export class FighterView {
   private duck = 0;
   private slip = 0;
   private tellAt = -1;
+  /** This tick, the striking arm is following the player's real arm (so no coil-back tell on top). */
+  private followingLive = false;
   private tellHand: Hand = 'R';
   private koTime = 0;
   private wonTime = 0;
@@ -195,6 +199,8 @@ export class FighterView {
   anticipate(hand: Hand) {
     this.tellAt = this.time;
     this.tellHand = hand;
+    // Show it on this very frame, not at the next step of the on-twos animation.
+    this.forceStep = true;
   }
 
   /** The reader decided that wind-up wasn't a strike after all: drop the tell now instead of holding it. */
@@ -220,7 +226,8 @@ export class FighterView {
     this.guardAmt = approach(this.guardAmt, guard && free ? 1 : 0, dt, 14);
     this.duck = approach(this.duck, state.evade === 'duck' ? 1 : 0, dt, state.evade === 'duck' ? 22 : 9);
     this.slip = approach(this.slip, state.evade === 'slip' ? (state.evadeDir === 'R' ? -1 : 1) : 0, dt, state.evade === 'slip' ? 22 : 9);
-    if (state.phase !== 'idle' || this.time - this.tellAt > 0.6) this.tellAt = -1;
+    // The tell lasts through the strike's startup (a player's arm keeps following theirs while the engine ramps in).
+    if ((state.phase !== 'idle' && state.phase !== 'startup') || this.time - this.tellAt > 0.6) this.tellAt = -1;
     const wasFalling = this.koTime > 0 && this.koTime < 0.62;
     this.koTime = state.phase === 'ko' ? this.koTime + dt : 0;
     if (wasFalling && this.koTime >= 0.62) this.onLand?.(this.worldJoint('neck').setY(0.02));
@@ -228,6 +235,7 @@ export class FighterView {
     if (state.phase !== 'hitstun') this.hit = null;
 
     stance(this.target, this.time, this.guardAmt, this.step, this.stepPhase, this.id === 'p1' ? 1 : -1);
+    this.followingLive = false;
     if (live) this.blendLive(live);
     applyAction(
       this.target,
@@ -239,7 +247,8 @@ export class FighterView {
         won: this.wonTime,
         duck: this.duck,
         slip: this.slip,
-        tell: this.tellAt < 0 ? 0 : Math.min(1, (this.time - this.tellAt) / 0.15),
+        // The coil-back tell is for the CPU (a readable telegraph); a player's own arm is already moving.
+        tell: this.tellAt < 0 || this.followingLive ? 0 : Math.min(1, (this.time - this.tellAt) / 0.15),
         tellHand: this.tellHand,
         intro: this.introTime,
         hurt: Math.max(0, Math.min(1, (35 - state.hp) / 30)),
@@ -309,13 +318,21 @@ export class FighterView {
     if (!this.liveReady) copyPose(this.smoothLive, this.livePose);
     this.liveReady = true;
     const base = config.liveBlend;
+    // A strike starting (the reader saw the wind-up): that arm follows the real arm 1:1 and unsmoothed until the
+    // engine's strike takes over, so the fighter moves the moment the player does instead of waiting for the read.
+    const following = this.tellAt >= 0 ? (this.tellHand === 'L' ? FOLLOW_L : FOLLOW_R) : null;
     for (const j of JOINTS) {
       // Heavily smoothed: this layer is only personality (lean, head, hands), and camera jitter on a held pose
       // reads as glitching, more so on stepped animation.
       this.smoothLive[j].lerp(this.livePose[j], 0.18);
+      if (following?.has(j)) {
+        this.target[j].lerp(this.livePose[j], 0.85);
+        continue;
+      }
       const w = LEG_JOINTS.has(j) && !this.mapper.legsVisible ? 0 : Math.min(1, base * LIVE_WEIGHT[j]);
       if (w > 0) this.target[j].lerp(this.smoothLive[j], w);
     }
+    this.followingLive = following !== null;
   }
 
   /** Rises from the floor to over the head in ~1.4 s; the glowing edge band is drawn by the patched shader. */

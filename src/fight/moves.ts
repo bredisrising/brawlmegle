@@ -39,7 +39,15 @@ export const FIGHT = {
   gassedDamage: 0.6,
   gassedStartup: 4,
   /** Extra stamina cost for a miss. */
-  whiffCost: 5,
+  whiffCost: 8,
+  /**
+   * Mashing: each attack thrown within mashWindow seconds of an earlier one that didn't connect adds a level (up to
+   * mashMax); each level adds mashStartup frames and takes mashDamage off the damage. Landing a hit clears it.
+   */
+  mashWindow: 1.2,
+  mashMax: 4,
+  mashStartup: 2,
+  mashDamage: 0.12,
   staminaRegen: 15, // per second
   staminaRegenDelay: 0.6, // seconds after the last attack
   counterMultiplier: 1.5,
@@ -56,8 +64,8 @@ export const FIGHT = {
    * A strike's wind-up already shown on screen (from the reader's first sign of the motion) counts toward its
    * startup, up to this many frames, but never below minStartup: what you threw lands sooner, still readable.
    */
-  maxHeadStart: 6,
-  minStartup: 4,
+  maxHeadStart: 8,
+  minStartup: 3,
   /** Super meter: filled by landing hits (and a little by taking them or blocking); a full one is a fireball. */
   maxMeter: 100,
   meterOnHit: 12,

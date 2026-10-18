@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useGameStore } from '../game/store';
 import { TextButton } from './ArcadeButton';
 import { useGame } from './GameContext';
-import { recordingEnabled, setRecordingEnabled } from '../game/MatchRecorder';
+import { recordingEnabled, setRecordingEnabled, setVideoEnabled, videoEnabled } from '../game/MatchRecorder';
 
 /**
  * Bottom-right during a match (above the move guide chip): the link to the other laptop (ping, direct or relayed) and a small menu
@@ -16,6 +16,8 @@ export function GameMenu() {
   const replay = useGameStore((s) => s.replay);
   const [open, setOpen] = useState(false);
   const [recording, setRecording] = useState(recordingEnabled);
+  const [video, setVideo] = useState(videoEnabled);
+  const rec = useGameStore((s) => s.recordingVideo);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen((o) => !o);
@@ -43,10 +45,25 @@ export function GameMenu() {
               Record for training: {recording ? 'on' : 'off'}
             </TextButton>
           )}
+          <TextButton
+            title="Also saves this laptop's camera video each round (for checking moves); next round on"
+            onClick={() => {
+              setVideoEnabled(!video);
+              setVideo(!video);
+            }}
+          >
+            Camera video: {video ? 'on' : 'off'}
+          </TextButton>
           <TextButton onClick={() => window.location.reload()}>Back to title</TextButton>
         </div>
       )}
       <div className="flex items-stretch gap-1">
+        {rec && (
+          <span className="flex items-center gap-1.5 bg-ink/80 px-2.5 py-1.5 font-cond text-xs font-bold uppercase tracking-[0.2em] text-dmg" title="This camera is being recorded for training">
+            <span className="animate-blink size-2 rounded-full bg-dmg" />
+            Rec
+          </span>
+        )}
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}

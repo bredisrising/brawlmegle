@@ -32,6 +32,10 @@ type Fighter = {
   queue: { command: AttackCommand; frames: number }[];
   /** Punches chained in a row (see chainable). */
   chain: number;
+  /** Mashing level (see FIGHT.mash*), and whether the last attack connected and when it started (s). */
+  mash: number;
+  lastLanded: boolean;
+  lastAttackAt: number;
   meter: number;
   sinceAttack: number; // seconds
 };
@@ -80,6 +84,16 @@ export class FightEngine {
       x: f.x, hp: f.hp, stamina: f.stamina, phase: f.phase, move: a?.move, frame: f.frame,
       hand: a?.hand, height: a?.height, length, evade: f.evade?.kind, evadeDir: f.evade?.dir, meter: f.meter,
     };
+  }
+
+  /** Training: back to full health (the dummy and the player never get knocked out). */
+  heal(player: PlayerId) {
+    this.fighters[player].hp = FIGHT.maxHp;
+  }
+
+  /** Training: a full super meter, to try the fireball any time. */
+  fillMeter(player: PlayerId) {
+    this.fighters[player].meter = FIGHT.maxMeter;
   }
 
   /** Fireballs in flight. */
@@ -136,6 +150,13 @@ export class FightEngine {
     const spec = MOVES[c.move];
     // Tired fighters are slower and weaker, except for the super: a full meter is earned.
     const gassed = f.stamina < FIGHT.gassedBelow && c.move !== 'fireball';
+    // Swinging again right after a swing that didn't connect: mashing gets slower and weaker each time.
+    const now = this.tick / 60;
+    const previousMissed = f.lastAttackAt >= 0 && !f.lastLanded && now - f.lastAttackAt < FIGHT.mashWindow;
+    f.mash = previousMissed ? Math.min(FIGHT.mashMax, f.mash + 1) : Math.max(0, f.mash - 1);
+    f.lastAttackAt = now;
+    f.lastLanded = false;
+    const mash = c.move === 'fireball' ? 0 : f.mash;
     // A NaN here would stick: HP that never reaches 0, a position that's always "in range".
     const speed = finiteOr(c.speed, 1);
     const windup = finiteOr(c.windup, 1);
@@ -145,9 +166,9 @@ export class FightEngine {
       spec,
       startup: Math.max(
         Math.min(FIGHT.minStartup, spec.startup),
-        spec.startup + (gassed ? FIGHT.gassedStartup : 0) - clamp(finiteOr(c.headStart ?? 0, 0), 0, FIGHT.maxHeadStart),
+        spec.startup + (gassed ? FIGHT.gassedStartup : 0) + mash * FIGHT.mashStartup - clamp(finiteOr(c.headStart ?? 0, 0), 0, FIGHT.maxHeadStart),
       ),
-      scale: speed * windup * (gassed ? FIGHT.gassedDamage : 1),
+      scale: speed * windup * (gassed ? FIGHT.gassedDamage : 1) * (1 - mash * FIGHT.mashDamage),
       height: c.height,
       lunge: this.lungeFor(c, spec),
       done: false,
@@ -265,6 +286,8 @@ export class FightEngine {
       const chip = Math.max(1, Math.round(a.spec.chip * a.scale));
       g.hp = Math.max(0, g.hp - chip);
       a.landed = true;
+      f.lastLanded = true;
+      f.mash = 0;
       this.gainMeter(id, FIGHT.meterOnBlock);
       this.gainMeter(defenderId, FIGHT.meterOnBlock);
       g.phase = 'blockstun';
@@ -282,6 +305,8 @@ export class FightEngine {
     const damage = Math.round(a.spec.damage * a.scale * (counter ? FIGHT.counterMultiplier : 1));
     g.hp = Math.max(0, g.hp - damage);
     a.landed = true;
+    f.lastLanded = true;
+    f.mash = 0;
     this.gainMeter(id, FIGHT.meterOnHit);
     this.gainMeter(defenderId, FIGHT.meterOnHurt);
     g.attack = null;
@@ -412,7 +437,7 @@ export class FightEngine {
 function fresh(x: number): Fighter {
   return {
     x, hp: FIGHT.maxHp, stamina: FIGHT.maxStamina, phase: 'idle', frame: 0,
-    attack: null, stun: 0, evade: null, queue: [], chain: 0, meter: 0, sinceAttack: 10,
+    attack: null, stun: 0, evade: null, queue: [], chain: 0, meter: 0, mash: 0, lastLanded: false, lastAttackAt: -1, sinceAttack: 10,
   };
 }
 
