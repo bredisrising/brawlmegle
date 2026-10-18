@@ -308,7 +308,7 @@ function RosterStep({ player }: { player: PlayerId }) {
             <div className={`cut absolute inset-0 ${accent.bg} [--cut:36px]`}>
               <div className="tex-hatch absolute inset-0" />
               {preview.cardUrl ? (
-                <img src={preview.cardUrl} alt="" className="absolute inset-0 size-full object-cover" />
+                <img src={preview.cardUrl} alt="" className="absolute inset-0 size-full object-contain object-[85%_50%]" />
               ) : (
                 <span className="absolute inset-0 grid place-items-center font-display text-[clamp(8rem,20vw,20rem)] leading-none tracking-tighter text-ink/20">
                   {initials(preview.name)}
@@ -373,7 +373,7 @@ function RosterTile(props: { fighter: ForgedFighter; selected: boolean; accent: 
     >
       <div className="relative flex-1 overflow-hidden">
         {fighter.cardUrl ? (
-          <img src={fighter.cardUrl} alt="" className="size-full object-cover" />
+          <img src={fighter.cardUrl} alt="" className="size-full object-cover object-[50%_8%]" />
         ) : (
           <Initials name={fighter.name} selected={selected} />
         )}

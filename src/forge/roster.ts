@@ -54,11 +54,15 @@ export function mergeRosters(...lists: ForgedFighter[][]): ForgedFighter[] {
 
 export async function listFighters(api = config.forgeApi): Promise<ForgedFighter[]> {
   const server = await fetchServerFighters(api);
-  // A rescan replaces your fighter: the server lists one per username, so an older copy saved in this browser (same
-  // name) doesn't come back as a duplicate.
+  // The server's list is the truth for forged fighters: one per username (a rescan replaces your fighter), minus the
+  // hidden ones. A forged fighter saved in this browser that the server no longer lists (replaced, hidden) or that
+  // shares a listed name doesn't come back. Offline (empty list), the browser's copies are all there is.
   const key = (f: ForgedFighter) => f.name.trim().toLowerCase();
-  const onServer = new Set(server.map(key));
-  return mergeRosters(server, readSaved().filter((f) => !onServer.has(key(f))), HOUSE_FIGHTERS);
+  const names = new Set(server.map(key));
+  const ids = new Set(server.map((f) => f.id));
+  const forged = (f: ForgedFighter) => Boolean(f.glbUrl?.includes('/api/forge/') || f.cardUrl?.includes('/api/forge/'));
+  const saved = readSaved().filter((f) => !names.has(key(f)) && !(server.length && forged(f) && !ids.has(f.id)));
+  return mergeRosters(server, saved, HOUSE_FIGHTERS);
 }
 
 export function saveFighter(fighter: ForgedFighter) {
