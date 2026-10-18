@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import islandUrl from '../../models/floating_island.glb?url';
+import mountainUrl from '../../models/rainier.png?url';
 import { disposeObject } from './dispose';
 import { loadHills, type Hills } from './Hills';
 
@@ -13,6 +14,10 @@ const SUN_DIRECTION = new THREE.Vector3(-2, 4, 2.5).normalize();
 const ISLAND_SCALE = 0.2;
 /** Default island shift along the camera axis (+ = toward the camera), in world units. Tune live in the ` debug menu. */
 export const ISLAND_OFFSET = -1;
+/** Mount Rainier backdrop: a flat cut-out behind the hills. How far back, how wide, and where its bottom edge sits. */
+const MOUNTAIN_DISTANCE = 80;
+const MOUNTAIN_WIDTH = 65;
+const MOUNTAIN_BOTTOM = -15;
 
 export interface Arena {
   /** Current island shift along the camera axis (+ = toward the camera). */
@@ -121,6 +126,13 @@ export function createArena(scene: THREE.Scene, renderer: THREE.WebGLRenderer, c
     scene.add(loaded.object);
   }, (err) => console.error('Failed to load background hills', err));
 
+  let mountain: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial> | null = null;
+  loadMountain().then((loaded) => {
+    if (disposed) return disposeObject(loaded);
+    mountain = loaded;
+    scene.add(loaded);
+  }, (err) => console.error('Failed to load mountain backdrop', err));
+
   return {
     get islandOffset() {
       return islandOffset;
@@ -138,12 +150,27 @@ export function createArena(scene: THREE.Scene, renderer: THREE.WebGLRenderer, c
       sky.geometry.dispose();
       sky.material.dispose();
       hills?.dispose();
+      if (mountain) {
+        mountain.removeFromParent();
+        disposeObject(mountain);
+      }
       if (island) {
         island.removeFromParent();
         disposeObject(island);
       }
     },
   };
+}
+
+/** Rainier: the photo cut-out on a plane facing the camera, far enough back that panning barely moves it. */
+async function loadMountain() {
+  const texture = await new THREE.TextureLoader().loadAsync(mountainUrl);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const { width, height } = texture.image as HTMLImageElement;
+  const plane = new THREE.PlaneGeometry(MOUNTAIN_WIDTH, (MOUNTAIN_WIDTH * height) / width);
+  const mesh = new THREE.Mesh(plane, new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false }));
+  mesh.position.set(0, MOUNTAIN_BOTTOM + plane.parameters.height / 2, -MOUNTAIN_DISTANCE);
+  return mesh;
 }
 
 /** The fight floor: the baked floating island, scaled to fighter size. */

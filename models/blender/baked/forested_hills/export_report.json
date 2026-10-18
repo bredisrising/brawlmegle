@@ -1,11 +1,12 @@
 {
   "file": "C:\\Users\\adria\\source\\repos\\brawlegle\\models\\forested_hills.glb",
-  "bytes": 4234284,
+  "bytes": 4261116,
   "meshes": 1,
   "triangles": 36684,
   "atlas": "C:\\Users\\adria\\source\\repos\\brawlegle\\models\\blender\\baked\\forested_hills\\forested_hills_basecolor.png",
   "resolution": 2048,
   "source_materials": {
+    "Material.003": "lit",
     "greenery": "lit"
   },
   "export_materials": [
