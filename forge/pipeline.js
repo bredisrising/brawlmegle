@@ -403,14 +403,14 @@ const TTS_MODEL = process.env.FORGE_TTS_MODEL ?? "gpt-4o-mini-tts";
 /** Play-by-play (A) and color (B). */
 const VOICES = { A: process.env.FORGE_VOICE_A ?? "onyx", B: process.env.FORGE_VOICE_B ?? "coral" };
 const COMMENTARY_PROMPT = `You are the two commentators on a live fighting-game broadcast, like the casters at EVO.
-A is the play-by-play: fast, loud, calls exactly what just happened. B is the analyst: calm and sharp, says why it
-worked or what has to change, with the odd dry line. Write 1 or 2 lines (max 12 words each) for the moment described.
+A is the play-by-play: fast, loud, calls exactly what just happened. B is the co-commentator: just as hyped, reacts
+and says why it worked or what has to change. Both are excited the whole time: never calm, flat or bored. Write 1 or 2 lines (max 12 words each) for the moment described.
 Call each fighter by their "name" exactly, and by name rather than he or she. A fighter's brief (archetype, outfit, signature details) can make a call
 specific now and then, but it's a fight, not a fashion show. Talk like real fight commentators: no internet slang,
 memes or catchphrases ("left the chat", "cooking", "ghosted", "Wi-Fi", "airplane mode", "NPC", "touch grass"), no
 jokes about the time, sleep, the hackathon or the players' lives, nothing mean. NEVER comment on bodies, faces,
 weight, skin, age or anything a person can't change. Start each line with one delivery tag for the voice: A uses
-[shouting] or [excited], B uses [calm], [serious] or [impressed]. Reply as JSON:
+[shouting] or [excited], B uses [excited], [impressed] or [shouting]. Reply as JSON:
 {"lines":[{"voice":"A"|"B","text":"..."}]}`;
 
 /** @param {{moment: string, fighters: Record<string, {name: string, brief?: unknown}>}} ctx */
@@ -441,13 +441,21 @@ export async function commentate(ctx) {
 }
 
 /**
- * ElevenLabs voices (much more alive than OpenAI's for this): A = Phil, an explosive play-by-play commentator, B = Blue,
- * the analyst. eleven_v3 reads [tags] like [shouting] or [calm] as delivery. (The barks, FIGHT! and K.O., are Ed.)
+ * ElevenLabs voices (much more alive than OpenAI's for this): A = Phil, an explosive play-by-play commentator, B = Monika,
+ * a high-energy live sports commentator. Both stay hyped. eleven_v3 reads [tags] like [shouting] or [excited] as
+ * delivery. (The barks, FIGHT! and K.O., are Ed.)
  */
 const ELEVEN_VOICES = {
   A: process.env.ELEVEN_VOICE_A ?? "LG95yZDEHg6fCZdQjLqj",
-  B: process.env.ELEVEN_VOICE_B ?? "kfU9VUUMjY4PWNoUfZ45",
+  B: process.env.ELEVEN_VOICE_B ?? "Cvv0EXhC1Zv7b4a2QfWl",
 };
+const ELEVEN_MODEL = process.env.ELEVEN_MODEL ?? "eleven_v3";
+const ELEVEN_SETTINGS = { stability: 0.3, similarity_boost: 0.8, style: 0.85, speed: 1.12 };
+
+/** What a cached clip depends on besides its text: change the voice or its settings and old clips aren't reused. */
+export function voiceKey(voice) {
+  return process.env.ELEVENLABS_API_KEY ? `${ELEVEN_VOICES[voice] ?? ELEVEN_VOICES.A}:${ELEVEN_MODEL}:${JSON.stringify(ELEVEN_SETTINGS)}` : `openai:${VOICES[voice] ?? VOICES.A}`;
+}
 
 async function speakEleven(text, voice) {
   const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${ELEVEN_VOICES[voice] ?? ELEVEN_VOICES.A}?output_format=mp3_44100_128`, {
@@ -455,8 +463,8 @@ async function speakEleven(text, voice) {
     headers: { "xi-api-key": process.env.ELEVENLABS_API_KEY, "content-type": "application/json" },
     body: JSON.stringify({
       text,
-      model_id: process.env.ELEVEN_MODEL ?? "eleven_v3",
-      voice_settings: { stability: voice === "B" ? 0.5 : 0.3, similarity_boost: 0.8, style: voice === "B" ? 0.4 : 0.8, speed: 1.1 },
+      model_id: ELEVEN_MODEL,
+      voice_settings: ELEVEN_SETTINGS,
     }),
     signal: AbortSignal.timeout(15_000),
   });
@@ -482,7 +490,7 @@ export async function speak(text, voice) {
       input: text.replace(/\[[^\]]*\]\s*/g, ""),
       response_format: "mp3",
       instructions: voice === "B"
-        ? "Dry, witty fighting-game color commentator. Quick, deadpan, a little smug."
+        ? "Hyped fighting-game co-commentator. Fast, excited, punchy, live-broadcast energy."
         : "Hyped fighting-game announcer. Fast, loud, punchy, arena energy.",
     }),
     signal: AbortSignal.timeout(15_000),

@@ -19,7 +19,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import { pipeline } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { runForge, models, commentate, speak } from "./pipeline.js";
+import { runForge, models, commentate, speak, voiceKey } from "./pipeline.js";
 import { available as rigCheckAvailable } from "./rigcheck.js";
 
 if (!process.env.OPENAI_API_KEY) {
@@ -211,7 +211,7 @@ function ttsRemember(key, audio) {
   if (ttsCache.size > 400) ttsCache.delete(ttsCache.keys().next().value);
 }
 async function ttsClip(text, voice) {
-  const key = `${voice}|${text}`;
+  const key = `${voiceKey(voice)}|${text}`;
   const cached = ttsCache.get(key);
   if (cached) return cached;
   const file = new URL(`${crypto.createHash("sha1").update(key).digest("hex")}.mp3`, TTS_DIR);
