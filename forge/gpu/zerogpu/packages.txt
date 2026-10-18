@@ -1,0 +1,13 @@
+libgl1
+libglib2.0-0
+libegl1
+libxi6
+libxkbcommon0
+libxrender1
+libxfixes3
+libxxf86vm1
+libsm6
+libice6
+libx11-6
+libxext6
+xz-utils

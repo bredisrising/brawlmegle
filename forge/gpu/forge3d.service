@@ -1,0 +1,19 @@
+[Unit]
+Description=Brawlegle forge 3D (TRELLIS.2 + Blender rig)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/forge3d.env
+Environment=PYTHONPATH=/opt/forge3d/TRELLIS.2
+Environment=HF_HOME=/opt/forge3d/hf
+Environment=HF_HUB_OFFLINE=1
+Environment=PYTHONUNBUFFERED=1
+WorkingDirectory=/opt/forge3d/app
+ExecStart=/opt/forge3d/conda/envs/trellis2/bin/python /opt/forge3d/app/server.py
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target

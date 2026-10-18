@@ -5,6 +5,7 @@ const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 const delay = Number(process.env.MOCK_DELAY_MS ?? 0);
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let gpuPolls = 0;
 
 globalThis.fetch = async (input, init = {}) => {
   const url = String(input);
@@ -28,5 +29,37 @@ globalThis.fetch = async (input, init = {}) => {
     return json({ code: 0, data: { task_id: "task" } });
   }
   if (url.startsWith("https://tripo.mock/")) return new Response(Buffer.from("glTF"));
+  // The ZeroGPU Space (forge/gpu/zerogpu/app.py) through Gradio's API. MOCK_GRADIO=error fails the call.
+  if (url.startsWith("https://gradio.mock/")) {
+    if (new Headers(init.headers).get("authorization") !== "Bearer hf_x") return json({ error: "Repository not found" }, 404);
+    if (url.endsWith("/gradio_api/call/forge3d")) return json({ event_id: "e1" });
+    if (url.endsWith("/gradio_api/call/forge3d/e1")) {
+      const stream =
+        process.env.MOCK_GRADIO === "error"
+          ? "event: error\ndata: null\n\n"
+          : 'event: generating\ndata: [null, {"status": "model"}]\n\n' +
+            'event: heartbeat\ndata: null\n\n' +
+            'event: generating\ndata: [null, {"status": "rig"}]\n\n' +
+            'event: complete\ndata: [{"path": "/tmp/x.glb", "url": "https://gradio.mock/gradio_api/file=/tmp/x.glb"}, {"status": "done", "timings": {"model": 20.5, "rig": 3.1}}]\n\n';
+      return new Response(stream, { headers: { "content-type": "text/event-stream" } });
+    }
+    if (url.endsWith("/gradio_api/file=/tmp/x.glb")) return new Response(Buffer.from("glTF-gradio-rigged"));
+  }
+  // The GPU box (forge/gpu/server.py). MOCK_GPU=fail fails the job, MOCK_GPU=hang never finishes it.
+  if (url.startsWith("http://gpu.mock/")) {
+    // MOCK_GPU_HF=token: a private HF Space, which turns away any request without that bearer token.
+    if (process.env.MOCK_GPU_HF && new Headers(init.headers).get("authorization") !== `Bearer ${process.env.MOCK_GPU_HF}`) {
+      return json({ error: "Repository not found" }, 404);
+    }
+    if (url.endsWith("/health")) return json({ ok: true, ready: process.env.MOCK_GPU !== "cold", queued: 0 });
+    if (new Headers(init.headers).get("x-forge3d-key") !== "gpu-key") return json({ error: "bad key" }, 403);
+    if (url.endsWith("/jobs")) return json({ id: "g1" }, 202);
+    if (url.endsWith(".glb")) return new Response(Buffer.from(url.endsWith("/rigged.glb") ? "glTF-local-rigged" : "glTF-local"));
+    gpuPolls++;
+    if (process.env.MOCK_GPU === "fail") return json({ status: "failed", error: "rig: blender exited 1" });
+    if (process.env.MOCK_GPU === "hang") return json({ status: "model", timings: {} });
+    const status = gpuPolls < 2 ? "model" : gpuPolls < 3 ? "rig" : "done";
+    return json({ status, timings: { generate: 9.1, export: 3.2, model: 12.4, rig: 3.0 }, rigged: status === "done" });
+  }
   throw new Error(`mock-fetch: unexpected ${url}`);
 };

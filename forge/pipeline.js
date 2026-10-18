@@ -46,15 +46,122 @@ const DELIGHT = flag("FORGE_DELIGHT", GOLDSRC);
 /** v1.0 is Tripo's humanoid (biped) rigger; v3.0-20260909 is newer and opt-in. */
 const RIG_MODEL = process.env.FORGE_RIG_MODEL ?? "v1.0-20240301";
 
+// --- Our own GPU box (forge/gpu): model sheet -> textured, Mixamo-rigged GLB with TRELLIS.2 + Blender ----------
+/**
+ * "local" sends the sheet to the GPU service's job API (the AWS box, or the Docker Space); "gradio" to the ZeroGPU
+ * Space's /forge3d endpoint. Tripo stays the fallback for any failure or timeout.
+ */
+const ENGINE_3D = process.env.FORGE_3D_URL && ["local", "gradio"].includes(process.env.FORGE_3D) ? process.env.FORGE_3D : null;
+const LOCAL_URL = (process.env.FORGE_3D_URL ?? "").replace(/\/$/, "");
+const LOCAL_TIMEOUT_MS = Number(process.env.FORGE_3D_TIMEOUT ?? 90) * 1000;
+
+const tripoSettings = `tripo ${TRIPO_MODEL}${MULTIVIEW ? " multiview" : ""}, ${GEOMETRY_QUALITY} geometry, ${FACE_LIMIT} faces, delight ${DELIGHT ? "on" : "off"} + mixamo rig`;
 export const models = {
   brief: BRIEF_MODEL,
   sheet: `${IMAGE_MODEL} ${SHEET_SIZE}, ${STYLE} style`,
   card: CARD_MODEL,
   quality: IMAGE_QUALITY,
-  threeD: process.env.TRIPO_API_KEY
-    ? `tripo ${TRIPO_MODEL}${MULTIVIEW ? " multiview" : ""}, ${GEOMETRY_QUALITY} geometry, ${FACE_LIMIT} faces, delight ${DELIGHT ? "on" : "off"} + mixamo rig`
-    : "off (no TRIPO_API_KEY)",
+  threeD: ENGINE_3D
+    ? `GPU service (${ENGINE_3D}, ${LOCAL_URL}), then ${process.env.TRIPO_API_KEY ? tripoSettings : "nothing"} as the fallback`
+    : process.env.TRIPO_API_KEY
+      ? tripoSettings
+      : "off (no TRIPO_API_KEY or FORGE_3D)",
 };
+
+// A private Hugging Face Space (forge/gpu/hf_space.py) also wants an HF token on every request.
+const hfAuth = () => (process.env.FORGE_3D_HF_TOKEN ? { authorization: `Bearer ${process.env.FORGE_3D_HF_TOKEN}` } : {});
+
+async function local(path, init = {}, timeoutMs = 20_000) {
+  const res = await fetch(LOCAL_URL + path, {
+    ...init,
+    headers: { "x-forge3d-key": process.env.FORGE_3D_KEY ?? "", ...hfAuth(), ...init.headers },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(`GPU ${path} ${res.status}: ${body.error ?? "no details"}`);
+  }
+  return res;
+}
+
+/**
+ * Model sheet -> rigged GLB on our GPU box. Same result as makeModel ({ model, rigged }), plus the box's own
+ * timings. Throws on any failure, or if it isn't done within FORGE_3D_TIMEOUT, so the caller can fall back to Tripo.
+ * With `model` (a GLB), the box only rigs that model (forge/gpu/rescue.mjs).
+ */
+export async function makeModelLocal(sheet, onStep, model = null) {
+  const deadline = Date.now() + LOCAL_TIMEOUT_MS;
+  // A stopped box doesn't refuse the connection, it just never answers: find out in 3 s, not 20.
+  const health = await (await local("/health", {}, 3_000)).json();
+  if (!health.ready) throw new Error(`GPU box not ready: ${health.error ?? "warming up"}`);
+  const { id } = await (
+    await local("/jobs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ image: sheet.toString("base64"), model: model?.toString("base64") }) })
+  ).json();
+  onStep("model");
+  let step = "model";
+  let misses = 0;
+  for (;;) {
+    if (Date.now() > deadline) throw new Error(`GPU job timed out after ${LOCAL_TIMEOUT_MS / 1000} s`);
+    await new Promise((r) => setTimeout(r, 500));
+    let job;
+    try {
+      job = await (await local(`/jobs/${id}`, {}, 5_000)).json();
+      misses = 0;
+    } catch (err) {
+      if (++misses > 5) throw err;
+      continue;
+    }
+    if (job.status === "rig" && step !== "rig") onStep((step = "rig"));
+    if (job.status === "failed") throw new Error(`GPU job failed: ${job.error}`);
+    if (job.status === "done") {
+      const get = async (file) => Buffer.from(await (await local(`/jobs/${id}/${file}`, {}, 60_000)).arrayBuffer());
+      const [rigged, model] = await Promise.all([get("rigged.glb"), get("model.glb")]);
+      return { model, rigged, timings: job.timings };
+    }
+  }
+}
+
+/**
+ * The same through the ZeroGPU Space's Gradio API (forge/gpu/zerogpu/app.py): POST the sheet to
+ * /gradio_api/call/forge3d, then read its event stream ("model", "rig", then the rigged GLB's URL). Returns only
+ * the rigged model (`model` is null).
+ */
+export async function makeModelGradio(sheet, onStep) {
+  const deadline = Date.now() + LOCAL_TIMEOUT_MS;
+  const { event_id: eventId } = await (
+    await local("/gradio_api/call/forge3d", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ data: [sheet.toString("base64")] }) })
+  ).json();
+  onStep("model");
+  const res = await local(`/gradio_api/call/forge3d/${eventId}`, {}, Math.max(1_000, deadline - Date.now()));
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let step = "model";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) throw new Error("GPU Space closed the stream before the model was done");
+    buffer += decoder.decode(value, { stream: true });
+    let end;
+    while ((end = buffer.indexOf("\n\n")) >= 0) {
+      const block = buffer.slice(0, end);
+      buffer = buffer.slice(end + 2);
+      const event = /^event: *(.*)$/m.exec(block)?.[1];
+      const data = /^data: *(.*)$/m.exec(block)?.[1];
+      if (event === "error") throw new Error(`GPU Space: ${data && data !== "null" ? data : "failed"}`);
+      if (event !== "generating" && event !== "complete") continue;
+      const [file, status] = JSON.parse(data);
+      if (status?.status === "rig" && step !== "rig") onStep((step = "rig"));
+      if (event === "complete") {
+        if (!file?.url) throw new Error("GPU Space returned no model");
+        reader.cancel().catch(() => {});
+        // Only ever from the Space itself (the HF token goes along).
+        const url = new URL(file.url);
+        const rigged = Buffer.from(await (await local(url.pathname + url.search, {}, 60_000)).arrayBuffer());
+        return { model: null, rigged, timings: status?.timings };
+      }
+    }
+  }
+}
 
 async function tripo(path, init = {}, timeoutMs = 60_000) {
   const res = await fetch(TRIPO + path, {
@@ -332,20 +439,45 @@ export async function runForge(job, frames, store) {
       timed("back", () => editImage(sheetRef, backPrompt()))
         .then((back) => (store.write("back.png", back), back))
         .catch((err) => (console.warn("back view failed, building from the front only:", err.message ?? err), null));
-    const modelJob = process.env.TRIPO_API_KEY
-      ? (MULTIVIEW ? backView() : Promise.resolve(null))
-          .then((back) => timed("model", () => makeModel(sheet, (step) => ((job.step = step), store.save()), back)))
-          .then(({ model, rigged }) => {
-            job.modelUrl = store.write("model.glb", model);
-            if (rigged) job.glbUrl = store.write("rigged.glb", rigged);
-            else job.glbUrl = job.modelUrl;
-            job.rigged = Boolean(rigged);
-          })
-          .catch((err) => {
-            job.modelError = String(err.message ?? err);
-            console.warn("3D step failed:", job.modelError);
-          })
-      : Promise.resolve();
+    const onStep = (step) => ((job.step = step), store.save());
+    const tripoModel = () =>
+      (MULTIVIEW ? backView() : Promise.resolve(null)).then((back) => {
+        job.engine3d = "tripo";
+        return timed("model", () => makeModel(sheet, onStep, back));
+      });
+    // Our GPU service first (FORGE_3D=local or gradio). On any failure or timeout Tripo builds the model as before;
+    // the GPU's try stays in timings.localTry so the wait it added shows up.
+    const localStart = Date.now();
+    const localModel = () =>
+      timed("model", () => (ENGINE_3D === "gradio" ? makeModelGradio : makeModelLocal)(sheet, onStep))
+        .then((out) => {
+          job.engine3d = ENGINE_3D;
+          job.gpuTimings = out.timings;
+          return out;
+        })
+        .catch((err) => {
+          job.localError = String(err.message ?? err);
+          job.timings.localTry = Date.now() - localStart;
+          console.warn("GPU 3D step failed:", job.localError, process.env.TRIPO_API_KEY ? "(falling back to Tripo)" : "");
+          if (!process.env.TRIPO_API_KEY) throw err;
+          job.step = "model";
+          return tripoModel();
+        });
+    const modelJob =
+      ENGINE_3D || process.env.TRIPO_API_KEY
+        ? (ENGINE_3D ? localModel() : tripoModel())
+            .then(({ model, rigged }) => {
+              if (model) job.modelUrl = store.write("model.glb", model);
+              if (rigged) job.glbUrl = store.write("rigged.glb", rigged);
+              else job.glbUrl = job.modelUrl;
+              job.modelUrl ??= job.glbUrl;
+              job.rigged = Boolean(rigged);
+            })
+            .catch((err) => {
+              job.modelError = String(err.message ?? err);
+              console.warn("3D step failed:", job.modelError);
+            })
+        : Promise.resolve();
     await Promise.all([cardJob, modelJob]);
     // Before "ready", so no browser ever caches the 10 MB original: WebP textures + meshopt GLB, WebP card (optimize.js).
     if (store.dir) await timed("optimize", () => optimizeFighter(store.dir, job));
