@@ -3,6 +3,7 @@ import type { PlayerId } from '../types';
 import { ACCENT } from './accent';
 import { ArcadeButton, TextButton } from './ArcadeButton';
 import { CamToggle } from './CamToggle';
+import { Tips } from './Tips';
 import { ForgePreview } from './ForgePreview';
 import { ForgeSteps } from './ForgeSteps';
 import { PLAYER_COLORS } from '../game/constants';
@@ -207,6 +208,7 @@ function QuickSearch({ right, found, searching }: { right: boolean; found: boole
             Stay on this screen: the fight starts as soon as someone's found.
           </p>
           <CamChoice right={right} />
+          <Tips align={right ? 'end' : 'start'} />
         </>
       ) : (
         <>

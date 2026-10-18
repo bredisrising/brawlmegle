@@ -6,7 +6,7 @@ const MOVES: [name: string, how: string][] = [
   ['Punch', 'From your guard, snap a fist straight at the screen and back.'],
   ['Hook', 'Swing a fist round from the side, elbow bent.'],
   ['Uppercut', 'Dip a fist, then drive it up, elbow bent.'],
-  ['Combo', "Throw them fast: every punch you throw comes out."],
+  ['Combo', 'Punch after punch, each one big and clear: rushed little ones get missed.'],
   ['Block', 'Both fists up in front of your face. Hold.'],
   ['Duck', 'Drop your head and shoulders quickly.'],
   ['Dodge', 'Lean your head quickly to one side.'],
