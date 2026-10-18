@@ -68,6 +68,9 @@ class Generator:
         from trellis2.pipelines import Trellis2ImageTo3DPipeline
 
         self.pipe = Trellis2ImageTo3DPipeline.from_pretrained(model_dir)
+        # TRELLIS.2 defaults to moving each model onto the GPU only while it runs. A 48 GB card holds them all, which
+        # saves seconds per stage; FORGE3D_LOW_VRAM=1 for small cards (8-24 GB).
+        self.pipe.low_vram = os.environ.get("FORGE3D_LOW_VRAM", "0") == "1"
         self.pipe.cuda()
         self.pipeline_type = pipeline_type
         self.steps = steps
