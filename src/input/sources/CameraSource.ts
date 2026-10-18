@@ -3,8 +3,10 @@ import type { Landmark, PoseFrame } from '../../types';
 import type { InputSource } from '../InputSource';
 
 const WASM_ROOT = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1/wasm';
-/** `full` is more accurate (including depth) at a modest cost; `?pose=lite` for slow laptops. */
-const POSE_VARIANT = new URLSearchParams(window.location.search).get('pose') === 'lite' ? 'lite' : 'full';
+/** `full` is more accurate at a modest cost; phones get `lite` to keep the frame rate up. `?pose=lite|full` overrides. */
+const POSE_PARAM = new URLSearchParams(window.location.search).get('pose');
+const PHONE = typeof matchMedia === 'function' && matchMedia('(pointer: coarse) and (max-width: 900px)').matches;
+const POSE_VARIANT = POSE_PARAM === 'lite' || POSE_PARAM === 'full' ? POSE_PARAM : PHONE ? 'lite' : 'full';
 const POSE_MODEL = `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_${POSE_VARIANT}/float16/1/pose_landmarker_${POSE_VARIANT}.task`;
 
 /** Webcam -> MediaPipe PoseLandmarker -> timestamped image and world landmarks. */
@@ -67,11 +69,15 @@ export class CameraSource implements InputSource {
     this.video.muted = true;
     this.video.playsInline = true;
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        // 60 fps if the camera can: a punch lasts only ~4–6 frames at 30.
-        video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 60 }, facingMode: 'user' },
-      });
+      this.stream = await navigator.mediaDevices
+        .getUserMedia({
+          audio: false,
+          // 60 fps if the camera can: a punch lasts only ~4–6 frames at 30.
+          video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 60 }, facingMode: 'user' },
+        })
+        .catch((err: unknown) => {
+          throw new Error(cameraErrorText(err));
+        });
       this.video.srcObject = this.stream;
       await this.video.play();
 
@@ -221,4 +227,22 @@ function selectCenteredPose(poses: NormalizedLandmark[][]): number {
     }
   });
   return selected;
+}
+
+/** getUserMedia failures in words a player can act on. */
+function cameraErrorText(err: unknown): string {
+  const name = err instanceof DOMException ? err.name : '';
+  switch (name) {
+    case 'NotAllowedError':
+    case 'SecurityError':
+      return 'Camera is blocked. Click the camera icon in the address bar, allow it, and try again.';
+    case 'NotFoundError':
+    case 'OverconstrainedError':
+      return 'No camera found. Plug one in (or check it is not disabled) and try again.';
+    case 'NotReadableError':
+    case 'AbortError':
+      return 'The camera is busy in another app (Zoom, Teams, another tab?). Close it and try again.';
+    default:
+      return `Camera didn't start (${err instanceof Error ? err.message : String(err)}). Try again, or reload the page.`;
+  }
 }

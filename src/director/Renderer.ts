@@ -162,5 +162,9 @@ export class Renderer {
     this.composer.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    // Narrow screens (a phone held upright): back the camera off until the fight line fits across.
+    const halfWidth = 0.75;
+    const z = halfWidth / (Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * this.camera.aspect);
+    this.cameraHome.z = Math.max(1.8, z);
   }
 }

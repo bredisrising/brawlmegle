@@ -16,6 +16,7 @@ export function CameraPip() {
   const status = useGameStore((s) => s.players[localPlayerId(s.role)].status);
   const detail = useGameStore((s) => s.players[localPlayerId(s.role)].statusDetail);
   const lastMove = useGameStore((s) => s.lastMove);
+  const lobby = useGameStore((s) => s.phase === 'lobby');
   const [source, setSource] = useState<InputSource | null>(null);
   const [open, setOpen] = useState(true);
 
@@ -44,7 +45,11 @@ export function CameraPip() {
   return (
     <div
       className={`pointer-events-none fixed z-40 overflow-hidden border-2 border-paper/30 bg-black shadow-2xl ${
-        scanning ? 'left-1/2 top-1/2 w-[min(92vw,720px)] -translate-x-1/2 -translate-y-1/2' : 'bottom-4 left-4 w-[min(40vw,300px)]'
+        scanning
+          ? 'left-1/2 top-1/2 w-[min(92vw,720px)] -translate-x-1/2 -translate-y-1/2'
+          : lobby
+            ? 'bottom-4 left-1/2 w-[min(32vw,240px)] -translate-x-1/2' // between the two "Ready" banners
+            : 'bottom-4 left-4 w-[min(32vw,300px)]'
       }`}
     >
       <div className="relative aspect-[4/3]">
