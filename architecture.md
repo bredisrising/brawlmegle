@@ -76,7 +76,7 @@ Game phases: lobby -> countdown -> fighting -> ko -> rematch
 
 ## Picking a fighter
 
-    Scan new         -> type name + consent -> turn 360 (3 frames) -> forge -> saved to memory card
+    Scan new         -> type name + consent -> front photo (3-2-1) + a guided 360 (sides) -> forge -> saved to memory card
                                             \-> "go masked" -> masked fighter, nothing saved
     Choose existing  -> pick from memory card (saved + house fighters)
 
@@ -122,8 +122,9 @@ punch-in, slow-mo, ImpactPass (anime impact frames, `?fx=low` off). Effects (spa
 dust), Sfx (synthesized sounds, M mutes).
 
 ### forge/
-scanBuckets.ts (pure: facing from landmarks, front/left/right buckets, sharpness), scan.ts (live capture
-from the camera's video + pose frames), forge.ts (captureScan, submitForge/getForge/forgeFighter against
+scanBuckets.ts (pure: facing from landmarks, front/left/right buckets, sharpness), scanGuide.ts (pure: the guided
+scan's stages, framing coach, ring pacing, which frame becomes each photo), scan.ts (live capture from the camera's
+video + pose frames; ui/ScanOverlay.tsx draws it, on whichever laptop scans), forge.ts (captureScan, submitForge/getForge/forgeFighter against
 config.forgeApi, mocked when empty), roster.ts (memory card: forge server's fighters + localStorage + house),
 models.ts (every GLB load: the meshopt-capable loader, and preloadModel() to start a fighter's download as soon as
 it's known; forge/optimize.js shrinks fighters on the server, vite.config.ts the arena at build).

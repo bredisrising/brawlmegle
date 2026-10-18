@@ -191,7 +191,6 @@ export class GuidedScan {
   private stage: ScanStage = 'find';
   private stageAt = 0;
   private now = 0;
-  private lastFrameAt = -Infinity;
   /** Last frame with someone at least partly in view (MediaPipe sends none without a person). */
   private lastSeenAt = -Infinity;
   private everTracked = false;
@@ -226,8 +225,8 @@ export class GuidedScan {
   /** A tracked frame at `t`. Returns the slots it could fill (empty if none). */
   offer(frame: PoseFrame, t: number): Offer[] {
     this.tick(t);
-    const dt = Number.isFinite(this.lastFrameAt) ? clamp(t - this.lastFrameAt, 0, 200) : 0;
-    this.lastFrameAt = t;
+    const dt = Number.isFinite(this.lastSeenAt) ? clamp(t - this.lastSeenAt, 0, 200) : 0;
+    this.lastSeenAt = t;
     const facing = estimateFacing(frame, this.frontWidth, this.opts);
     if (facing?.frontal && Math.abs(facing.nose) < this.opts.frontNose[0] && facing.width > this.measuredFront && this.stage !== 'turn') {
       this.measuredFront = facing.width;
@@ -235,7 +234,6 @@ export class GuidedScan {
     }
     const framing = frameCheck(frame, facing, this.opts);
     this.framing = framing;
-    this.lastSeenAt = t;
     if (framing.level > 0) {
       this.everTracked = true;
       this.trackedMs += dt;
