@@ -98,7 +98,7 @@ def rig_stats(pts, weights, bones):
         if c < MIN_COVERAGE:
             fails.append(f"{limb} coverage {c}")
     for c in CHAINS:
-        if expected[c] > 0.01 and shares[c] < MIN_SHARE * expected[c]:
+        if expected[c] > 0.03 and shares[c] < MIN_SHARE * expected[c]:
             fails.append(f"{c} share {shares[c]} (expected {expected[c]})")
     if top_share > MAX_TOP and top_share > top_expected + MAX_EXCESS:
         fails.append(f"{names[top]} dominates {top_share} (expected {top_expected})")

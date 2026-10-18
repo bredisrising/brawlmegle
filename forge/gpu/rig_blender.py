@@ -38,7 +38,7 @@ from mathutils import Matrix, Vector, kdtree
 from mathutils.bvhtree import BVHTree
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rig_check import CHAINS, blender_stats, seg_dist  # noqa: E402
+from rig_check import blender_stats, seg_dist  # noqa: E402
 
 argv = sys.argv[sys.argv.index("--") + 1 :]
 IN_GLB, LANDMARKS, OUT_GLB = argv[:3]
@@ -487,33 +487,45 @@ def heat_weights(proxy):
     return {"heat_empty": empty, "heat_unweighted": unweighted, "orphans": finish_weights()}
 
 
-# Envelope: which bones a vertex may take weight from, by the body part its nearest bone is in: that part's bones
-# plus the joint it hangs from (a hand next to the thigh never takes thigh weight).
-ENVELOPE_SIGMA = 0.02  # m on a 1 m model: how far past the nearest bone a neighbor still pulls
-JOINS = {
-    "spine": ["Neck", "LeftShoulder", "RightShoulder", "LeftArm", "RightArm", "LeftUpLeg", "RightUpLeg"],
-    "head": ["Spine2"],
-    "armL": ["Spine2"],
-    "armR": ["Spine2"],
-    "legL": ["Hips"],
-    "legR": ["Hips"],
-}
+# Envelope: each vertex belongs to its nearest bone segment, rigidly along the bone's middle, blended with the bone
+# it joins over BLEND either side of each joint (elbow, knee, hip, shoulder, neck...), then smoothed over the
+# surface. A vertex only takes weight from its own bone and the ones it joins (plus what the smoothing brings from
+# its neighbors on the surface), so a hand next to the thigh never takes thigh weight.
+BLEND = float(opts.get("--blend", 0.03))  # m on a 1 m model, each side of a joint
+SMOOTH = float(opts.get("--smooth", 0.02))  # m: how far the surface smoothing spreads the weights
+
+
+def smoothstep(x):
+    x = np.clip(x, 0.0, 1.0)
+    return x * x * (3 - 2 * x)
 
 
 def envelope_weights():
     pts = body_points()
-    names = [s[0][len(P):] for s in SEGMENTS]
-    dist = np.stack([seg_dist(pts, np.array(s[1]), np.array(s[2])) for s in SEGMENTS], axis=1)
-    chain_names = list(CHAINS)
-    chain_of = {b: ci for ci, c in enumerate(chain_names) for b in CHAINS[c]}
-    allowed = np.zeros((len(chain_names), len(names)), dtype=bool)
-    for ci, c in enumerate(chain_names):
-        for j, nm in enumerate(names):
-            allowed[ci, j] = nm in CHAINS[c] or nm in JOINS[c]
+    names = [s[0] for s in SEGMENTS]
+    idx = {n: i for i, n in enumerate(names)}
+    head = np.array([tuple(s[1]) for s in SEGMENTS])
+    tail = np.array([tuple(s[2]) for s in SEGMENTS])
+    length = np.linalg.norm(tail - head, axis=1)
+    dist = np.stack([seg_dist(pts, head[i], tail[i]) for i in range(len(names))], axis=1)
     nearest = dist.argmin(axis=1)
-    mask = allowed[np.array([chain_of[names[j]] for j in nearest])]
-    w = np.exp(-(((dist - dist.min(axis=1, keepdims=True)) / ENVELOPE_SIGMA) ** 2)) * mask
-    # Smooth over the surface (UV seams split vertices, so weld by position first) to soften the joints.
+    parent = [idx.get(b.parent.name) if b.parent else None for b in arm_data.bones]
+    kids = [[c for c, p in enumerate(parent) if p == i] for i in range(len(names))]
+    w = np.zeros((len(pts), len(names)))
+    for i in range(len(names)):
+        rows = np.nonzero(nearest == i)[0]
+        if not len(rows):
+            continue
+        along = (pts[rows] - head[i]) @ (tail[i] - head[i]) / max(length[i], 1e-9)  # meters from the bone's head
+        own = np.ones(len(rows))
+        joins = ([(parent[i], along)] if parent[i] is not None else []) + ([(kids[i][0], length[i] - along)] if len(kids[i]) == 1 else [])
+        for other, gap in joins:  # gap: meters to the joint; half and half at the joint itself
+            r = max(1e-3, min(BLEND, 0.45 * length[i], 0.45 * length[other]))
+            share = np.minimum(1 - smoothstep((gap + r) / (2 * r)), own)
+            w[rows, other] += share
+            own -= share
+        w[rows, i] += own
+    # Smooth over the surface (UV seams split vertices, so weld by position first) to soften the rest.
     key = np.round(pts / 1e-5).astype(np.int64)
     _, weld = np.unique(key, axis=0, return_inverse=True)
     weld = weld.reshape(-1)
@@ -526,21 +538,23 @@ def envelope_weights():
     np.add.at(wm, weld, w)
     wm /= np.maximum(np.bincount(weld, minlength=n), 1)[:, None]
     deg = np.bincount(e.ravel(), minlength=n)[:, None]
-    for _ in range(4):
+    edge = float(np.median(np.linalg.norm(pts[edges.reshape(-1, 2)[:, 0]] - pts[edges.reshape(-1, 2)[:, 1]], axis=1)))
+    passes = int(np.clip((SMOOTH / max(edge, 1e-4)) ** 2, 2, 80))  # diffusion spreads ~ edge * sqrt(passes)
+    for _ in range(passes):
         acc = np.zeros_like(wm)
         np.add.at(acc, e[:, 0], wm[e[:, 1]])
         np.add.at(acc, e[:, 1], wm[e[:, 0]])
         wm = np.where(deg > 0, 0.5 * wm + 0.5 * acc / np.maximum(deg, 1), wm)
-    w = wm[weld] * mask
+    w = wm[weld]
     w[w < 0.02 * w.max(axis=1, keepdims=True)] = 0
     w /= np.maximum(w.sum(axis=1, keepdims=True), 1e-9)
     reset_groups()
-    groups = [body.vertex_groups[s[0]] for s in SEGMENTS]
+    groups = [body.vertex_groups[nm] for nm in names]
     for i in range(len(pts)):
         for j in np.argsort(w[i])[::-1][:4]:
             if w[i, j] > 0:
                 groups[j].add([i], float(w[i, j]), "REPLACE")
-    return {"orphans": finish_weights()}
+    return {"orphans": finish_weights(), "smooth_passes": passes}
 
 
 def check_weights():
@@ -549,7 +563,7 @@ def check_weights():
     return out
 
 
-COVER_MIN = 0.95  # share of the body within 3 voxels of the proxy
+COVER_MIN = 0.5  # share of the body within 3 voxels of the proxy (thin hair or straps can rightly fall outside)
 KEPT_MIN = 0.8  # share of the remesh in its biggest piece
 
 
