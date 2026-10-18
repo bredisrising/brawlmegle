@@ -16,9 +16,10 @@ textured Mixamo-rigged GLB out, the same file the game already loads from Tripo.
 
 | Call | Returns |
 |---|---|
-| `POST /jobs` `{image}` (base64 PNG/JPEG of the sheet) | `202 {id}` (`503` while warming up, `429` if 6 are queued) |
-| `GET /jobs/:id` | `{status: queued, model, rig, done or failed, timings, error, rigged}` |
-| `GET /jobs/:id/rigged.glb`, `/model.glb` | the GLBs (jobs are kept 15 min) |
+| `POST /jobs` `{image, model?, settings?}` (base64 sheet; `model`: a GLB to rig only; `settings`: pipeline, steps, faces, texture, remesh for one job) | `202 {id}` (`503` while warming up, `429` if 6 are queued) |
+| `GET /jobs/:id` | `{status: queued, model, rig, done or failed, timings, error, rigged, optimized, previews}` |
+| `GET /jobs/:id/voxels.bin`, `/shape.glb` | the previews, as soon as `previews` lists them: stage 1's sparse voxels (uint16 resolution, then x, y, z bytes, z up) and the untextured shape (12k faces, y up) |
+| `GET /jobs/:id/rigged.glb`, `/rigged.orig.glb`, `/model.glb` | the GLBs: rigged (optimized by `optimize.js` when `optimized`), its unoptimized original, unrigged (jobs are kept 15 min) |
 | `GET /health` | `{ok, ready, queued, settings}` (no key needed) |
 
 Every call but `/health` needs `x-forge3d-key`. The forge uses it when `FORGE_3D=local` (see `forge/README.md`).
@@ -51,8 +52,8 @@ Blender 5.2, the app) and a systemd unit (`forge3d`, restarts on failure, starts
 |---|---|
 | `FORGE3D_KEY` | random, made by `setup.sh` |
 | `FORGE3D_PIPELINE` | `1024_cascade` (TRELLIS.2's best; `512` is faster and softer) |
-| `FORGE3D_STEPS` | `12` sampling steps per stage |
-| `FORGE3D_FACES` / `FORGE3D_TEXTURE` | `60000` / `2048` |
+| `FORGE3D_STEPS` | `8` sampling steps per stage (12 is TRELLIS's default: ~3 s more, same fighter) |
+| `FORGE3D_FACES` / `FORGE3D_TEXTURE` | `40000` / `1024` (60000 / 2048: ~6 s more bake and export, same fighter at fight distance) |
 | `FORGE3D_YAW` | `0`: extra turn (degrees) before the rigger's own facing check |
 
 After changing it: `sudo systemctl restart forge3d`.

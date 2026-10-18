@@ -11,7 +11,106 @@ Bodies, costumes and silhouettes are on par with Tripo. **Faces are clearly soft
 *Each row pair: the model sheet, then Tripo's model (top) and ours (bottom) from the front, 3/4, side (the arena
 camera), back, and a face close-up. Same sheets, both rigged.*
 
-## Timings
+## Update 2026-10-18: a 35 s forge, and a live preview while it forges
+
+**Result:** a forge now takes **about 35 s on the server** (brief 1.9-2.6 s, sheet 11.4-11.6 s, GPU 20.2-21.9 s,
+optimize 0 s), down from 59 s. A real scan is **ready in the game at 38-39 s**, including a 2.2 s reveal in the
+forging card that overlaps the model download. That was measured on 3 real forges: game → local forge server → a
+dev twin of the GPU box. There's no visible quality loss at fight distance (images below). While it forges, the card
+now shows the forge working: the brief typed out as a scouting dossier, the sheet developing, a voxel hologram
+building up, the clay sculpt, the paint sweeping in and the rig flashing.
+
+| | Before (live, 2026-10-17) | Now | What changed |
+|---|---|---|---|
+| Brief | 1.6 s | 1.9-2.6 s | nothing (gpt-5.4-mini) |
+| Sheet | 21.3 s | **10.7-13.0 s** | gpt-image-2.5-flare at 1024x1536 instead of sunburst at 1536x2304, on the GPU path only (`FORGE_GPU_SHEET=0` brings the old sheet back) |
+| GPU: generate | ~10 s | **6.4-8.9 s** | TRELLIS.2 at 8 sampler steps instead of 12 |
+| GPU: bake + export | ~12.5 s | **5.3-7.0 s** | a 1024 texture instead of 2048, and 40k faces instead of 60k |
+| GPU: rig | ~3.3 s | 2.1-2.8 s | same rigger, smaller textures to read and write |
+| GPU: optimize | (on the forge box) | **0.8-1.2 s** | `optimize.js` now runs on the GPU box (faster x86 CPU), so the forge box downloads ~1 MB instead of ~11 |
+| GPU, door to door | 30.2 s | **18-22 s** | all of the above |
+| Optimize (forge box) | 5.0 s | **0 s** | the GLB arrives optimized; the card/sheet WebP copies are made as soon as each exists, next to the 3D step |
+| **Total, server** | **~59 s** | **~35 s** | |
+
+Rejected levers: no remesh in the bake was *slower* (11 s). Starting TRELLIS on the sheet's streamed partial
+would save ~6 s, but the partial lacks the final's costume details (accent stripes, shoes), so the fighter would
+lose them. Low image quality doesn't speed up the sheet (17.6 s vs 18.0 s). One sheet in nine took 61 s at OpenAI's
+end; that's their variance, not ours.
+
+### Same fighter, faster settings
+
+![speed settings, rico](forge-gpu/speed-settings-rico.jpg)
+
+![speed settings, dylan](forge-gpu/speed-settings-dylan.jpg)
+
+*Same sheets, from the top: the old settings (12 steps, 60k faces, 2048 texture), a 1024 texture only, 8 steps only,
+and all three (now the default). Bodies are identical at every distance. The 1024 texture's face matches the 2048
+one: TRELLIS.2's texture detail is capped by its voxel attributes, not by the bake size. 8 steps gives a different
+face (another sample), not a worse one.*
+
+### The sheet: flare 1024x1536 vs sunburst 1536x2304
+
+![sheet variants, first person](forge-gpu/sheet-variants-3d.jpg)
+
+![sheet variants, second person](forge-gpu/sheet-variants-3d-2.jpg)
+
+*The same brief drawn each way, then built with the new GPU settings. Flare draws bolder accents (neon trim), and
+the fighters hold up as well or better (second person: a cleaner face). TRELLIS.2 reads the sheet at 1024 px tall
+anyway, so the bigger sunburst sheet only bought Tripo detail. Flare doesn't always stream a partial; when it
+doesn't, the dossier fills the wait. With Tripo (no `FORGE_3D`) the forge keeps sunburst 1536x2304.*
+
+### The live preview
+
+![preview stages](forge-gpu/preview-stages.jpg)
+
+![the reveal](forge-gpu/preview-reveal.jpg)
+
+*The forging card in Edge on the RTX 4070, from a real forge (2026-10-18). Top: the brief typed out as a dossier
+with the brief's palette, the sheet, the voxels arriving and building up as a hologram, the clay sculpted in over
+them. Bottom: painting and rigging, then the finished fighter's paint sweeping in over the clay, and the rig
+flashing (white bone lines at +1.3 s). Then the arena's own materialize takes over.*
+
+How it works:
+
+- **The sheet's partials:** the forge asks OpenAI for streamed partial images (`stream`, `partial_images=3`; sunburst
+  and flare both send one, ~3-6 s before the final, when they have time). Each goes out as a ~30 KB WebP
+  (`sheetPartialUrl`). If the model refuses to stream, the sheet is drawn the plain way.
+- **The GPU box's intermediates:** TRELLIS's stage 1 sparse voxels (~3-4 KB: a uint16 resolution, then x, y, z
+  bytes) about 4-5 s into the job, and the untextured shape, decimated to 12k faces (~200-300 KB GLB), about 8-10 s
+  in. The shape is decoded once, early, and reused for the final model, so this costs ~0.2 s. The forge relays them
+  into the fighter's folder as `previewVoxelsUrl` / `previewMeshUrl`, the same way as the other files (public by
+  fighter id, immutable).
+- **The game:** `players[id].forge` (`ForgePreview`) on the host; the host forwards it to the client laptop in its
+  `fighter` message, so the 1v1 client's card shows the same stages. One small WebGL renderer (288x384, low-power, no
+  antialias) is shared by every forging card, exists only while a card shows 3D, and renders at 12 fps; that's also
+  the stepped, arcade look. Each frame is copied onto the card's own 2D canvas. `?quality=low` (phones) gets the
+  same stages as Canvas 2D points, with no WebGL at all.
+- **Without intermediates** (Tripo, the ZeroGPU Space): the card shows the dossier, then the sheet, then the
+  reveal, as before.
+
+### Deploy
+
+GPU box (`i-02b680f2662c0b82f`). It restarts the service, which takes ~4 min to be ready; forges in that window fall
+back to Tripo:
+
+```
+# from the repo, on a machine that reaches bingus:
+tar czf forge.tgz --exclude=forge/data --exclude=forge/node_modules forge   # the whole forge/: the box runs optimize.js
+scp forge.tgz malhotan@bingus:/tmp/ && ssh malhotan@bingus
+scp -i ~/.ssh/brawlegle-gpu.pem /tmp/forge.tgz ubuntu@54.161.35.172:
+ssh -i ~/.ssh/brawlegle-gpu.pem ubuntu@54.161.35.172
+rm -rf forge && tar xzf forge.tgz
+sudo sed -i 's/^FORGE3D_STEPS=.*/FORGE3D_STEPS=8/; s/^FORGE3D_FACES=.*/FORGE3D_FACES=40000/; s/^FORGE3D_TEXTURE=.*/FORGE3D_TEXTURE=1024/' /etc/forge3d.env
+sudo bash forge/gpu/setup.sh      # installs Node 22 + the optimizer (~1 min), copies the app, restarts forge3d
+curl -s localhost:8790/health     # "ready": true after ~4 min
+```
+
+Forge box: deploy `forge/` from this branch as usual (`forge/deploy/setup-forge.sh`), with no env changes needed.
+`FORGE_3D=local` turns on the flare sheet and the previews. Either order works: an old GPU box just sends no previews
+and an unoptimized GLB, which the new forge optimizes itself as before. Then build and deploy the game (the forging
+card). `FORGE_GPU_SHEET=0` in `/etc/brawlegle/forge.env` brings back sunburst 1536x2304 if you'd rather keep it.
+
+## Timings (2026-10-17, the first version)
 
 | | Tripo (before) | Ours (g6e.xlarge, L40S) |
 |---|---|---|
