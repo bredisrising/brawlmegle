@@ -71,6 +71,17 @@ type LimbState = {
   peakElbow: number;
   history: { t: number; d: Vec3 }[];
   typicalSpeed: number;
+  /** Where the limb was at its furthest after the last strike (recover phase), to see it retract. */
+  extended: Pair | null;
+  /** Distance from rest last frame: falling = the limb is coming back. */
+  lastRestDisp: number;
+  /** When the limb re-armed by pulling back from a strike before reaching rest (a combo in progress). */
+  rearmedAt: number;
+  /** Last time this hand was up by the face (in guard), and that time as of the current strike's onset. */
+  nearFaceAt: number;
+  faceBeforeOnset: number;
+  /** Last time this hand was rising fast. */
+  risingAt: number;
   // Debug readouts
   disp: number;
   out: number;
@@ -234,6 +245,11 @@ export class IntentReader {
     const smoothV = (p: BodyPoint) => Math.hypot(p.v.x - root.v.x, p.v.y - root.v.y);
     const speed = Math.hypot(smoothV(tipPt), MID_WEIGHT * smoothV(midPt));
     const restDisp = Math.hypot(len(sub(now.tip, s.rest.tip)), MID_WEIGHT * len(sub(now.mid, s.rest.mid)), Math.abs(now.ext - s.rest.ext));
+    const nose = body.points[LM.nose].p;
+    if (!legs && Math.hypot(tipPt.p.x - nose.x, tipPt.p.y - nose.y) < this.config.guard.radius) s.nearFaceAt = t;
+    if (!legs && vel.tip.y > 1.0) s.risingAt = t;
+    const retracting = restDisp < s.lastRestDisp - 0.004;
+    s.lastRestDisp = restDisp;
     s.disp = disp;
     s.out = outward;
     s.history.push({ t, d: sub(now.tip, s.rest.tip) });
@@ -248,11 +264,15 @@ export class IntentReader {
       } else if (def.kind === 'arm' && windingUp(def, tTip)) {
         // Loading up (dropping for an uppercut, cocking out for a hook): the strike will start from here.
         s.anchor = clonePair(now);
+      } else if (retracting && t - s.rearmedAt < 400) {
+        // Coming back from the last strike: the next one starts from wherever the retraction turns around
+        // (fast combos never get back to guard).
+        s.anchor = clonePair(now);
       }
       // A hand dropping fast (back to the lap, or lowering the guard) can't be starting a punch.
       const dropping = def.kind === 'arm' && vel.tip.y < -1.2;
       if (visible && !dropping && outward > cfg.onsetSpeed && disp > cfg.onsetDist && (strikeLike(def, tTip, tMid, disp) || extensionStrike(def, tTip, tExt, disp))) {
-        Object.assign(s, { phase: 'onset', since: t, grewAt: t, peakDisp: disp, peakSpeed: outward, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: legs ? 0 : body.elbow[side], anchorTip: { x: tipPt.p.x - tTip.x, y: tipPt.p.y - tTip.y, z: tipPt.p.z } });
+        Object.assign(s, { phase: 'onset', since: t, grewAt: t, faceBeforeOnset: s.nearFaceAt, peakDisp: disp, peakSpeed: outward, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: legs ? 0 : body.elbow[side], anchorTip: { x: tipPt.p.x - tTip.x, y: tipPt.p.y - tTip.y, z: tipPt.p.z } });
         out.push({ kind: 'anticipate', limb: name, t });
       }
       return;
@@ -268,7 +288,7 @@ export class IntentReader {
       const shoulderY = (body.points[LM.lShoulder].p.y + body.points[LM.rShoulder].p.y) / 2;
       const fromLow = s.anchorTip.y < shoulderY - 0.8;
       // Holding a block, small adjustments aren't punches: it takes a bigger motion to strike out of the shell.
-      const needed = def.kind === 'arm' && this.guardUp ? cfg.strikeDist * 1.3 : cfg.strikeDist;
+      const needed = def.kind === 'arm' && this.guardUp ? cfg.strikeDist * 1.0 : cfg.strikeDist;
       const farEnough = def.kind === 'arm' && !fromLow && s.peakDisp >= needed && t - s.since >= 30;
       // Peaked: the reach hasn't grown for 60 ms. (Not "the speed dropped": the fast signal wobbles mid-punch,
       // and judging then cuts the punch short.)
@@ -281,8 +301,9 @@ export class IntentReader {
       const goingDown = def.kind === 'arm' && tTip.y < -0.15 && tTip.y < -0.5 * len(tTip);
       const reason = s.peakDisp < needed || (def.kind === 'leg' && lift < this.config.legRise) ? 'too small'
         : goingDown ? 'going down'
-        : def.kind === 'arm' && raisingGuard(body, s.anchorTip, tipPt.p, this.config.guard.radius) ? 'raising guard'
-        : def.kind === 'arm' && bothHandsUp(body, name, tTip) ? 'both hands up'
+        : def.kind === 'arm' && (raisingGuard(body, s.anchorTip, tipPt.p, this.config.guard.radius)
+          || handToFace(body, s.peak, tipPt.p, this.config.guard.radius, s.since - s.faceBeforeOnset > 600)) ? 'raising guard'
+        : def.kind === 'arm' && bothHandsUp(body, name, tTip, s.since - s.faceBeforeOnset > 600 && t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 250) ? 'both hands up'
         : null;
       if (reason) {
         s.phase = 'idle';
@@ -317,13 +338,21 @@ export class IntentReader {
       });
       s.phase = 'recover';
       s.since = t;
+      s.extended = clonePair(now);
       return;
     }
 
-    // Recover: ready again once the limb comes back near rest (or after a timeout).
-    if (restDisp < cfg.returnDist || t - s.since > cfg.recoverMs) {
+    // Recover: ready again once the limb comes back near rest, or has clearly pulled back from its furthest
+    // point (a combo: the next punch starts before the hand gets home), or after a timeout.
+    const ext0 = s.extended ?? now;
+    const fromAnchor = (q: Pair) => Math.hypot(len(sub(q.tip, s.anchor!.tip)), MID_WEIGHT * len(sub(q.mid, s.anchor!.mid)), Math.max(0, q.ext - s.anchor!.ext - EXT_DEADBAND));
+    if (fromAnchor(now) > fromAnchor(ext0)) s.extended = clonePair(now);
+    const pulledBack = Math.hypot(len(sub(now.tip, s.extended!.tip)), MID_WEIGHT * len(sub(now.mid, s.extended!.mid)), Math.abs(now.ext - s.extended!.ext));
+    const home = restDisp < cfg.returnDist;
+    if (home || pulledBack > Math.max(cfg.onsetDist, 0.35 * s.peakDisp) || t - s.since > cfg.recoverMs) {
       s.phase = 'idle';
       s.anchor = clonePair(now);
+      if (!home) s.rearmedAt = t;
     }
   }
 
@@ -494,18 +523,30 @@ function windingUp(def: LimbDef, tip: Vec3) {
 }
 
 /**
- * Bringing a hand up from the lap or a relaxed low position into the guard zone (by the face) is putting
- * your guard up, not an uppercut. Real uppercuts start from guard height.
+ * Both hands rising at the same time is putting a guard up, or throwing your hands up, not two uppercuts. Real
+ * uppercuts are one hand at a time. `bothCameUp`: this hand came up from low (not from guard) right as the
+ * other one rose too.
  */
-/**
- * Both hands rising at the same time is putting a guard up (or throwing your hands up), not two uppercuts.
- * Real uppercuts are one hand at a time.
- */
-function bothHandsUp(body: Body, limb: LimbName, travel: Vec3) {
+function bothHandsUp(body: Body, limb: LimbName, travel: Vec3, bothCameUp: boolean) {
   if (travel.y < 0.15 || travel.y < 0.5 * len(travel)) return false;
   const other = body.points[limb === 'armL' ? LM.rWrist : LM.lWrist];
   const otherShoulder = body.points[limb === 'armL' ? LM.rShoulder : LM.lShoulder];
-  return other.vf.y - otherShoulder.vf.y > 1.0;
+  return bothCameUp || other.vf.y - otherShoulder.vf.y > 1.0;
+}
+
+/**
+ * Bringing a hand up from the lap or a relaxed low position into the guard zone (by the face) is putting
+ * your guard up, not an uppercut. Real uppercuts start from guard height.
+ */
+
+/**
+ * A hand that hasn't been up by the face for a while and now rises into the face zone is coming up to guard
+ * (or to block), not throwing an uppercut: uppercuts are thrown from guard, after a short dip at most.
+ */
+function handToFace(body: Body, travel: Vec3, end: Vec3, radius: number, wasDown: boolean) {
+  if (!wasDown || travel.y < 0.12 || travel.y < 0.5 * len(travel)) return false;
+  const nose = body.points[LM.nose].p;
+  return Math.hypot(end.x - nose.x, end.y - nose.y) < radius * 1.2;
 }
 
 function raisingGuard(body: Body, start: Vec3, end: Vec3, radius: number) {
@@ -551,7 +592,7 @@ function windupOf(s: LimbState, dir: Vec3) {
 function newLimb(): LimbState {
   return {
     phase: 'idle', rest: null, anchor: null, since: 0, grewAt: 0, peakDisp: 0, peakSpeed: 0,
-    peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, peakMidTravel: 0, peakMidOut: 0, anchorTip: { x: 0, y: 0, z: 0 }, peakElbow: 0, history: [], typicalSpeed: 4, disp: 0, out: 0,
+    peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, peakMidTravel: 0, peakMidOut: 0, anchorTip: { x: 0, y: 0, z: 0 }, peakElbow: 0, history: [], typicalSpeed: 4, extended: null, lastRestDisp: 0, rearmedAt: -Infinity, nearFaceAt: -Infinity, faceBeforeOnset: -Infinity, risingAt: -Infinity, disp: 0, out: 0,
   };
 }
 
