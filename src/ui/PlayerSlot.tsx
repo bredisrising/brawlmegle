@@ -152,8 +152,8 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
                 <p className="font-cond text-sm font-semibold uppercase tracking-[0.15em] text-paper/40">Getting a code…</p>
               )}
               {roomCode && connection !== 'open' && !rejoining && (
-                <p className="max-w-sm font-cond text-sm font-semibold uppercase tracking-[0.12em] text-paper/50">
-                  They open {location.host.replace(/^www\./, '')}, tap <span className="text-paper/80">Play a friend</span>, then <span className="text-paper/80">Join with a code</span>
+                <p className="font-cond text-sm font-semibold uppercase tracking-[0.12em] text-paper/50">
+                  On their screen: <span className="text-paper/80">Play a friend</span>, then <span className="text-paper/80">Join with a code</span>
                 </p>
               )}
             </div>

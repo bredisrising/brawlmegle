@@ -44,6 +44,7 @@ try {
   await a.getByRole("button", { name: /Join with a code/ }).click();
   await sleep(500);
   await shot(a, "03-title-join");
+  if (argv.includes("--title-only")) throw Object.assign(new Error("title only"), { done: true });
   await a.reload({ waitUntil: "domcontentloaded" });
   await a.waitForFunction(() => window.__brawl);
   await a.evaluate(() => (window.__brawl.perf.overlay.style.display = "none"));
@@ -113,8 +114,10 @@ try {
   await sleep(1500);
   await shot(c, "13-create-a-room");
 } catch (err) {
-  console.log("failed:", err.message.split("\n")[0]);
-  process.exitCode = 1;
+  if (!err.done) {
+    console.log("failed:", err.message.split("\n")[0]);
+    process.exitCode = 1;
+  }
 } finally {
   await ba.close().catch(() => {});
   await bb.close().catch(() => {});

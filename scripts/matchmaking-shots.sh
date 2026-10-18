@@ -1,6 +1,6 @@
 #!/bin/bash
 # Screenshots of "Find a fight" (two strangers, the opponent camera, votes) in two Windows Edges on the real GPU.
-#   scripts/matchmaking-shots.sh <clip A .y4m> <clip B .y4m> <out dir> [width height]
+#   scripts/matchmaking-shots.sh <clip A .y4m> <clip B .y4m> <out dir> [width height]   (TITLE_ONLY=1: just the menus)
 # Starts a local matchmaker and the dev server (mock forge), two headless Edges with their own profiles ("brawlmm-a",
 # "brawlmm-b": never your own Edge) whose fake cameras play the clips, runs matchmaking-shots.mjs on Windows' node,
 # then stops only those Edges and the servers.
@@ -33,8 +33,8 @@ for who in a b; do
 done
 sleep 4
 timeout 900 "$NODE" "$(wslpath -w "$HERE/matchmaking-shots.mjs")" --base "http://localhost:$WEB_PORT/" --a 9351 --b 9352 \
-  --out "$WINTMP\\shots" --width "$W" --height "$H"
-cp "$LINTMP"/shots/*.png "$OUT"/ 2>/dev/null
+  --out "$WINTMP\\shots" --width "$W" --height "$H" ${TITLE_ONLY:+--title-only}
+cp "$LINTMP"/shots/*.png "$OUT"/ 2>/dev/null; rm -f "$LINTMP"/shots/*.png
 kill_edges
 kill $WEB $MM 2>/dev/null
 pkill -f "vite --port $WEB_PORT" 2>/dev/null

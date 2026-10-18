@@ -241,13 +241,13 @@ function MenuItem(props: { index: string; label: string; hint: string; color: st
       disabled={disabled}
       onClick={onClick}
       style={{ animationDelay: `${delay}ms` }}
-      className={`animate-in-r group relative flex w-full items-center gap-5 ${fill} py-[clamp(0.45rem,1.7vh,1rem)] pr-6 pl-8 text-left transition-[background-color,padding,gap,width] duration-150 hover:w-[calc(100vw-1.5rem)] hover:gap-0 hover:py-[clamp(0.7rem,2.6vh,1.5rem)] hover:pr-6 hover:pl-6 hover:text-ink sm:hover:w-[calc(100%+2rem)] disabled:pointer-events-none disabled:opacity-40 ${color}`}
+      className={`animate-in-r group relative flex w-full items-center gap-3 sm:gap-5 ${fill} py-[clamp(0.45rem,1.7vh,1rem)] pr-4 pl-6 text-left sm:pr-6 sm:pl-8 transition-[background-color,padding,gap,width] duration-150 hover:w-[calc(100vw-1.5rem)] hover:gap-0 hover:py-[clamp(0.7rem,2.6vh,1.5rem)] hover:pr-6 hover:pl-6 hover:text-ink sm:hover:w-[calc(100%+2rem)] disabled:pointer-events-none disabled:opacity-40 ${color}`}
     >
       <span className={`absolute inset-y-0 left-0 w-2 ${bar} group-hover:bg-ink`} />
-      <span className={`font-cond text-sm font-bold tracking-[0.3em] ${muted} group-hover:hidden`}>{index}</span>
+      <span className={`hidden font-cond text-sm sm:inline font-bold tracking-[0.3em] ${muted} sm:group-hover:hidden`}>{index}</span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate font-display text-[clamp(1.6rem,5vh,3rem)] uppercase leading-none tracking-tight">{label}</span>
-        <span className={`mt-1 block truncate font-cond text-sm font-semibold uppercase tracking-[0.15em] group-hover:text-ink/70 ${hintColor}`}>{hint}</span>
+        <span className="block truncate font-display text-[clamp(1.4rem,min(5vh,6.5vw),3rem)] uppercase leading-none tracking-tight">{label}</span>
+        <span className={`mt-1 block font-cond text-xs sm:truncate sm:text-sm font-semibold uppercase tracking-[0.15em] group-hover:text-ink/70 ${hintColor}`}>{hint}</span>
       </span>
       <Arrow className="text-3xl group-hover:hidden" />
     </button>
