@@ -69,6 +69,19 @@ export async function findProfile(username: string, api = config.forgeApi, timeo
   return body.fighter ? toForgedFighter(body.fighter) : null;
 }
 
+/** Null if the forge server would take a scan right now, else why not (busy, over its limits). Unreachable: null. */
+export async function forgeBusy(api = config.forgeApi): Promise<string | null> {
+  if (!api) return null;
+  try {
+    const res = await fetch(`${trimSlash(api)}/api/capacity`, { signal: AbortSignal.timeout(4000) });
+    if (!res.ok) return null; // an older server without the endpoint: find out at submit
+    const body = (await res.json()) as { ok?: boolean; error?: string };
+    return body.ok === false ? body.error ?? 'the forge is busy' : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Starts a forge. Returns its id. `api` defaults to config.forgeApi (empty = mock). */
 export async function submitForge(name: string, frames: ScanFrames, api = config.forgeApi, username?: string, timeoutMs = 45_000): Promise<string> {
   if (!api) {

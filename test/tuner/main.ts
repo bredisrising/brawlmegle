@@ -437,6 +437,8 @@ function setOpponent() {
 $<HTMLSelectElement>('dummyLevel').onchange = setOpponent;
 setOpponent(); // the browser may have restored the select on reload
 const p2Name = () => (cpu ? `${cpu.level} cpu` : 'dummy');
+// For automated checks (console / headless tests).
+Object.assign(window, { tunerFight: () => ({ cpu, engine, tick }) });
 
 setInterval(() => {
   tick++;

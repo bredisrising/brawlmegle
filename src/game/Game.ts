@@ -10,7 +10,7 @@ import { IntentReader } from '../intent/IntentReader';
 import type { Intent } from '../intent/intents';
 import { InputHub, createLocalSource, type InputSource } from '../input';
 import { MockSource } from '../input/sources/MockSource';
-import { captureScan, forgeFighter, type ScanFrames } from '../forge/forge';
+import { captureScan, forgeBusy, forgeFighter, type ScanFrames } from '../forge/forge';
 import { forgeStatus, onChange, scanStatus } from '../forge/status';
 import { fetchServerFighters, maskedFighter, saveFighter } from '../forge/roster';
 import { config } from '../config';
@@ -205,6 +205,9 @@ export class Game {
 
       let fighter: ForgedFighter;
       if (choice.kind === 'scan') {
+        // Don't make them turn around for 20 s just to hear the forge is full.
+        const busy = scan ? null : await forgeBusy();
+        if (busy) throw new Error(`the forge can't take a new scan right now (${busy}). Pick a saved fighter, go masked, or try again in a minute`);
         const show = onChange((statusDetail) => updatePlayer(id, { statusDetail }));
         show('Turn slowly');
         const { signal } = this.lifetime;

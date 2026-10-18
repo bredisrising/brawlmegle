@@ -166,23 +166,33 @@ async function handle(req, res) {
     return json(res, 200, { username, fighter: ready ? view(ready, base) : null, forging: forging?.id ?? null });
   }
 
+  /** Every forge spends OpenAI and Tripo credits: cap them. Null when there's room. */
+  function capacityError() {
+    const active = [...fighters.values()].filter((f) => f.status === "forging" || f.status === "scanning").length + uploading;
+    if (active >= MAX_ACTIVE) return `${active} forges already running, try again in a minute`;
+    const now = Date.now();
+    const recent = [...fighters.values()].filter((f) => now - f.createdAt < 86_400_000);
+    const lastHour = recent.filter((f) => now - f.createdAt < 3_600_000).length;
+    if (lastHour + uploading >= MAX_PER_HOUR || recent.length + uploading >= MAX_PER_DAY) return "forge limit reached for now, try again later";
+    return null;
+  }
+
   if (req.method === "GET" && url.pathname === "/api/fighters") {
     const ready = [...fighters.values()].filter((f) => f.status === "ready").sort((a, b) => b.createdAt - a.createdAt);
     return json(res, 200, ready.map((f) => view(f, base)));
   }
 
+  // Whether a forge would be accepted right now, so the game can say so before the player spends ~20 s scanning.
+  if (req.method === "GET" && url.pathname === "/api/capacity") {
+    const full = capacityError();
+    return json(res, 200, full ? { ok: false, error: full } : { ok: true });
+  }
+
   if (req.method === "POST" && url.pathname === "/api/forge") {
     if (!req.headers["content-type"]?.startsWith("application/json")) return json(res, 415, { error: "send JSON" });
     if (ACCESS_KEY && req.headers["x-forge-key"] !== ACCESS_KEY) return json(res, 403, { error: "bad forge key" });
-    const active = [...fighters.values()].filter((f) => f.status === "forging" || f.status === "scanning").length + uploading;
-    if (active >= MAX_ACTIVE) return json(res, 429, { error: `${active} forges already running, try again in a minute` });
-    // Every forge spends OpenAI and Tripo credits: cap them.
-    const now = Date.now();
-    const recent = [...fighters.values()].filter((f) => now - f.createdAt < 86_400_000);
-    const lastHour = recent.filter((f) => now - f.createdAt < 3_600_000).length;
-    if (lastHour + uploading >= MAX_PER_HOUR || recent.length + uploading >= MAX_PER_DAY) {
-      return json(res, 429, { error: "forge limit reached for now, try again later" });
-    }
+    const full = capacityError();
+    if (full) return json(res, 429, { error: full });
     // Hold the slot while the photos upload, so parallel requests can't all get past the caps above.
     uploading++;
     let body;

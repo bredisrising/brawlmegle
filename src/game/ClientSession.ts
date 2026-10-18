@@ -1,5 +1,5 @@
 import { createLocalSource, type InputSource } from '../input';
-import { captureScan } from '../forge/forge';
+import { captureScan, forgeBusy } from '../forge/forge';
 import { FORGE_STEPS, onChange, scanStatus } from '../forge/status';
 import { Peer } from '../net/Peer';
 import { Signaling } from '../net/Signaling';
@@ -61,6 +61,15 @@ export class ClientSession {
   /** Avatar screen: tell the host who P2 is, scan if needed, and start streaming poses. */
   async choose(choice: FighterChoice) {
     const name = choice.kind === 'existing' ? choice.fighter.name : choice.name;
+    if (choice.kind === 'scan') {
+      // The host forges what this laptop scans: don't make them turn around for nothing if the forge is full.
+      const busy = await forgeBusy();
+      if (busy) {
+        updatePlayer(PLAYER, { status: 'waiting', statusDetail: `The forge can't take a new scan right now (${busy}). Pick a saved fighter, go masked, or try again in a minute.` });
+        useGameStore.setState({ screen: 'avatar' });
+        return;
+      }
+    }
     try {
       updatePlayer(PLAYER, { name, status: 'scanning', statusDetail: 'Starting camera' });
       if (!this.source) {
