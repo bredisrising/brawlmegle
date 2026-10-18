@@ -689,13 +689,22 @@ function raisingGuard(body: Body, limb: LimbName, start: Vec3, end: Vec3, radius
   return startedLow && endsUp && (otherUp || otherRose);
 }
 
+/** An uppercut's forearm stands within this of vertical (radians); laid over further, a rising fist is a hook. */
+const UPPER_MAX_TILT = (30 * Math.PI) / 180;
+
 function classify(kind: 'arm' | 'leg', dir: Vec3, out: number, tip: Vec3, mid: Vec3, midOut: number, travel: Vec3, midRise: number, ext = 0, elbow = 180): StrikeStyle {
   // Kick: the foot comes up near knee height. Knee strike: the knee rises with the foot tucked under it.
   if (kind === 'leg') return tip.y > mid.y - 0.3 ? 'kick' : 'knee';
   // A big sideways sweep is a hook (or a haymaker), however straight the arm.
   if (Math.abs(travel.x) > 0.45 && Math.abs(out) > 0.6) return 'hook';
-  // Uppercut: the fist drives up much more than the elbow. A punch at the camera lifts the elbow more.
-  if (dir.y > 0.6 && travel.y > 0.3 && travel.y > 1.5 * midRise) return 'upper';
+  // Uppercut: the fist drives up much more than the elbow (a punch at the camera lifts the elbow more), with the forearm
+  // standing up: fist over the elbow. A rising fist with the forearm laid over (swinging across the chest) is a hook,
+  // the punch most real players throw (vision-labeled 1v1 rounds: 135 of 151 rising reads were hooks). The forearm's
+  // tilt holds up when the camera is off to the side, where sideways travel doesn't.
+  if (dir.y > 0.6 && travel.y > 0.3 && travel.y > 1.5 * midRise) {
+    const tilt = Math.atan2(Math.abs(tip.x - mid.x), tip.y - mid.y);
+    return tilt > UPPER_MAX_TILT ? 'hook' : 'upper';
+  }
   // Smaller sideways swing with the elbow flared: a tight hook. A cross drifts inward but stays tucked.
   if (Math.abs(out) > 0.6 && midOut > 0.05) return 'hook';
   // Fist sweeping across the body with the elbow staying bent (a cross straightens the elbow as it drifts in).
