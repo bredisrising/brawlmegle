@@ -1,6 +1,6 @@
 import { useGameStore } from '../game/store';
 import { ACCENT } from './accent';
-import { ArcadeButton } from './ArcadeButton';
+import { ArcadeButton, TextButton } from './ArcadeButton';
 import { useGame } from './GameContext';
 
 export function KOOverlay() {
@@ -10,6 +10,7 @@ export function KOOverlay() {
   const winnerName = useGameStore((s) => (s.winner ? s.players[s.winner].name : ''));
   const ending = useGameStore((s) => s.ending);
   const replay = useGameStore((s) => s.replay);
+  const role = useGameStore((s) => s.role);
   if (phase !== 'ko') return null;
   if (replay) return <ReplayBars />;
   const accent = ACCENT[winner ?? 'p1'];
@@ -36,10 +37,14 @@ export function KOOverlay() {
         </span>
       </div>
 
-      <div className="animate-rise mt-8 [animation-delay:700ms]">
+      <div className="animate-rise mt-8 flex flex-col items-center gap-5 [animation-delay:700ms]">
         <ArcadeButton size="lg" onClick={() => game.rematch()}>
           Rematch
         </ArcadeButton>
+        <div className="flex gap-6">
+          {role !== 'client' && <TextButton onClick={() => game.changeFighter()}>Change fighter</TextButton>}
+          <TextButton onClick={() => window.location.reload()}>Title</TextButton>
+        </div>
       </div>
     </div>
   );

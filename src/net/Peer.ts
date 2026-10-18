@@ -90,6 +90,25 @@ export class Peer {
     }
   }
 
+  /**
+   * Link quality from WebRTC's own stats: round-trip time of the connection in use, and whether it goes through
+   * the TURN relay (venue Wi-Fi that blocks direct P2P) or straight between the laptops. Null when not connected.
+   */
+  async linkStats(): Promise<{ rttMs: number | null; relay: boolean } | null> {
+    const pc = this.pc;
+    if (!pc || !this.connected) return null;
+    const report = await pc.getStats();
+    let pair: RTCIceCandidatePairStats | undefined;
+    report.forEach((s) => {
+      if (s.type === 'candidate-pair' && (s as RTCIceCandidatePairStats).nominated && (s as RTCIceCandidatePairStats).state === 'succeeded') pair = s as RTCIceCandidatePairStats;
+    });
+    if (!pair) return null;
+    const local = report.get(pair.localCandidateId) as { candidateType?: string } | undefined;
+    const remote = report.get(pair.remoteCandidateId) as { candidateType?: string } | undefined;
+    const rtt = pair.currentRoundTripTime;
+    return { rttMs: rtt === undefined ? null : Math.round(rtt * 1000), relay: local?.candidateType === 'relay' || remote?.candidateType === 'relay' };
+  }
+
   get connected(): boolean {
     return this.channels.control?.readyState === 'open';
   }

@@ -84,6 +84,7 @@ export class Game {
   /** Each fighter's phase last tick, to hear a strike come out (whoosh) on both laptops. */
   private readonly heardPhase: Partial<Record<PlayerId, string>> = {};
   private readonly unsubscribe: () => void;
+  private readonly linkTimer: ReturnType<typeof setInterval>;
   /** Combo counting and the round's first hit (both laptops count from the same hit events). */
   private combo = { player: null as PlayerId | null, hits: 0, at: 0, key: 0 };
   /**
@@ -126,6 +127,8 @@ export class Game {
       }
     });
     for (const id of PLAYER_IDS) this.views[id].onLand = (at) => this.effects.burst(at, 'dust');
+    // Ping: how the link between the two laptops is doing, every couple of seconds.
+    this.linkTimer = setInterval(() => void this.pollLink(), 2000);
   }
 
   /** Current local camera or mock source, for the development pose monitor. */
@@ -328,6 +331,7 @@ export class Game {
     window.removeEventListener('keydown', this.onDebugKey);
     window.removeEventListener('keydown', this.onMuteKey);
     this.unsubscribe();
+    clearInterval(this.linkTimer);
     this.hostSession?.dispose();
     this.client?.dispose();
     for (const id of PLAYER_IDS) {
@@ -444,6 +448,36 @@ export class Game {
         dt: SIM_DT,
       });
     }
+  }
+
+  private async pollLink() {
+    const stats = this.hostSession?.connected ? await this.hostSession.peer.linkStats() : this.client ? await this.client.linkStats() : null;
+    const prev = useGameStore.getState().link;
+    if (stats?.rttMs !== prev?.rttMs || stats?.relay !== prev?.relay) useGameStore.setState({ link: stats });
+  }
+
+  /**
+   * Back to fighter select for this laptop's player (keeps the room, the other player and a CPU). The client
+   * laptop can only go back to the title: the host owns the match.
+   */
+  changeFighter() {
+    if (this.client) return void window.location.reload();
+    const id = localPlayerId(useGameStore.getState().role);
+    this.stopReplay();
+    this.fight.reset();
+    this.fightTicks = 0;
+    for (const p of PLAYER_IDS) {
+      this.cpu[p]?.reset();
+      this.views[p].reset();
+      updatePlayer(p, { hp: MAX_HP, meter: 0 });
+    }
+    this.input.source(id)?.stop();
+    this.input.unassign(id);
+    this.views[id].setVisible(false);
+    delete this.fighters[id];
+    updatePlayer(id, { status: 'waiting', statusDetail: '', portraitUrl: null });
+    useGameStore.setState({ phase: 'lobby', countdown: null, winner: null, ending: null, timeLeft: null, combo: null, callout: null, screen: 'avatar' });
+    this.sendMatch();
   }
 
   /** Drop a pending or running K.O. replay (a rematch, a new round). */

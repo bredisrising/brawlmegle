@@ -56,6 +56,8 @@ export interface GameState {
   flashKey: number;
   /** Hits in a row by one fighter (2+), for the combo counter. `key` changes with every hit. */
   combo: { player: PlayerId; hits: number; key: number } | null;
+  /** The P2P link to the other laptop: round trip (ms) and whether it's relayed through TURN. */
+  link: { rttMs: number | null; relay: boolean } | null;
   /** The K.O. replay is playing (the K.O. screen waits for it). */
   replay: boolean;
   /** A big announcer callout ("FIRST ATTACK", "PERFECT"), `key` changes with each. */
@@ -90,6 +92,7 @@ export const useGameStore = create<GameState>(() => ({
   combo: null,
   callout: null,
   replay: false,
+  link: null,
   lastMove: null,
 }));
 

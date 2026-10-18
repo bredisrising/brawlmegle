@@ -18,6 +18,7 @@ import { CameraPip } from './ui/CameraPip';
 import { MoveGuide } from './ui/MoveGuide';
 import { Callout, ComboCounter } from './ui/ComboCounter';
 import { VsIntro } from './ui/VsIntro';
+import { GameMenu } from './ui/GameMenu';
 
 export default function App() {
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -56,6 +57,7 @@ export default function App() {
                 <KOOverlay />
                 <HUD />
                 <MoveGuide />
+                <GameMenu />
                 <VsIntro />
                 <DebugHint />
               </>

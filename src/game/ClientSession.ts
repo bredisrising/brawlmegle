@@ -43,6 +43,11 @@ export class ClientSession {
     this.code = code;
   }
 
+  /** Link quality to the host (see Peer.linkStats). */
+  linkStats() {
+    return this.peer?.linkStats() ?? Promise.resolve(null);
+  }
+
   /** K.O. screen "Rematch" on this laptop: the host decides. */
   requestRematch() {
     this.send({ type: 'rematch' });

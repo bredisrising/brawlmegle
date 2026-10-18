@@ -1,0 +1,52 @@
+import { useEffect, useState } from 'react';
+import { useGameStore } from '../game/store';
+import { TextButton } from './ArcadeButton';
+import { useGame } from './GameContext';
+
+/**
+ * Bottom-right during a match (above the move guide chip): the link to the other laptop (ping, direct or relayed) and a small menu
+ * (Esc) to change fighter or go back to the title.
+ */
+export function GameMenu() {
+  const game = useGame();
+  const role = useGameStore((s) => s.role);
+  const link = useGameStore((s) => s.link);
+  const connection = useGameStore((s) => s.connection);
+  const replay = useGameStore((s) => s.replay);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen((o) => !o);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  if (replay) return null;
+
+  const rtt = link?.rttMs;
+  const tone = rtt === null || rtt === undefined ? 'text-paper/60' : rtt < 60 ? 'text-hp' : rtt < 120 ? 'text-paper' : 'text-dmg';
+  return (
+    <div className="pointer-events-auto absolute bottom-14 right-4 flex flex-col items-end gap-2">
+      {open && (
+        <div className="animate-rise flex flex-col items-end gap-3 bg-ink/90 px-4 py-3">
+          {role !== 'client' && <TextButton onClick={() => (setOpen(false), game.changeFighter())}>Change fighter</TextButton>}
+          <TextButton onClick={() => window.location.reload()}>Back to title</TextButton>
+        </div>
+      )}
+      <div className="flex items-stretch gap-1">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="bg-ink/80 px-3 py-1.5 font-cond text-xs font-bold uppercase tracking-[0.2em] text-paper/70 hover:text-paper"
+        >
+          Menu [Esc]
+        </button>
+        {connection && (
+          <span className={`bg-ink/80 px-3 py-1.5 font-cond text-xs font-bold uppercase tracking-[0.2em] ${tone}`} title="Round trip to the other laptop">
+            {connection === 'reconnecting' ? 'Reconnecting…' : `${link?.relay ? 'Relay' : 'P2P'} ${rtt ?? '–'} ms`}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
