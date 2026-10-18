@@ -39,7 +39,7 @@ const ALLOWED_ORIGINS = (
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
 /** Files anyone may download. The raw scan photos (front/left/right) stay private: fighter ids are public. The preview-*
  * and sheet-partial-* files are the forging screen's live preview (see pipeline.js). */
-const FILES = /^(sheet|card)\.(png|webp)$|^(model|rigged)\.glb$|^preview-(voxels\.bin|shape\.glb)$|^sheet-partial-\d\.webp$/;
+const FILES = /^(sheet|card)\.(png|webp)$|^(model|rigged)(\.orig)?\.glb$|^preview-(voxels\.bin|shape\.glb)$|^sheet-partial-\d\.webp$/;
 const DATA = process.env.FORGE_DATA ? new URL(`file://${process.env.FORGE_DATA.replace(/\/?$/, "/")}`) : new URL("./data/", import.meta.url);
 const ACCESS_KEY = process.env.FORGE_ACCESS_KEY ?? "";
 const MAX_PER_HOUR = Number(process.env.FORGE_MAX_PER_HOUR ?? 40);

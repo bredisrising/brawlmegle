@@ -46,6 +46,11 @@ export const config = {
    * damage, the clock is 45 s, and the entrance plays only before the first round.
    */
   demo: params.get('demo') === '1',
+  /**
+   * `?models=full`: forged fighters load their uncompressed originals (the GLB as the 3D step made it, ~2-11 MB more
+   * each) instead of the optimized copy, to compare quality. Falls back to the optimized one when there's no original.
+   */
+  fullModels: params.get('models') === 'full',
   /** `?forge=hq`: the slower, sharper forge (bigger sheet, more sculpting steps, bigger textures), for showcase fighters. */
   forgeQuality: params.get('forge') === 'hq' ? ('hq' as const) : undefined,
 };
