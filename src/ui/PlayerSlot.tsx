@@ -1,7 +1,7 @@
 import { localPlayerId, useGameStore } from '../game/store';
 import type { PlayerId } from '../types';
 import { ACCENT } from './accent';
-import { ArcadeButton } from './ArcadeButton';
+import { ArcadeButton, TextButton } from './ArcadeButton';
 import { ForgeSteps } from './ForgeSteps';
 import { useGame } from './GameContext';
 
@@ -108,6 +108,11 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
               </p>
               {/* The design arrives about a minute before the 3D model: show it off while they wait. */}
               {player.status === 'forging' && player.portraitUrl && <DesignPreview url={player.portraitUrl} color={accent.bg} right={right} />}
+              {player.status === 'forging' && !remote && (
+                <TextButton onClick={() => game.skipForgeWait(id)} title="Fight as a stand-in now; your fighter materializes in when it's ready">
+                  Don't wait: fight now
+                </TextButton>
+              )}
             </div>
           )}
 

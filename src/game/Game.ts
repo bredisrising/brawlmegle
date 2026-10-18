@@ -68,6 +68,10 @@ export class Game {
   /** CPU opponents by slot: they play through the same engine commands and stance a player's reader produces. */
   private readonly cpu: Partial<Record<PlayerId, Cpu>> = {};
   private fightTicks = 0;
+  /** "Fight now" while a forge runs: ends the wait early (the forged fighter swaps in when it's done). */
+  private readonly skipForge: Partial<Record<PlayerId, () => void>> = {};
+  /** Bumped per setup, so a late forge never swaps into a slot that has since picked someone else. */
+  private readonly setupGen: Record<PlayerId, number> = { p1: 0, p2: 0 };
   /** Practice mode: the CPU level to bring in for P2 once the local player is ready. */
   private practiceLevel: CpuLevel | null = null;
   /** Seconds left in the round (the store shows it rounded up). */
@@ -233,6 +237,24 @@ export class Game {
     this.effects.burst(this.views[id].root.position, 'spawn', PLAYER_COLORS[id]);
   }
 
+  /** The local player chose not to wait for their forge (see setupPlayer). */
+  skipForgeWait(id: PlayerId) {
+    this.skipForge[id]?.();
+  }
+
+  /** A forge that finished after its player went ahead with a stand-in: swap the real fighter in, with the beam. */
+  private async arriveLate(id: PlayerId, gen: number, fighter: ForgedFighter) {
+    if (fighter.status !== 'ready') return console.warn('forge failed, keeping the stand-in:', fighter.error);
+    saveFighter(fighter);
+    if (gen !== this.setupGen[id] || useGameStore.getState().players[id].status !== 'ready') return;
+    await this.loadFighter(id, fighter);
+    this.spawn(id);
+    updatePlayer(id, { portraitUrl: fighter.cardUrl ?? null });
+    this.fighters[id] = fighter;
+    this.sendMatch();
+    useGameStore.setState({ callout: { text: 'Fighter forged!', key: performance.now() } });
+  }
+
   /** Secret debug menu: fire an effect in the middle of the arena, optionally with hit-stop + shake. */
   debugBurst(kind: EffectKind, impact = false) {
     // Spawn is a ground effect (it fires at a fighter's feet in play).
@@ -249,6 +271,7 @@ export class Game {
   private async setupPlayer(id: PlayerId, choice: FighterChoice, source: InputSource = createLocalSource(), scan?: Promise<ScanFrames>) {
     const name = choice.kind === 'existing' ? choice.fighter.name : choice.name;
     delete this.cpu[id]; // a real player takes the slot
+    const gen = ++this.setupGen[id];
     try {
       updatePlayer(id, { name, status: 'scanning', statusDetail: 'Starting camera' });
       await source.start();
@@ -273,10 +296,20 @@ export class Game {
           const art = f.cardUrl ?? f.sheetUrl ?? null;
           if (art && art !== useGameStore.getState().players[id].portraitUrl) updatePlayer(id, { portraitUrl: art });
         };
-        fighter = await forgeFighter(name, frames, (f) => (show(forgeStatus(f)), preview(f)), { username: choice.username, signal });
-        if (fighter.status === 'ready') saveFighter(fighter); // they said yes to "save fighter to memory card"
-        // A failed forge still fights: no glbUrl means the default model (SPEC fallback ladder).
-        else console.warn('forge failed, using the default fighter:', fighter.error);
+        const forging = forgeFighter(name, frames, (f) => (show(forgeStatus(f)), preview(f)), { username: choice.username, signal });
+        const skipped = new Promise<null>((resolve) => (this.skipForge[id] = () => resolve(null)));
+        const done = await Promise.race([forging, skipped]);
+        delete this.skipForge[id];
+        if (done) {
+          fighter = done;
+          if (fighter.status === 'ready') saveFighter(fighter); // they said yes to "save fighter to memory card"
+          // A failed forge still fights: no glbUrl means the default model (SPEC fallback ladder).
+          else console.warn('forge failed, using the default fighter:', fighter.error);
+        } else {
+          // Fight now as a stand-in; the forged fighter materializes in when it's ready (even mid-round).
+          fighter = { id: `stand-in-${id}`, name, status: 'ready', glbUrl: `${import.meta.env.BASE_URL}models/default.glb` };
+          forging.then((f) => this.arriveLate(id, gen, f)).catch((err) => console.warn('background forge failed, keeping the stand-in:', err));
+        }
       } else if (choice.kind === 'masked') {
         fighter = maskedFighter(name);
       } else {
