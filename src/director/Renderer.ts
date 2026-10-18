@@ -6,6 +6,8 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { createArena, type Arena } from './Arena';
 import { ImpactPass } from './ImpactPass';
 import { PERF, PerfMonitor } from './PerfMonitor';
+import { QualityGovernor, type PoseRate } from './QualityGovernor';
+import { quality, type QualityLevel } from './quality';
 import { config } from '../config';
 
 export type FrameCallback = (dt: number, frozen: boolean) => void;
@@ -17,8 +19,17 @@ export type FrameCallback = (dt: number, frozen: boolean) => void;
 export class Renderer {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(40, 1, 0.05, 100);
-  readonly renderer = new THREE.WebGLRenderer({ antialias: true });
+  // No canvas MSAA: everything reaches the canvas as full-screen passes (the composer's scene target has its own).
+  readonly renderer = new THREE.WebGLRenderer({ antialias: false });
   private readonly composer: EffectComposer;
+  private readonly bloom: UnrealBloomPass | null = null;
+  /** Steps quality down when the GPU can't fit the fight and the pose tracker (see QualityGovernor). */
+  readonly governor: QualityGovernor;
+  /** The pose tracker on this laptop, for the governor (set by the game). */
+  private poseRate: () => PoseRate | null = () => null;
+  /** Frame cap (the sim and the camera keep running on skipped frames; only drawing is skipped). */
+  private maxFps = 60;
+  private lastDrawn = -Infinity;
   readonly arena: Arena;
   /** Frame-time monitor (`?perf`), null otherwise. */
   readonly perf: PerfMonitor | null;
@@ -53,7 +64,6 @@ export class Renderer {
 
   constructor(container: HTMLElement) {
     this.container = container;
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, config.lowPower ? 1.25 : 2));
     this.renderer.shadowMap.enabled = !config.lowPower;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -67,7 +77,10 @@ export class Renderer {
       new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: config.lowPower ? 0 : 4 }),
     );
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    if (!config.lowPower) this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.4, 1));
+    if (!config.lowPower) {
+      this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.4, 1);
+      this.composer.addPass(this.bloom);
+    }
     this.composer.addPass(new OutputPass());
     this.composer.addPass(this.impactPass);
 
@@ -75,8 +88,35 @@ export class Renderer {
     this.camera.position.copy(this.cameraHome);
     this.camera.lookAt(this.lookTarget);
 
+    this.governor = new QualityGovernor((level) => this.applyQuality(level), () => this.poseRate());
+    this.applyQuality(quality.current);
     this.resizeObserver.observe(container);
     this.resize();
+  }
+
+  /** Where the governor reads the pose tracker's rate (this laptop's camera source, if any). */
+  watchPose(rate: () => PoseRate | null) {
+    this.poseRate = rate;
+  }
+
+  /** Apply a quality level: MSAA, pixel ratio, bloom, outlines, frame cap. */
+  private applyQuality(level: QualityLevel) {
+    const samples = config.lowPower ? 0 : level.samples;
+    for (const target of [this.composer.renderTarget1, this.composer.renderTarget2]) {
+      if (target.samples === samples) continue;
+      target.samples = samples;
+      target.dispose(); // reallocated with the new sample count on next use
+    }
+    const ratio = Math.min(window.devicePixelRatio, config.lowPower ? 1.25 : 2, level.maxPixelRatio);
+    if (ratio !== this.renderer.getPixelRatio()) {
+      this.renderer.setPixelRatio(ratio);
+      this.resize();
+    }
+    if (this.bloom) this.bloom.enabled = level.bloom;
+    this.maxFps = level.maxFps;
+    this.scene.traverse((o) => {
+      if (o.userData.outline) o.visible = level.outlines;
+    });
   }
 
   start() {
@@ -150,7 +190,11 @@ export class Renderer {
 
   private loop = (now: number) => {
     this.frameId = requestAnimationFrame(this.loop);
-    this.perf?.begin(now);
+    // Frame cap: on a fast display, frames that come sooner than the cap allows aren't drawn (a 120 Hz laptop would
+    // otherwise draw the same fight twice per sim tick, on a GPU the pose tracker needs). The 0.8 lets a 144 Hz
+    // display draw every other frame (72 fps) instead of every third.
+    const draw = now - this.lastDrawn >= (1000 / this.maxFps) * 0.8;
+    if (draw) this.perf?.begin(now);
     const dt = Math.min((now - this.lastTime) / 1000, 1 / 20);
     this.lastTime = now;
 
@@ -165,6 +209,10 @@ export class Renderer {
 
     this.updateCamera(dt);
     this.impactPass.tick(dt, this.camera.aspect);
+    this.governor.tick(now, draw);
+    if (!draw) return;
+    this.lastDrawn = now;
+    this.arena.update(this.camera);
     this.composer.render(dt);
     this.perf?.end();
   };

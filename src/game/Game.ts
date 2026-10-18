@@ -1,4 +1,5 @@
 import { Renderer } from '../director/Renderer';
+import { poseRateOf } from '../director/QualityGovernor';
 import * as THREE from 'three';
 import { Effects, type EffectKind } from '../director/Effects';
 import { FighterView } from '../director/FighterView';
@@ -143,6 +144,8 @@ export class Game {
     for (const v of Object.values(this.views)) this.renderer.scene.add(v.root);
 
     this.renderer.onFrame(this.update);
+    // Render quality steps down when this laptop's pose tracker starves (QualityGovernor).
+    this.renderer.watchPose(() => poseRateOf(this.localInputSource()));
     this.renderer.start();
     if (this.renderer.perf) this.exposePerf(this.renderer.perf);
     window.addEventListener('keydown', this.onDebugKey);
@@ -186,8 +189,10 @@ export class Game {
   /** `?perf`: the pose model's timing on the overlay, and the game for scripted measurements (scripts/perf). */
   private exposePerf(perf: NonNullable<Renderer['perf']>) {
     perf.extra = () => {
-      const source = this.localInputSource() as { stats?: { detectMs: number }; variant?: string } | null;
-      return source?.stats ? `pose ${source.variant ?? ''} ${source.stats.detectMs.toFixed(1)} ms` : '';
+      const g = this.renderer.governor;
+      const pose = poseRateOf(this.localInputSource());
+      const poses = pose ? `  pose ${pose.detectFps.toFixed(0)}/${pose.cameraFps.toFixed(0)} fps ${pose.detectMs.toFixed(0)} ms` : '';
+      return `quality ${g.level}${g.pinned ? ' (pinned)' : ''}${poses}`;
     };
     (window as unknown as { __brawl: unknown }).__brawl = { game: this, store: useGameStore, perf };
   }

@@ -105,8 +105,8 @@ export class PerfMonitor {
       interval,
       cpu: stats(this.cpu, n),
       gpu: stats(this.gpu, n),
-      /** Frames that took longer than 1.5 vsyncs (a visible hitch at 60 Hz). */
-      hitches: count(this.interval, n, (v) => v > 25),
+      /** Frames that took over 1.5x the usual frame time (a visible hitch, whatever the frame cap). */
+      hitches: count(this.interval, n, (v) => v > 1.5 * Math.max(interval.p50, 16.7)),
       calls: this.last.calls,
       triangles: this.last.triangles,
       peakCalls: this.peak.calls,

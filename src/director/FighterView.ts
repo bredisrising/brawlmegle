@@ -7,6 +7,7 @@ import { disposeObject } from './dispose';
 import { BONES, GUARD_POSE, JOINTS, copyPose, createPose, type JointName, type Pose } from './pose';
 import { LivePoseMapper } from './livePose';
 import { SkeletonPose } from './skeletonPose';
+import { quality } from './quality';
 import { HIP_HEIGHT, applyAction, stance, type HitInfo, type Motion } from './fightPose';
 
 /** What the view needs each sim tick. */
@@ -422,6 +423,7 @@ export class FighterView {
           : new THREE.Mesh(mesh.geometry, material);
       if (outline instanceof THREE.SkinnedMesh && mesh instanceof THREE.SkinnedMesh) outline.bind(mesh.skeleton, mesh.bindMatrix);
       outline.userData.outline = true;
+      outline.visible = quality.current.outlines; // the quality governor may have them off
       outline.position.copy(mesh.position);
       outline.quaternion.copy(mesh.quaternion);
       outline.scale.copy(mesh.scale);

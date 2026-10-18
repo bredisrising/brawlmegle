@@ -103,7 +103,7 @@ const page = await context.newPage();
 const errors = [];
 page.on("console", (m) => {
   if (m.type() === "error" || m.type() === "warning") errors.push(`[${m.type()}] ${m.text().slice(0, 200)}`);
-  if (/switching to lite/.test(m.text())) log("console:", m.text());
+  if (/switching to lite|\[quality\]/.test(m.text())) log("console:", m.text());
 });
 page.on("pageerror", (e) => errors.push(`[pageerror] ${e.message.slice(0, 200)}`));
 const cdp = await context.newCDPSession(page);
@@ -200,7 +200,7 @@ try {
 
 function summary(p) {
   const f = (v) => (Number.isFinite(v) ? v.toFixed(1) : "-");
-  return `fps ${f(p.perf.fps)} | frame p50 ${f(p.perf.interval.p50)} p95 ${f(p.perf.interval.p95)} p99 ${f(p.perf.interval.p99)} max ${f(p.perf.interval.max)} | hitches ${p.perf.hitches} | cpu p50 ${f(p.perf.cpu.p50)} p95 ${f(p.perf.cpu.p95)} | gpu p50 ${f(p.perf.gpu.p50)} p95 ${f(p.perf.gpu.p95)} | main ${f(p.mainMsPerFrame)} ms/frame (script ${f(p.scriptMsPerFrame)}) | calls ${p.perf.calls} tris ${p.perf.triangles} tex ${p.perf.textures} | react ${f(p.react.commitsPerSec)} commits/s ${f(p.react.rendersPerSec)} renders/s | store ${f(p.storePerSec)}/s | gc ${p.gc ? `${p.gc.count} (${f(p.gc.totalMs)} ms, max ${f(p.gc.maxMs)})` : "-"} | pose ${p.pose ? `${p.pose.variant} ${f(p.pose.detectMs)} ms` : "-"} | heap ${f(p.heapMB)} MB`;
+  return `fps ${f(p.perf.fps)} | frame p50 ${f(p.perf.interval.p50)} p95 ${f(p.perf.interval.p95)} p99 ${f(p.perf.interval.p99)} max ${f(p.perf.interval.max)} | hitches ${p.perf.hitches} | cpu p50 ${f(p.perf.cpu.p50)} p95 ${f(p.perf.cpu.p95)} | gpu p50 ${f(p.perf.gpu.p50)} p95 ${f(p.perf.gpu.p95)} | main ${f(p.mainMsPerFrame)} ms/frame (script ${f(p.scriptMsPerFrame)}) | calls ${p.perf.calls} tris ${p.perf.triangles} tex ${p.perf.textures} | react ${f(p.react.commitsPerSec)} commits/s ${f(p.react.rendersPerSec)} renders/s | store ${f(p.storePerSec)}/s | gc ${p.gc ? `${p.gc.count} (${f(p.gc.totalMs)} ms, max ${f(p.gc.maxMs)})` : "-"} | pose ${p.pose ? `${p.pose.runner}/${p.pose.delegate} ${p.pose.variant} ${f(p.pose.detectMs)} ms, ${f(p.pose.posesPerSec)}/s, age p50 ${f(p.pose.ageP50)} p95 ${f(p.pose.ageP95)}` : "-"} | heap ${f(p.heapMB)} MB | quality ${p.quality ? p.quality.level : "-"}`;
 }
 
 async function metrics() {
@@ -218,6 +218,10 @@ async function measure(phase) {
     window.__storeUpdates = 0;
     window.__unsubStore?.();
     window.__unsubStore = window.__brawl.store.subscribe(() => window.__storeUpdates++);
+    // Poses delivered for P1, and how old each is on arrival (camera frame -> landmarks in the game).
+    window.__poseAges = [];
+    window.__unsubPose?.();
+    window.__unsubPose = window.__brawl.game.input.subscribe("p1", (f) => window.__poseAges.push(performance.now() - f.t));
   });
   const traceDone = startTrace();
   const m0 = await metrics();
@@ -256,10 +260,18 @@ async function measure(phase) {
       react: { ...window.__reactStats },
       store: window.__storeUpdates,
       loaf: window.__loaf.slice(0, 30),
-      pose: source && source.stats ? { variant: source.variant, detectMs: source.stats.detectMs, fps: source.stats.fps } : null,
+      pose: source && source.stats ? (() => {
+        const ages = window.__poseAges.slice().sort((a, b) => a - b);
+        return {
+          variant: source.variant, detectMs: source.stats.detectMs, cameraFps: source.stats.fps, runner: source.stats.runner, delegate: source.stats.delegate ?? source.delegate,
+          posesPerSec: ages.length, ageP50: ages[Math.floor(ages.length / 2)], ageP95: ages[Math.floor(ages.length * 0.95)],
+        };
+      })() : null,
       phase: window.__brawl.store.getState().phase,
+      quality: game.renderer.governor ? { level: game.renderer.governor.level, ...game.renderer.governor.last } : null,
     };
   });
+  if (inPage.pose) inPage.pose.posesPerSec /= elapsed;
   const frames = inPage.perf.frames || 1;
   const top = Object.entries(inPage.react.byName).sort((a, b) => b[1] - a[1]).slice(0, 12);
   return {
@@ -276,6 +288,7 @@ async function measure(phase) {
     pose: inPage.pose,
     loaf: inPage.loaf,
     endPhase: inPage.phase,
+    quality: inPage.quality,
   };
 }
 
