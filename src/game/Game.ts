@@ -69,6 +69,9 @@ export class Game {
   /** Each fighter's phase last tick, to hear a strike come out (whoosh) on both laptops. */
   private readonly heardPhase: Partial<Record<PlayerId, string>> = {};
   private readonly unsubscribe: () => void;
+  /** Combo counting and the round's first hit (both laptops count from the same hit events). */
+  private combo = { player: null as PlayerId | null, hits: 0, at: 0, key: 0 };
+  private firstHitDone = false;
   private accumulator = 0;
   private phaseTimer = 0;
   /** Aborted on dispose: stops in-flight scans and forge polling (HMR / unmount), so no camera is left running. */
@@ -89,7 +92,14 @@ export class Game {
     this.unsubscribe = useGameStore.subscribe((s, prev) => {
       if (s.countdown === prev.countdown || s.countdown === null) return;
       this.sfx.play(s.countdown === 0 ? 'go' : 'beep');
+      // A new round: forget the last one's combos and first hit.
+      if (s.countdown === COUNTDOWN_FROM) {
+        this.firstHitDone = false;
+        this.combo.player = null;
+        useGameStore.setState({ combo: null, callout: null });
+      }
     });
+    for (const id of PLAYER_IDS) this.views[id].onLand = (at) => this.effects.burst(at, 'dust');
   }
 
   /** Current local camera or mock source, for the development pose monitor. */
@@ -409,6 +419,7 @@ export class Game {
     const point = this.views[defender].worldJoint(by.height === 'body' || event.move === 'knee' ? 'neck' : 'head');
     if (by.height === 'body' || event.move === 'knee') point.y -= 0.08;
     const heavy = event.type === 'counter' || event.damage >= 10;
+    this.countCombo(event, ko);
     this.sfx.play(ko ? 'ko' : event.type === 'blocked' ? 'blocked' : event.type === 'counter' ? 'counter' : heavy ? 'heavy' : 'hit');
     this.effects.burst(point, event.type === 'blocked' ? 'blocked' : event.type === 'counter' ? 'counter' : 'hit');
     // Punch: impact frames on the big ones, the camera leaning into the hit.
@@ -441,6 +452,27 @@ export class Game {
       this.renderer.slowMotion(KO_FREEZE + 1.4, 0.3);
       this.effects.burst(point, 'ko');
     }
+  }
+
+  /** Hits in a row (within ~1 s of each other, unanswered) make a combo; the round's first hit gets a callout. */
+  private countCombo(event: FightEvent, ko: boolean) {
+    const now = performance.now();
+    if (event.type === 'blocked') {
+      if (this.combo.player === event.attacker) this.combo.player = null;
+      return;
+    }
+    const c = this.combo;
+    if (c.player === event.attacker && now - c.at < 1100) c.hits++;
+    else Object.assign(c, { player: event.attacker, hits: 1 });
+    c.at = now;
+    if (c.hits >= 2) useGameStore.setState({ combo: { player: event.attacker, hits: c.hits, key: ++c.key } });
+    if (ko) {
+      const winnerHp = useGameStore.getState().players[event.attacker].hp;
+      if (winnerHp >= MAX_HP) useGameStore.setState({ callout: { text: 'Perfect', key: now } });
+    } else if (!this.firstHitDone) {
+      useGameStore.setState({ callout: { text: 'First attack', key: now } });
+    }
+    this.firstHitDone = true;
   }
 
   // ---------------------------------------------------------------------------

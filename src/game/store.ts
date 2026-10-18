@@ -52,6 +52,10 @@ export interface GameState {
   popups: HitPopup[];
   /** Bumped on big hits to retrigger the screen-flash animation. */
   flashKey: number;
+  /** Hits in a row by one fighter (2+), for the combo counter. `key` changes with every hit. */
+  combo: { player: PlayerId; hits: number; key: number } | null;
+  /** A big announcer callout ("FIRST ATTACK", "PERFECT"), `key` changes with each. */
+  callout: { text: string; key: number } | null;
   /** The last move the camera read for this laptop's player (shown on the camera picture-in-picture). */
   lastMove: { text: string; at: number } | null;
 }
@@ -78,6 +82,8 @@ export const useGameStore = create<GameState>(() => ({
   players: Object.fromEntries(PLAYER_IDS.map((id) => [id, initialPlayer(id)])) as Record<PlayerId, PlayerState>,
   popups: [],
   flashKey: 0,
+  combo: null,
+  callout: null,
   lastMove: null,
 }));
 

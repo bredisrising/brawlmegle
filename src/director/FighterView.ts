@@ -80,6 +80,8 @@ export class FighterView {
   /** Breathing clock for the beaten-up idle (keeps running). */
   private hurtClock = 0;
   private hit: HitInfo | null = null;
+  /** Called once when a K.O.'d body hits the floor (world point), for the dust. */
+  onLand: ((at: THREE.Vector3) => void) | null = null;
   private flash = 0;
   private readonly motion: Motion = { lunge: 0, tilt: 0, lift: 0 };
   /** Stepped animation: time since the shown pose last changed, and what the engine was doing then. */
@@ -212,7 +214,9 @@ export class FighterView {
     this.duck = approach(this.duck, state.evade === 'duck' ? 1 : 0, dt, state.evade === 'duck' ? 22 : 9);
     this.slip = approach(this.slip, state.evade === 'slip' ? (state.evadeDir === 'R' ? -1 : 1) : 0, dt, state.evade === 'slip' ? 22 : 9);
     if (state.phase !== 'idle' || this.time - this.tellAt > 0.6) this.tellAt = -1;
+    const wasFalling = this.koTime > 0 && this.koTime < 0.62;
     this.koTime = state.phase === 'ko' ? this.koTime + dt : 0;
+    if (wasFalling && this.koTime >= 0.62) this.onLand?.(this.worldJoint('neck').setY(0.02));
     this.wonTime = opponentKo && state.phase !== 'ko' ? this.wonTime + dt : 0;
     if (state.phase !== 'hitstun') this.hit = null;
 
@@ -409,7 +413,7 @@ export class FighterView {
     for (const f of this.flashMaterials) {
       if (this.flash > 0) {
         f.material.emissive.setRGB(1, 1, 1);
-        f.material.emissiveIntensity = this.flash * 0.8;
+        f.material.emissiveIntensity = this.flash * 0.45;
       } else {
         f.material.emissive.copy(f.emissive);
         f.material.emissiveIntensity = f.intensity;

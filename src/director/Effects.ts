@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
-export type EffectKind = 'hit' | 'blocked' | 'whiff' | 'counter' | 'ko' | 'spawn';
-export const EFFECT_KINDS: readonly EffectKind[] = ['hit', 'blocked', 'whiff', 'counter', 'ko', 'spawn'];
+export type EffectKind = 'hit' | 'blocked' | 'whiff' | 'counter' | 'ko' | 'spawn' | 'dust';
+export const EFFECT_KINDS: readonly EffectKind[] = ['hit', 'blocked', 'whiff', 'counter', 'ko', 'spawn', 'dust'];
 
 /**
  * Per-kind recipe. Colors are HDR (intensity > 1 multiplies them past the bloom threshold).
@@ -47,6 +47,11 @@ const SPECS: Record<EffectKind, EffectSpec> = {
     sparks: { count: 30, color: '#5ee8ff', intensity: 5, speed: 0.6, size: 0.02, life: 0.9, gravity: -0.6, upward: true },
     ring: { color: '#5ee8ff', intensity: 4, from: 0.05, to: 0.45, life: 0.5, flat: true },
     beam: { color: '#5ee8ff', intensity: 3, radius: 0.22, height: 1.1, life: 1.6 },
+  },
+  // A body hitting the floor.
+  dust: {
+    sparks: { count: 40, color: '#b8a98f', intensity: 0.9, speed: 0.7, size: 0.05, life: 0.9, gravity: 0.8, upward: true },
+    ring: { color: '#d8ccb4', intensity: 0.8, from: 0.1, to: 0.7, life: 0.5, flat: true },
   },
 };
 

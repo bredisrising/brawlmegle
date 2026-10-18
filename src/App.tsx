@@ -16,6 +16,7 @@ import { ClientScreen } from './ui/screens/ClientScreen';
 import { PoseDebugOverlay } from './ui/PoseDebugOverlay';
 import { CameraPip } from './ui/CameraPip';
 import { MoveGuide } from './ui/MoveGuide';
+import { Callout, ComboCounter } from './ui/ComboCounter';
 
 export default function App() {
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -47,6 +48,8 @@ export default function App() {
                 <PlayerSlot id="p1" />
                 <PlayerSlot id="p2" />
                 <HitPopups />
+                <ComboCounter />
+                <Callout />
                 <ScreenFlash />
                 <Countdown />
                 <KOOverlay />
