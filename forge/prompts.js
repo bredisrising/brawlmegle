@@ -17,11 +17,17 @@ Return only JSON with exactly these keys:
   "distinctive": the 3 most distinctive things about how they look, as short phrases,
   "build": the street-brawler build that suits them best, one of "tall skinny", "athletic", "slow wrestler", "fast boxer",
   "archetype": the fighting style their look and vibe suggest, 2-4 words (like "street boxer", "kung fu master", "luchador", "capoeira dancer", "judo champ"),
-  "signature": 3 signature costume details that turn their real outfit into a fighting-game costume, as short phrases with colors, built from what they actually wear (like "rolled-up sleeves", "red taped hand wraps", "a knotted headband", "a wide gold cloth belt", "fingerless leather gloves", "a jacket tied at the waist"); at least one adds a bold accent color that suits their palette; never weapons or held objects,
+  "signature": 3 signature costume details that turn their real outfit into a fighting-game costume, as short phrases with colors, built from what they actually wear and never more revealing than it (like "rolled-up sleeves", "red taped hand wraps", "a knotted headband", "a wide gold cloth belt", "fingerless leather gloves", "a jacket tied at the waist"); at least one adds a bold accent color that suits their palette; never weapons or held objects,
   "prop": one signature prop that fits their style,
   "palette": 3 hex colors taken from their outfit,
   "scout_report": one fighting-game scouting line, nothing about their body or face
 }`;
+
+/**
+ * Safety: the public scans anyone, so every image prompt carries this. The fighting-game exaggeration is about power and
+ * attitude, never about sexualizing anyone, and a costume never shows more than the real clothes do.
+ */
+export const DIGNITY = `Respect: the character is a tough, dignified fighter, never sexualized. Exaggerate strength and attitude (stance, arms, fists, jaw), never the chest, hips, buttocks or groin, and never a pin-up, suggestive or seductive pose or expression. The costume covers at least as much as their real clothes in the photos (never shorter, tighter, lower-cut, sheer or more revealing; no swimwear, lingerie, cleavage or bare midriff unless their real outfit clearly shows it). Skirts and dresses keep their real length and don't ride up, even in an action pose. Keep religious and cultural garments (hijab, turban, kippah and the like) exactly as worn. If the person looks under 18, make an age-appropriate, fully clothed young fighter.`;
 
 const list = (value) => (Array.isArray(value) ? value.filter((v) => typeof v === "string").join(", ") : typeof value === "string" ? value : "");
 
@@ -45,12 +51,13 @@ Pose & View: Full-body front-facing symmetrical A-pose against a solid neutral g
   return `Turn the person in the reference photos into a playable character in a modern 3D fighting game like Street Fighter 6 or Tekken 8, shown as a clean front-view character model sheet that a 3D artist will rebuild as a game model.
 
 Likeness: the fighter must be instantly recognizable as this person. Keep ${brief.face}. Keep their face shape, exact hairstyle and hair color, facial hair, skin tone and glasses (if any).${distinctive ? ` Keep what makes them distinctive: ${distinctive}.` : ""}
-Fighter design: a ${archetype} with a ${build} build, clearly exaggerated like a fighting-game hero, more stylized than realistic (but not chibi): wide shoulders, a V-shaped torso and tapered waist, a strong neck, powerful forearms, oversized fists, a strong jaw and brow, and a slightly larger head than real. A confident, fierce look with the mouth closed. Full of attitude and life, never generic.
+Fighter design: a ${archetype} with a ${build} build, clearly exaggerated like a fighting-game hero, more stylized than realistic (but not chibi): broad, powerful shoulders and arms, a strong neck, powerful forearms, oversized fists, a strong jaw and brow, and a slightly larger head than real; the body shape otherwise follows their own build. A confident, fierce look with the mouth closed. Full of attitude and life, never generic.
 Costume: their real outfit${outfit ? ` (${outfit})` : ""} reworked into a signature fighting-game costume in the same main colors, pushed punchier and more saturated${signature ? `, with ${signature}` : ""}. Bold color blocking, vivid accent colors and a strong, readable silhouette. Shoes or wraps on the feet.
 Style and detail: a stylized 3D CG character render like Street Fighter 6 key art, with even more detail and contrast than the game: sculpted, exaggerated anatomy and deep fabric folds; painted ambient occlusion in every fold, seam and crease; painted highlights on the cheekbones, nose, brow, knuckles and hair locks; hard, clean edges between materials (skin, hair, cloth, leather, tape, metal), each with its own clearly different texture (woven cloth, stitched leather, sculpted hair strands); a sharp, well-defined face with clear eyes, brows and lips. Razor-sharp focus everywhere, no blur, no grain. It must look like a rendered 3D game model: not a photo, not a flat 2D illustration, no outlines, not low-poly.
 Pose: a neutral, symmetrical A-pose facing the camera head-on. Arms straight and angled about 40 degrees down and away from the body, with a clear gap between each arm and the torso; hands in loose fists. Legs straight, feet shoulder-width apart and flat, toes pointing forward. Head level, eyes looking into the camera.
 Camera and light: the whole body from the top of the head to the soles of the feet, centered and filling about 90% of the image height. Straight-on view from chest height with a long lens (almost orthographic, no perspective distortion). Bright, even studio light from the front so every part is clearly lit; the forms read through the painted shading, not through cast shadows. No rim light, no shadow on the floor.
-Background: plain flat light gray. Nothing else in the image: no floor, no props or weapons, no text, logos, labels or UI, no extra views or characters.`;
+Background: plain flat light gray. Nothing else in the image: no floor, no props or weapons, no text, logos, labels or UI, no extra views or characters.
+${DIGNITY}`;
 }
 
 /** VS card art. Takes the model sheet as its reference so the character stays consistent. */
@@ -62,9 +69,10 @@ Late-90s PC game render: low-polygon geometry, flat lighting, pixelated hand-pai
 Plain dark background, no text.`;
   }
   return `The exact same character as the reference image: same face, hair, proportions, costume, colors and stylized 3D fighting-game style.
-Dynamic fighting stance, slightly low camera angle, cocky expression, holding ${brief.prop}.
+Dynamic fighting stance, a heroic three-quarter view with the camera at chest height, cocky expression, holding ${brief.prop}.
 Street Fighter 6 style character select render: crisp sculpted detail, saturated colors, dramatic key light with a colored rim light.
-Plain dark background, no text.`;
+Plain dark background, no text.
+${DIGNITY}`;
 }
 
 /**
