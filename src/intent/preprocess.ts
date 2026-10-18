@@ -119,6 +119,9 @@ export class PosePreprocessor {
   /** Full-body (hips) mode with hysteresis, so hips at the edge of the frame don't flip it every frame. */
   private fullBodyMode = false;
   private fullBodySince = 0;
+  /** Raw body size of the last accepted frame, and a size jump waiting for a second frame to confirm it. */
+  private lastRawSize = 0;
+  private pendingSize = 0;
 
   constructor(config: PreprocessConfig = DEFAULT_PREPROCESS) {
     this.config = config;
@@ -157,6 +160,8 @@ export class PosePreprocessor {
     this.worldUnitHome = 0;
     this.home = null;
     this.fullBodyMode = false;
+    this.lastRawSize = 0;
+    this.pendingSize = 0;
   }
 
   /** Returns null for repeated or unusable frames; callers keep the previous Body. */
@@ -168,6 +173,17 @@ export class PosePreprocessor {
     if (key === this.lastRawKey) return null;
     // After a long gap (player lost, tab hidden), start fresh instead of filtering across it.
     if (this.prev && frame.t - this.lastT > 300) this.reset();
+    // A torso can't change size by a fifth between two camera frames: that's MediaPipe jumping the whole
+    // skeleton for a frame. Skip that one frame (never two in a row: then the player really moved, or the
+    // tracking is just rough, and either way the frames are all we have).
+    const aspect0 = frame.aspect ?? 4 / 3;
+    const rawSize = bodyUnit(frame.image.map((p) => ({ x: p.x * aspect0, y: p.y, visibility: p.visibility })), this.fullBodyMode).size;
+    if (this.lastRawSize && !this.pendingSize && Math.abs(Math.log(rawSize / this.lastRawSize)) > 0.2) {
+      this.pendingSize = rawSize;
+      return null;
+    }
+    this.pendingSize = 0;
+    this.lastRawSize = rawSize;
     this.lastRawKey = key;
     const dt = this.prev ? (frame.t - this.lastT) / 1000 : 0;
     this.lastT = frame.t;

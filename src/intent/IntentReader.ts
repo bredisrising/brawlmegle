@@ -85,6 +85,8 @@ type LimbState = {
   faceBeforeOnset: number;
   /** Last time this hand was rising fast. */
   risingAt: number;
+  /** Current tip travel from the anchor (to compare the two hands). */
+  travel: Vec3;
   // Debug readouts
   disp: number;
   out: number;
@@ -263,6 +265,7 @@ export class IntentReader {
     s.lastRestDisp = restDisp;
     s.disp = disp;
     s.out = outward;
+    s.travel = tTip;
     s.history.push({ t, d: tipTravel(now, s.rest) });
     while (s.history.length && t - s.history[0].t > 500) s.history.shift();
 
@@ -315,6 +318,7 @@ export class IntentReader {
         : def.kind === 'arm' && (raisingGuard(body, s.anchorTip, tipPt.p, this.config.guard.radius)
           || handToFace(body, s.peak, tipPt.p, this.config.guard.radius, s.since - s.faceBeforeOnset > 600)) ? 'raising guard'
         : def.kind === 'arm' && bothHandsUp(body, name, tTip, s.since - s.faceBeforeOnset > 600 && t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 250) ? 'both hands up'
+        : def.kind === 'arm' && movedTogether(s.peak, this.limbs[name === 'armL' ? 'armR' : 'armL'], t) ? 'both hands moved'
         : null;
       if (reason) {
         s.phase = 'idle';
@@ -550,6 +554,20 @@ function bothHandsUp(body: Body, limb: LimbName, travel: Vec3, bothCameUp: boole
 }
 
 /**
+ * Both hands moving the same way at the same time is the body (or the tracking) moving, not two punches:
+ * ducking or twisting with the guard up, or MediaPipe jumping the whole skeleton for a frame.
+ */
+function movedTogether(travel: Vec3, other: LimbState, t: number) {
+  const busy = other.phase === 'onset' || (other.phase === 'recover' && t - other.since < 100);
+  if (!busy) return false;
+  const o = other.phase === 'onset' ? other.travel : other.peak;
+  const a = Math.hypot(travel.x, travel.y);
+  const b = Math.hypot(o.x, o.y);
+  if (a < 1e-3 || b < 1e-3 || b < 0.5 * a || b > 2 * a) return false;
+  return (travel.x * o.x + travel.y * o.y) / (a * b) > 0.7;
+}
+
+/**
  * Bringing a hand up from the lap or a relaxed low position into the guard zone (by the face) is putting
  * your guard up, not an uppercut. Real uppercuts start from guard height.
  */
@@ -607,7 +625,7 @@ function windupOf(s: LimbState, dir: Vec3) {
 function newLimb(): LimbState {
   return {
     phase: 'idle', rest: null, anchor: null, since: 0, grewAt: 0, peakDisp: 0, peakSpeed: 0,
-    peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, peakMidTravel: 0, peakMidOut: 0, anchorTip: { x: 0, y: 0, z: 0 }, peakElbow: 0, history: [], typicalSpeed: 4, extended: null, lastRestDisp: 0, rearmedAt: -Infinity, nearFaceAt: -Infinity, faceBeforeOnset: -Infinity, risingAt: -Infinity, disp: 0, out: 0,
+    peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, peakMidTravel: 0, peakMidOut: 0, anchorTip: { x: 0, y: 0, z: 0 }, peakElbow: 0, history: [], typicalSpeed: 4, extended: null, lastRestDisp: 0, rearmedAt: -Infinity, nearFaceAt: -Infinity, faceBeforeOnset: -Infinity, risingAt: -Infinity, travel: { x: 0, y: 0, z: 0 }, disp: 0, out: 0,
   };
 }
 
