@@ -15,6 +15,7 @@ import "./env.js";
 import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { pipeline } from "node:stream";
 import { runForge, models } from "./pipeline.js";
 
 if (!process.env.OPENAI_API_KEY) {
@@ -33,18 +34,27 @@ const ALLOWED_ORIGINS = (
   .map((s) => s.trim())
   .filter(Boolean);
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
-const FILES = /^(front|left|right)\.(jpg|png)$|^(sheet|card)\.png$|^(model|rigged)\.glb$/;
+/** Files anyone may download. The raw scan photos (front/left/right) stay private: fighter ids are public. */
+const FILES = /^(sheet|card)\.png$|^(model|rigged)\.glb$/;
 const DATA = process.env.FORGE_DATA ? new URL(`file://${process.env.FORGE_DATA.replace(/\/?$/, "/")}`) : new URL("./data/", import.meta.url);
 const ACCESS_KEY = process.env.FORGE_ACCESS_KEY ?? "";
 const MAX_PER_HOUR = Number(process.env.FORGE_MAX_PER_HOUR ?? 40);
 const MAX_PER_DAY = Number(process.env.FORGE_MAX_PER_DAY ?? 200);
 const USERNAME = /^[a-z0-9_.-]{1,24}$/;
-/** Usernames are case-insensitive and trimmed. Returns null if it isn't a usable username. */
-const normalizeUsername = (u) => (typeof u === "string" && USERNAME.test(u.trim().toLowerCase()) ? u.trim().toLowerCase() : null);
+/**
+ * Usernames are case-insensitive and trimmed. Returns null if it isn't a usable username. All dots is out:
+ * `/api/profiles/..` collapses to `/api/` in the URL, so that profile could never be looked up.
+ */
+const normalizeUsername = (raw) => {
+  const u = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  return USERNAME.test(u) && !/^\.+$/.test(u) ? u : null;
+};
 const devPage = fs.readFileSync(new URL("./public/index.html", import.meta.url));
 
 /** @type {Map<string, object>} */
 const fighters = new Map();
+/** Forge requests that passed the caps and are still uploading. They count against the caps too. */
+let uploading = 0;
 fs.mkdirSync(DATA, { recursive: true });
 for (const id of fs.readdirSync(DATA)) {
   try {
@@ -104,6 +114,8 @@ function readJson(req) {
       }
     });
     req.on("error", reject);
+    // An upload cut off halfway must settle too, or it would hold its forge slot forever.
+    req.on("close", () => reject(Object.assign(new Error("upload aborted"), { status: 400 })));
   });
 }
 
@@ -142,7 +154,11 @@ async function handle(req, res) {
   if (req.method === "GET" && url.pathname === "/health") return json(res, 200, { ok: true, models });
 
   if (req.method === "GET" && parts[0] === "api" && parts[1] === "profiles" && parts.length === 3) {
-    const username = normalizeUsername(decodeURIComponent(parts[2]));
+    let raw = "";
+    try {
+      raw = decodeURIComponent(parts[2]);
+    } catch {}
+    const username = normalizeUsername(raw);
     if (!username) return json(res, 400, { error: "usernames are 1-24 letters, digits, _ . -" });
     const mine = [...fighters.values()].filter((f) => f.username === username).sort((a, b) => b.createdAt - a.createdAt);
     const ready = mine.find((f) => f.status === "ready");
@@ -158,15 +174,24 @@ async function handle(req, res) {
   if (req.method === "POST" && url.pathname === "/api/forge") {
     if (!req.headers["content-type"]?.startsWith("application/json")) return json(res, 415, { error: "send JSON" });
     if (ACCESS_KEY && req.headers["x-forge-key"] !== ACCESS_KEY) return json(res, 403, { error: "bad forge key" });
-    const active = [...fighters.values()].filter((f) => f.status === "forging").length;
+    const active = [...fighters.values()].filter((f) => f.status === "forging" || f.status === "scanning").length + uploading;
     if (active >= MAX_ACTIVE) return json(res, 429, { error: `${active} forges already running, try again in a minute` });
     // Every forge spends OpenAI and Tripo credits: cap them.
     const now = Date.now();
     const recent = [...fighters.values()].filter((f) => now - f.createdAt < 86_400_000);
-    if (recent.filter((f) => now - f.createdAt < 3_600_000).length >= MAX_PER_HOUR || recent.length >= MAX_PER_DAY) {
+    const lastHour = recent.filter((f) => now - f.createdAt < 3_600_000).length;
+    if (lastHour + uploading >= MAX_PER_HOUR || recent.length + uploading >= MAX_PER_DAY) {
       return json(res, 429, { error: "forge limit reached for now, try again later" });
     }
-    const body = await readJson(req);
+    // Hold the slot while the photos upload, so parallel requests can't all get past the caps above.
+    uploading++;
+    let body;
+    try {
+      body = await readJson(req);
+    } finally {
+      uploading--;
+    }
+    if (!body || typeof body !== "object") return json(res, 400, { error: "send a JSON object" });
     const frames = Array.isArray(body.frames) ? body.frames.map(decodeImage) : [];
     if (frames.length < 1 || frames.length > 3 || frames.includes(null)) {
       return json(res, 400, { error: "frames must be 1 to 3 JPEG or PNG images, base64 or data URLs" });
@@ -184,9 +209,9 @@ async function handle(req, res) {
     const names = ["front", "left", "right"];
     frames.forEach((f, i) => store.write(`${names[i]}.${f.type === "image/png" ? "png" : "jpg"}`, f.data));
     store.save();
-    runForge(fighter, frames, store).then(() =>
-      console.log(`forge ${fighter.id.slice(0, 8)} ${fighter.status}`, fighter.timings, fighter.error ?? ""),
-    );
+    runForge(fighter, frames, store)
+      .then(() => console.log(`forge ${fighter.id.slice(0, 8)} ${fighter.status}`, fighter.timings, fighter.error ?? ""))
+      .catch((err) => console.error(`forge ${fighter.id.slice(0, 8)} crashed:`, err));
     return json(res, 202, { id: fighter.id });
   }
 
@@ -199,7 +224,8 @@ async function handle(req, res) {
       if (!fs.existsSync(file)) return json(res, 404, { error: "not ready" });
       const type = parts[3].endsWith(".png") ? "image/png" : parts[3].endsWith(".glb") ? "model/gltf-binary" : "image/jpeg";
       res.writeHead(200, { "content-type": type });
-      return fs.createReadStream(file).pipe(res);
+      // pipeline() closes the file when a download is cut off, and a read error can't crash the server.
+      return pipeline(fs.createReadStream(file), res, () => {});
     }
   }
 

@@ -42,8 +42,18 @@ const tripoJson = (path, payload) =>
 /** Polls a Tripo task until it finishes; returns its output. */
 async function tripoWait(taskId, onProgress, timeoutMs = 300_000) {
   const start = Date.now();
+  let misses = 0;
   for (;;) {
-    const task = await tripo(`/tasks/${taskId}`);
+    let task;
+    try {
+      task = await tripo(`/tasks/${taskId}`);
+      misses = 0;
+    } catch (err) {
+      // One dropped status poll shouldn't throw away a model that's still generating (and already paid for).
+      if (++misses > 3 || Date.now() - start > timeoutMs) throw err;
+      await new Promise((r) => setTimeout(r, 2000));
+      continue;
+    }
     if (task.status === "success") return task.output;
     if (["failed", "cancelled", "banned", "expired", "unknown"].includes(task.status)) throw new Error(`Tripo task ${task.status}`);
     onProgress?.(task.progress ?? 0);
@@ -127,7 +137,11 @@ export async function makeBrief(frames) {
     },
     60_000,
   );
-  return JSON.parse(body.choices[0].message.content);
+  const message = body.choices?.[0]?.message;
+  // A refusal comes back as content: null, which JSON.parse would quietly turn into a null brief.
+  const brief = typeof message?.content === "string" ? JSON.parse(message.content) : null;
+  if (!brief || typeof brief !== "object") throw new Error(`brief: ${message?.refusal ?? "no JSON from the vision model"}`);
+  return brief;
 }
 
 /** Generates a new image from reference images plus a prompt. Returns PNG bytes. */
@@ -161,7 +175,7 @@ export async function runForge(job, frames, store) {
     job.step = "brief";
     store.save();
     job.brief = await timed("brief", () => makeBrief(frames));
-    if (job.name === "") job.name = job.brief.name ?? "";
+    if (job.name === "") job.name = typeof job.brief.name === "string" ? job.brief.name.slice(0, 40) : "";
 
     job.step = "sheet";
     store.save();
@@ -172,10 +186,16 @@ export async function runForge(job, frames, store) {
     // it fails) glbUrl stays empty and the game uses its default fighter.
     job.step = "model";
     store.save();
-    const cardJob = timed("card", () => editImage([{ data: sheet, type: "image/png" }], cardPrompt(job.brief), CARD_MODEL)).then((card) => {
-      job.cardUrl = store.write("card.png", card);
-      store.save();
-    });
+    // The card is decoration: if it fails (moderation, timeout), the fighter still ships without one.
+    const cardJob = timed("card", () => editImage([{ data: sheet, type: "image/png" }], cardPrompt(job.brief), CARD_MODEL))
+      .then((card) => {
+        job.cardUrl = store.write("card.png", card);
+        store.save();
+      })
+      .catch((err) => {
+        job.cardError = String(err.message ?? err);
+        console.warn("card step failed:", job.cardError);
+      });
     const modelJob = process.env.TRIPO_API_KEY
       ? timed("model", () => makeModel(sheet, (step) => ((job.step = step), store.save())))
           .then(({ model, rigged }) => {
@@ -197,5 +217,9 @@ export async function runForge(job, frames, store) {
     job.status = "failed";
     job.error = String(err.message ?? err);
   }
-  store.save();
+  try {
+    store.save();
+  } catch (err) {
+    console.error("could not save fighter", job.id, err.message);
+  }
 }

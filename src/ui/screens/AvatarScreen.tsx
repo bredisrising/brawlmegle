@@ -160,8 +160,12 @@ function NameStep({ player }: { player: PlayerId }) {
     };
   }, [username]);
 
+  // Still looking this username up: Enter must not start a (paid) scan for someone who already has a fighter.
+  const checking = !!username && found === undefined;
+
   const scan = (e: FormEvent) => {
     e.preventDefault();
+    if (checking) return;
     if (found && !rescan) return game.chooseFighter({ kind: 'existing', fighter: found });
     if (trimmed) game.chooseFighter({ kind: 'scan', name: trimmed, username: trimmed });
   };
@@ -210,13 +214,13 @@ function NameStep({ player }: { player: PlayerId }) {
       <div className="animate-in-r flex flex-col gap-6 border-2 border-paper/15 bg-ink p-6 [animation-delay:200ms] sm:p-8">
         <div>
           <span className="bg-hp px-2 py-1 font-cond text-xs font-extrabold uppercase tracking-[0.25em] text-ink">
-            {found === undefined && username ? 'Checking memory card…' : 'Memory card'}
+            {checking ? 'Checking memory card…' : 'Memory card'}
           </span>
           <p className="mt-4 font-display text-3xl uppercase leading-[0.95] tracking-tight">Save fighter to memory card?</p>
           <p className="mt-3 text-paper/65">Your photos go to our AI services to build your fighter and are deleted after the event.</p>
         </div>
         <div className="flex flex-wrap items-center gap-x-8 gap-y-4">
-          <ArcadeButton type="submit" disabled={!trimmed}>
+          <ArcadeButton type="submit" disabled={!trimmed || checking}>
             Yes, scan me
           </ArcadeButton>
           <TextButton disabled={!trimmed} onClick={() => game.chooseFighter({ kind: 'masked', name: trimmed })}>

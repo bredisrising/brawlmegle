@@ -27,6 +27,8 @@ type Fighter = {
 };
 
 const DT = 1 / 60;
+/** Both fighters as they were when this tick's swings connected. */
+type Moment = { distance: number } & Record<PlayerId, { phase: Fighter['phase']; attack: Attack | null; evade: 'slip' | 'duck' | undefined }>;
 
 export class FightEngine {
   private fighters: Record<PlayerId, Fighter> = { p1: fresh(-0.5), p2: fresh(0.5) };
@@ -44,7 +46,9 @@ export class FightEngine {
       return events;
     }
     for (const id of PLAYER_IDS) this.advance(id, events);
-    for (const id of PLAYER_IDS) this.resolve(id, stances, events);
+    // Both swings resolve against the same moment, so a same-tick exchange is a trade, not a P1 win.
+    const moment = this.snapshot();
+    for (const id of PLAYER_IDS) this.resolve(id, stances, events, moment);
     this.move(stances);
     return events;
   }
@@ -99,14 +103,17 @@ export class FightEngine {
     const f = this.fighters[id];
     const spec = MOVES[c.move];
     const gassed = f.stamina < FIGHT.gassedBelow;
+    // A NaN here would stick: HP that never reaches 0, a position that's always "in range".
+    const speed = finiteOr(c.speed, 1);
+    const windup = finiteOr(c.windup, 1);
     f.attack = {
       move: c.move,
       hand: c.hand,
       spec,
       startup: spec.startup + (gassed ? FIGHT.gassedStartup : 0),
-      scale: c.speed * c.windup * (gassed ? FIGHT.gassedDamage : 1),
+      scale: speed * windup * (gassed ? FIGHT.gassedDamage : 1),
       height: c.height,
-      lunge: Math.max(0, c.lunge ?? 0),
+      lunge: Math.max(0, finiteOr(c.lunge ?? 0, 0)),
       done: false,
     };
     f.phase = 'startup';
@@ -161,18 +168,25 @@ export class FightEngine {
     }
   }
 
+  private snapshot(): Moment {
+    const of = (f: Fighter) => ({ phase: f.phase, attack: f.attack, evade: f.evade?.kind });
+    return { distance: this.distance(), p1: of(this.fighters.p1), p2: of(this.fighters.p2) };
+  }
+
   /** An active attack meets the defender: evaded, blocked, or a hit (maybe a counter). */
-  private resolve(id: PlayerId, stances: Record<PlayerId, Stance>, events: FightEvent[]) {
+  private resolve(id: PlayerId, stances: Record<PlayerId, Stance>, events: FightEvent[], moment: Moment) {
     const f = this.fighters[id];
-    const a = f.attack;
-    if (f.phase !== 'active' || !a || a.done) return;
-    if (this.distance() > a.spec.range) return; // may still come into range; otherwise it whiffs
+    // As things stood before either swing landed this tick (the other one may already have hit this fighter).
+    const a = moment[id].attack;
+    if (moment[id].phase !== 'active' || !a || a.done || f.phase === 'ko') return;
+    if (moment.distance > a.spec.range) return; // may still come into range; otherwise it whiffs
     const defenderId = opponentOf(id);
     const g = this.fighters[defenderId];
+    const before = moment[defenderId];
     if (g.phase === 'ko') return;
     a.done = true;
 
-    const evade = g.evade?.kind;
+    const evade = before.evade;
     const ducked = evade === 'duck' && a.height === 'head' && !a.spec.beatsDuck;
     const slipped = evade === 'slip' && a.spec.straight;
     if (ducked || slipped) {
@@ -183,14 +197,14 @@ export class FightEngine {
     }
 
     // You can block while free or already blocking, not mid-attack or while reeling from a hit.
-    const canBlock = g.phase === 'idle' || g.phase === 'blockstun';
+    const canBlock = before.phase === 'idle' || before.phase === 'blockstun';
     if (stances[defenderId]?.guard && canBlock) {
       const chip = Math.max(1, Math.round(a.spec.chip * a.scale));
       g.hp = Math.max(0, g.hp - chip);
       g.phase = 'blockstun';
       g.stun = FIGHT.blockstun;
       g.frame = 0;
-      this.hitstop = 3;
+      this.hitstop = Math.max(this.hitstop, 3);
       events.push({ t: this.now, type: 'blocked', attacker: id, move: a.move, damage: chip, hitstopFrames: 3 });
       this.knockback(defenderId, chip);
       if (g.hp <= 0) this.ko(defenderId, id, a.move, events);
@@ -198,7 +212,7 @@ export class FightEngine {
     }
 
     // Caught mid-attack, or ducking into an uppercut: counter hit.
-    const counter = g.phase === 'startup' || g.phase === 'recovery' || (evade === 'duck' && a.spec.beatsDuck);
+    const counter = before.phase === 'startup' || before.phase === 'recovery' || (evade === 'duck' && a.spec.beatsDuck);
     const damage = Math.round(a.spec.damage * a.scale * (counter ? FIGHT.counterMultiplier : 1));
     g.hp = Math.max(0, g.hp - damage);
     g.attack = null;
@@ -207,8 +221,9 @@ export class FightEngine {
     g.phase = 'hitstun';
     g.stun = hitstunFrames(damage);
     g.frame = 0;
-    this.hitstop = hitstopFrames(damage);
-    events.push({ t: this.now, type: counter ? 'counter' : 'hit', attacker: id, move: a.move, damage, hitstopFrames: this.hitstop });
+    const stop = hitstopFrames(damage);
+    this.hitstop = Math.max(this.hitstop, stop);
+    events.push({ t: this.now, type: counter ? 'counter' : 'hit', attacker: id, move: a.move, damage, hitstopFrames: stop });
     this.knockback(defenderId, damage);
     if (g.hp <= 0) this.ko(defenderId, id, a.move, events);
   }
@@ -268,3 +283,4 @@ function fresh(x: number): Fighter {
 }
 
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
+const finiteOr = (v: number, fallback: number) => (Number.isFinite(v) ? v : fallback);

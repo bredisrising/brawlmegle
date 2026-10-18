@@ -60,12 +60,17 @@ function saveSample(req, res) {
     } catch {
       return res.writeHead(400, cors).end(JSON.stringify({ error: "first line must be a JSON header" }));
     }
-    if (!Array.isArray(header.labels)) return res.writeHead(400, cors).end(JSON.stringify({ error: "header needs labels" }));
+    // A bare `null` header used to throw here and take the whole matchmaker (and every room) down.
+    if (!Array.isArray(header?.labels)) return res.writeHead(400, cors).end(JSON.stringify({ error: "header needs labels" }));
     if (samplesBytes + body.length > MAX_SAMPLES_BYTES_TOTAL) return res.writeHead(507, cors).end(JSON.stringify({ error: "storage full" }));
+    // Reserve the space now, so parallel uploads can't all squeeze in under the cap.
+    samplesBytes += body.length;
     const name = `${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomBytes(3).toString("hex")}.jsonl`;
     fs.writeFile(`${SAMPLES_DIR}/${name}`, body, (err) => {
-      if (err) return res.writeHead(500, cors).end(JSON.stringify({ error: "write failed" }));
-      samplesBytes += body.length;
+      if (err) {
+        samplesBytes -= body.length;
+        return res.writeHead(500, cors).end(JSON.stringify({ error: "write failed" }));
+      }
       res.writeHead(201, cors).end(JSON.stringify({ ok: true, name }));
     });
   });
@@ -92,6 +97,18 @@ const rooms = new Map();
 /** Host/join flow: rooms keyed by a short code, held by the host for as long as it's connected. @type {Map<string, Client>} */
 const hosted = new Map();
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O or 1/I
+/**
+ * A host that loses its socket (Wi-Fi blip, server restart) sends `{type: "host", code, token}` to take its
+ * code back, so the client's rejoin-with-the-same-code still finds it. With TURN_SECRET set, tokens survive restarts.
+ */
+const ROOM_SECRET = TURN_SECRET || crypto.randomBytes(32).toString("hex");
+const roomToken = (code) => crypto.createHmac("sha256", ROOM_SECRET).update(`room:${code}`).digest("base64url");
+function ownsCode(code, token) {
+  if (typeof code !== "string" || typeof token !== "string" || !/^[A-Za-z2-9]{4}$/.test(code)) return false;
+  const want = Buffer.from(roomToken(code.toUpperCase()));
+  const got = Buffer.from(token);
+  return got.length === want.length && crypto.timingSafeEqual(got, want);
+}
 
 /** STUN/TURN servers for RTCPeerConnection, with fresh TURN credentials. */
 function iceServers(id) {
@@ -168,16 +185,27 @@ function reset(client) {
 }
 
 /** Host/join flow: the host opens a room and shows its code; the room stays open so a dropped client can rejoin. */
-function host(client) {
+function host(client, wanted, token) {
   reset(client);
   if (!client.hostCode) {
     let code;
-    do code = Array.from(crypto.randomBytes(4), (b) => CODE_CHARS[b % CODE_CHARS.length]).join("");
-    while (hosted.has(code));
+    if (ownsCode(wanted, token)) {
+      code = wanted.toUpperCase();
+      // The old socket may not have timed out yet: the room moves to the new one.
+      const stale = hosted.get(code);
+      if (stale && stale !== client) {
+        stopHosting(stale);
+        reset(stale);
+        stale.ws.close(4000, "room moved to a new connection");
+      }
+    } else {
+      do code = Array.from(crypto.randomBytes(4), (b) => CODE_CHARS[b % CODE_CHARS.length]).join("");
+      while (hosted.has(code));
+    }
     hosted.set(code, client);
     client.hostCode = code;
   }
-  send(client, { type: "room", code: client.hostCode, iceServers: iceServers(client.id) });
+  send(client, { type: "room", code: client.hostCode, token: roomToken(client.hostCode), iceServers: iceServers(client.id) });
 }
 
 function joinHosted(client, code) {
@@ -215,7 +243,7 @@ function onMessage(client, raw) {
 
   switch (msg?.type) {
     case "host":
-      host(client);
+      host(client, msg.code, msg.token);
       break;
     case "join":
       if (typeof msg.code === "string") {

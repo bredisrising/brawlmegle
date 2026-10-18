@@ -102,6 +102,9 @@ export class IntentReader {
   private readonly limbs: Record<LimbName, LimbState>;
   private body: Body | null = null;
   private lastNewFrameAt = -Infinity;
+  /** Timestamp of the last frame handed in, and of the one that was current when the player was lost. */
+  private lastInputT = NaN;
+  private lostFrameT = NaN;
   private headRest: { x: number; y: number } | null = null;
   private lastCore: Record<'jump' | 'duck' | 'dodge', number> = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
   private guardSince: number | null = null;
@@ -132,12 +135,19 @@ export class IntentReader {
 
   reset() {
     this.pre.reset();
-    for (const n of LIMB_NAMES) this.limbs[n] = newLimb();
+    this.resetLimbs();
     this.body = null;
+    this.lostFrameT = NaN;
+    this.stance = untracked(this.player);
+  }
+
+  private resetLimbs() {
+    for (const n of LIMB_NAMES) this.limbs[n] = newLimb();
+    // Cooldowns are on the frame clock, which restarts when a peer reloads: stale ones would block for minutes.
+    this.lastCore = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
     this.headRest = null;
     this.guardSince = null;
     this.guardUp = false;
-    this.stance = untracked(this.player);
   }
 
   /**
@@ -145,13 +155,22 @@ export class IntentReader {
    * `now` is the host clock, used only to notice a lost player (remote frames carry the other laptop's clock).
    */
   update(frame: PoseFrame | null, now: number = performance.now()): IntentOutput {
+    // The hub keeps handing over a lost player's last frame. Once they've gone stale, that frame isn't
+    // tracking again (the reset below would otherwise accept it as new and flip back to tracked).
+    if (frame && frame.t === this.lostFrameT) frame = null;
+    if (frame) this.lastInputT = frame.t;
     const body = frame ? this.pre.process(frame) : null;
     if (body) this.lastNewFrameAt = now;
     if (now - this.lastNewFrameAt > this.config.staleMs) {
-      if (this.body) this.reset();
+      if (this.body) {
+        this.reset();
+        this.lostFrameT = this.lastInputT;
+      }
       return { commands: [], stance: this.stance, intents: [], body: null, debug: null };
     }
     if (!body) return { commands: [], stance: this.stance, intents: [], body: this.body, debug: this.debug };
+    // The preprocessor restarted after a gap in the frames (dt = 0): limb states from before the gap are stale.
+    if (body.dt === 0 && this.body) this.resetLimbs();
     this.body = body;
 
     const intents: Intent[] = [];
@@ -511,8 +530,9 @@ const lerpPair = (a: Pair, b: Pair, k: number): Pair => ({
   mid: { x: a.mid.x + k * (b.mid.x - a.mid.x), y: a.mid.y + k * (b.mid.y - a.mid.y), z: a.mid.z + k * (b.mid.z - a.mid.z) },
 });
 
+/** Lost players hold guard (SPEC "Tracking loss"), like Game's stance for a player with no frames at all. */
 function untracked(player: PlayerId): Stance {
-  return { player, guard: false, advance: 0, lean: { x: 0, y: 0 }, tracked: false };
+  return { player, guard: true, advance: 0, lean: { x: 0, y: 0 }, tracked: false };
 }
 
 const sub = (a: Vec3, b: Vec3): Vec3 => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });

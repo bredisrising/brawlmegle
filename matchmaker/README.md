@@ -23,8 +23,8 @@ JSON messages over a WebSocket at `/ws`. Two ways to pair up: host and join by c
 
 | Message | Direction | Means |
 |---|---|---|
-| `{type: "host"}` | host → server | Open a room |
-| `{type: "room", code, iceServers}` | server → host | 4-character code to show on screen. The room stays open while the host is connected, so a dropped client can rejoin. |
+| `{type: "host", code?, token?}` | host → server | Open a room. After the host's socket drops (or the server restarts), send the old `code` and `token` to get the same code back, so the client's rejoin still finds it. |
+| `{type: "room", code, token, iceServers}` | server → host | 4-character code to show on screen, plus the token that reclaims it. The room stays open while the host is connected, so a dropped client can rejoin. |
 | `{type: "join", code}` | client → server | Join that room (case doesn't matter) |
 | `{type: "joined", code, iceServers}` | server → client | In. Call `pc.setConfiguration({iceServers})` now; the offer comes after this. |
 | `{type: "peer-joined", iceServers}` | server → host | Create the connection with these `iceServers` and send the offer |

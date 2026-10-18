@@ -141,41 +141,63 @@ export class CameraSource implements InputSource {
   }
 
   private lastTimestamp = 0;
+  private lastErrorAt = -Infinity;
 
   private detectFrame = (time: number) => {
     if (!this.running || !this.landmarker) return;
     // MediaPipe needs strictly increasing timestamps.
     const now = Math.max(time, this.lastTimestamp + 1);
     this.lastTimestamp = now;
-    if (this.video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-      const started = performance.now();
-      const result = this.landmarker.detectForVideo(this.video, now);
-      const took = performance.now() - started;
-      this.stats.detectMs += 0.1 * (took - this.stats.detectMs);
-      const settings = this.settings;
-      this.stats.width = this.video.videoWidth;
-      this.stats.height = this.video.videoHeight;
-      this.stats.fps = settings?.frameRate ?? 0;
-      const selected = selectCenteredPose(result.landmarks);
-      const image = selected < 0 ? undefined : result.landmarks[selected];
-      const world = selected < 0 ? undefined : result.worldLandmarks[selected];
-      if (image && world) {
-        const frame: PoseFrame = {
-          t: now,
-          image: image.map(toLandmark),
-          world: world.map(toLandmark),
-          aspect: this.video.videoWidth / this.video.videoHeight,
-        };
-        this._latestFrame = frame;
-        this._tracking = true;
-        this.listeners.forEach((listener) => listener(frame));
-      } else {
-        this._latestFrame = null;
-        this._tracking = false;
-      }
+    // Always reschedule: one throw here (a GPU hiccup, a listener failing mid-send) must not stop tracking for good.
+    try {
+      if (this.video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) this.detect(now);
+    } catch (error) {
+      this.reportError(error);
     }
     this.schedule();
   };
+
+  private detect(now: number) {
+    const started = performance.now();
+    const result = this.landmarker!.detectForVideo(this.video, now);
+    const took = performance.now() - started;
+    this.stats.detectMs += 0.1 * (took - this.stats.detectMs);
+    const settings = this.settings;
+    this.stats.width = this.video.videoWidth;
+    this.stats.height = this.video.videoHeight;
+    this.stats.fps = settings?.frameRate ?? 0;
+    const selected = selectCenteredPose(result.landmarks);
+    const image = selected < 0 ? undefined : result.landmarks[selected];
+    const world = selected < 0 ? undefined : result.worldLandmarks[selected];
+    if (!image || !world) {
+      this._latestFrame = null;
+      this._tracking = false;
+      return;
+    }
+    const frame: PoseFrame = {
+      t: now,
+      image: image.map(toLandmark),
+      world: world.map(toLandmark),
+      aspect: this.video.videoWidth / this.video.videoHeight,
+    };
+    this._latestFrame = frame;
+    this._tracking = true;
+    for (const listener of this.listeners) {
+      try {
+        listener(frame);
+      } catch (error) {
+        this.reportError(error); // the other listeners still get the frame
+      }
+    }
+  }
+
+  /** Logged at most every few seconds: a persistent failure would otherwise flood the console at camera rate. */
+  private reportError(error: unknown) {
+    const t = performance.now();
+    if (t - this.lastErrorAt < 5000) return;
+    this.lastErrorAt = t;
+    console.error('[camera] pose frame failed', error);
+  }
 }
 
 function toLandmark(point: NormalizedLandmark): Landmark {

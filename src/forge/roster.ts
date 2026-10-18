@@ -22,7 +22,11 @@ const HOUSE_FIGHTERS: ForgedFighter[] = [
 
 function readSaved(): ForgedFighter[] {
   try {
-    return JSON.parse(localStorage.getItem(KEY) ?? '[]') as ForgedFighter[];
+    // Whatever is stored (an older format, a hand edit) must not break the memory card: keep only real entries.
+    const saved: unknown = JSON.parse(localStorage.getItem(KEY) ?? '[]');
+    return Array.isArray(saved)
+      ? saved.filter((f): f is ForgedFighter => !!f && typeof f === 'object' && typeof f.id === 'string' && f.id !== '' && typeof f.name === 'string')
+      : [];
   } catch {
     return [];
   }
