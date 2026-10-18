@@ -19,7 +19,7 @@ export type SignalMessage =
 export type ClientMessage =
   | { type: 'hello'; version: number }
   | { type: 'pose'; frame: PoseFrame } // "poses" channel: unordered, no retransmits
-  | { type: 'profile'; name: string; consent: 'save' | 'masked' } // after 'Scan new'
+  | { type: 'profile'; name: string; consent: 'save' | 'masked'; username?: string } // after 'Scan new'; username: the forge saves the fighter under it
   | { type: 'pick'; fighterId: string } // after 'Choose existing'
   | { type: 'scan'; frames: [front: string, left: string, right: string] }; // base64 JPEGs
 
@@ -28,7 +28,7 @@ export type HostMessage =
   | { type: 'welcome'; player: PlayerId }
   | { type: 'roster'; fighters: ForgedFighter[] } // saved fighters for 'Choose existing'
   | { type: 'phase'; phase: Phase; countdown: number | null }
-  | { type: 'fighter'; fighter: ForgedFighter }; // P2's forge progress; sent with status 'ready' once P2's fighter is set (scan, masked or pick)
+  | { type: 'fighter'; fighter: ForgedFighter; detail?: string }; // P2's forge progress (detail: the host's status text); sent with status 'ready' once P2's fighter is set (scan, masked or pick)
 
 /**
  * Wire envelope, not a game message: Peer splits control messages bigger than one

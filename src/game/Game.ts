@@ -8,11 +8,9 @@ import { IntentReader } from '../intent/IntentReader';
 import type { Intent } from '../intent/intents';
 import { InputHub, createLocalSource, type InputSource } from '../input';
 import { MockSource } from '../input/sources/MockSource';
-import { captureScan, forgeFighter } from '../forge/forge';
+import { captureScan, forgeFighter, type ScanFrames } from '../forge/forge';
 import { forgeStatus, onChange, scanStatus } from '../forge/status';
 import { maskedFighter, saveFighter } from '../forge/roster';
-import { Peer } from '../net/Peer';
-import { Signaling } from '../net/Signaling';
 import { config } from '../config';
 import {
   PLAYER_IDS, opponentOf,
@@ -20,6 +18,7 @@ import {
 } from '../types';
 import { COUNTDOWN_FROM, KO_FREEZE, MAX_HP, PLAYER_NAMES, SIM_DT } from './constants';
 import { ClientSession } from './ClientSession';
+import { HostSession } from './HostSession';
 import { localPlayerId, pushPopup, updatePlayer, useGameStore } from './store';
 
 /** Roughly head height between the two fighters. */
@@ -50,7 +49,7 @@ export class Game {
   private readonly effects: Effects;
   private readonly views: Record<PlayerId, FighterView>;
   private readonly intent: Record<PlayerId, IntentReader>;
-  private peer: Peer | null = null;
+  private hostSession: HostSession | null = null;
   private client: ClientSession | null = null;
   private accumulator = 0;
   private phaseTimer = 0;
@@ -75,13 +74,16 @@ export class Game {
       : this.input.source(localPlayerId(role));
   }
 
-  /** Title screen: "Host". Opens a room on the signaling server and shows its code. */
+  /**
+   * Title screen: "Host". Opens a room on the signaling server and shows its code. When the client
+   * laptop connects, HostSession streams its poses into p2 and sets p2 up from what it sends.
+   */
   async host() {
-    this.peer = new Peer('host', new Signaling(config.signalUrl));
-    const code = await this.peer.host();
+    this.hostSession?.dispose();
+    const session = new HostSession(this.input, (choice, source, scan) => this.setupPlayer('p2', choice, source, scan));
+    this.hostSession = session;
+    const code = await session.open();
     useGameStore.setState({ role: 'host', roomCode: code || null, screen: 'avatar' });
-    // TODO: when the client connects, assign a RemoteSource to p2 and run setupPlayer('p2', ...)
-    // with the profile + scan it sends over P2P.
   }
 
   /** Title screen: "Connect" with a room code. */
@@ -120,8 +122,11 @@ export class Game {
     if (kind === 'counter' || kind === 'ko') this.renderer.shake(0.04);
   }
 
-  /** Start a player's input source, get their fighter (scan + forge, masked, or saved), spawn them. */
-  private async setupPlayer(id: PlayerId, choice: FighterChoice, source: InputSource = createLocalSource()) {
+  /**
+   * Start a player's input source, get their fighter (scan + forge, masked, or saved), spawn them.
+   * `scan`: frames captured on another laptop (P2's client), instead of scanning on `source` here.
+   */
+  private async setupPlayer(id: PlayerId, choice: FighterChoice, source: InputSource = createLocalSource(), scan?: Promise<ScanFrames>) {
     const name = choice.kind === 'existing' ? choice.fighter.name : choice.name;
     try {
       updatePlayer(id, { name, status: 'scanning', statusDetail: 'Starting camera' });
@@ -132,7 +137,7 @@ export class Game {
       if (choice.kind === 'scan') {
         const show = onChange((statusDetail) => updatePlayer(id, { statusDetail }));
         show('Turn slowly');
-        const frames = await captureScan(source.video, source, (p) => show(scanStatus(p)));
+        const frames = await (scan ?? captureScan(source.video, source, (p) => show(scanStatus(p))));
         updatePlayer(id, { status: 'forging', statusDetail: 'Forging fighter' });
         // The fighter goes by the player's username; the brief's playful nickname stays in brief.name for flavor.
         fighter = await forgeFighter(name, frames, (f) => show(forgeStatus(f)), { username: choice.username });
@@ -173,7 +178,7 @@ export class Game {
 
   dispose() {
     window.removeEventListener('keydown', this.onDebugKey);
-    this.peer?.close();
+    this.hostSession?.dispose();
     this.client?.dispose();
     for (const id of PLAYER_IDS) this.input.unassign(id);
     for (const v of Object.values(this.views)) v.dispose();

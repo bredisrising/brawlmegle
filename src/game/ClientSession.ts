@@ -58,7 +58,9 @@ export class ClientSession {
       this.setup =
         choice.kind === 'existing'
           ? [{ type: 'pick', fighterId: choice.fighter.id }]
-          : [{ type: 'profile', name, consent: choice.kind === 'scan' ? 'save' : 'masked' }];
+          : choice.kind === 'scan'
+            ? [{ type: 'profile', name, consent: 'save', username: choice.username }]
+            : [{ type: 'profile', name, consent: 'masked' }];
       this.confirmed = false;
       this.setup.forEach((msg) => this.send(msg));
       this.stream(this.source);
@@ -129,19 +131,19 @@ export class ClientSession {
         break;
       case 'fighter':
         this.confirmed = true;
-        this.showFighter(msg.fighter);
+        this.showFighter(msg.fighter, msg.detail);
         break;
     }
   }
 
-  private showFighter(fighter: ForgedFighter) {
+  private showFighter(fighter: ForgedFighter, detail?: string) {
     switch (fighter.status) {
       case 'scanning':
       case 'forging':
         updatePlayer(PLAYER, {
           name: fighter.name,
           status: 'forging',
-          statusDetail: fighter.step ? FORGE_STEPS[fighter.step] : 'Forging your fighter',
+          statusDetail: detail || (fighter.step ? FORGE_STEPS[fighter.step] : 'Forging your fighter'),
         });
         break;
       case 'failed':
