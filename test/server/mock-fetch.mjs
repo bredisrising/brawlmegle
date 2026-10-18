@@ -30,6 +30,7 @@ globalThis.fetch = async (input, init = {}) => {
   if (url.startsWith("https://tripo.mock/")) return new Response(Buffer.from("glTF"));
   // The GPU box (forge/gpu/server.py). MOCK_GPU=fail fails the job, MOCK_GPU=hang never finishes it.
   if (url.startsWith("http://gpu.mock/")) {
+    if (url.endsWith("/health")) return json({ ok: true, ready: process.env.MOCK_GPU !== "cold", queued: 0 });
     if (new Headers(init.headers).get("x-forge3d-key") !== "gpu-key") return json({ error: "bad key" }, 403);
     if (url.endsWith("/jobs")) return json({ id: "g1" }, 202);
     if (url.endsWith(".glb")) return new Response(Buffer.from(url.endsWith("/rigged.glb") ? "glTF-local-rigged" : "glTF-local"));

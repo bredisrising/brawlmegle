@@ -128,6 +128,14 @@ describe('forge server', () => {
       expect(f.glbUrl).toMatch(/rigged\.glb$/);
     });
 
+    it('a box that is still warming up falls back to Tripo right away', async () => {
+      const { forge, until } = await startForge({ ...gpu, MOCK_GPU: 'cold' });
+      const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
+      const f = await until(id, done);
+      expect(f.engine3d).toBe('tripo');
+      expect(String(f.localError)).toMatch(/not ready/);
+    });
+
     it('a wrong GPU key falls back to Tripo too', async () => {
       const { forge, until } = await startForge({ ...gpu, FORGE_3D_KEY: 'nope' });
       const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
