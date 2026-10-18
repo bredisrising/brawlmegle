@@ -53,6 +53,8 @@ export class Game {
   private client: ClientSession | null = null;
   private accumulator = 0;
   private phaseTimer = 0;
+  /** Aborted on dispose: stops in-flight scans and forge polling (HMR / unmount), so no camera is left running. */
+  private readonly lifetime = new AbortController();
 
   constructor(container: HTMLElement) {
     this.renderer = new Renderer(container);
@@ -131,16 +133,18 @@ export class Game {
     try {
       updatePlayer(id, { name, status: 'scanning', statusDetail: 'Starting camera' });
       await source.start();
+      this.lifetime.signal.throwIfAborted();
       this.input.assign(id, source);
 
       let fighter: ForgedFighter;
       if (choice.kind === 'scan') {
         const show = onChange((statusDetail) => updatePlayer(id, { statusDetail }));
         show('Turn slowly');
-        const frames = await (scan ?? captureScan(source.video, source, (p) => show(scanStatus(p))));
+        const { signal } = this.lifetime;
+        const frames = await (scan ?? captureScan(source.video, source, (p) => show(scanStatus(p)), { signal }));
         updatePlayer(id, { status: 'forging', statusDetail: 'Forging fighter' });
         // The fighter goes by the player's username; the brief's playful nickname stays in brief.name for flavor.
-        fighter = await forgeFighter(name, frames, (f) => show(forgeStatus(f)), { username: choice.username });
+        fighter = await forgeFighter(name, frames, (f) => show(forgeStatus(f)), { username: choice.username, signal });
         if (fighter.status === 'ready') saveFighter(fighter); // they said yes to "save fighter to memory card"
         // A failed forge still fights: no glbUrl means the default model (SPEC fallback ladder).
         else console.warn('forge failed, using the default fighter:', fighter.error);
@@ -150,6 +154,7 @@ export class Game {
         fighter = choice.fighter;
       }
       await this.loadFighter(id, fighter);
+      this.lifetime.signal.throwIfAborted();
 
       this.views[id].setVisible(true);
       this.effects.burst(this.views[id].root.position, 'spawn');
@@ -158,9 +163,10 @@ export class Game {
       const { players } = useGameStore.getState();
       if (PLAYER_IDS.every((p) => players[p].status === 'ready')) this.startCountdown();
     } catch (err) {
-      console.error(err);
       this.input.unassign(id);
       source.stop();
+      if (this.lifetime.signal.aborted) return; // disposed mid-setup: nothing left to show
+      console.error(err);
       // Say what actually broke (camera denied, nobody in view, forge down...), not just "something".
       const reason = err instanceof Error ? err.message : String(err);
       updatePlayer(id, { status: 'waiting', statusDetail: `Couldn't set up your fighter: ${reason}` });
@@ -187,10 +193,14 @@ export class Game {
   }
 
   dispose() {
+    this.lifetime.abort();
     window.removeEventListener('keydown', this.onDebugKey);
     this.hostSession?.dispose();
     this.client?.dispose();
-    for (const id of PLAYER_IDS) this.input.unassign(id);
+    for (const id of PLAYER_IDS) {
+      this.input.source(id)?.stop(); // release the camera, not just the hub's subscription
+      this.input.unassign(id);
+    }
     for (const v of Object.values(this.views)) v.dispose();
     this.effects.dispose();
     this.renderer.dispose();
