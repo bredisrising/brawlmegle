@@ -41,6 +41,13 @@ export const config = {
   outline: params.get('outline') ? params.get('outline') !== '0' : !lowPower,
   /** Full-screen impact frames on big hits (`?fx=low` turns them off, e.g. for flashing-light sensitivity). */
   impactFrames: params.get('fx') !== 'low',
+  /**
+   * Booth demo (`?demo=1`, on the host): rounds that end fast for a fight running behind a pitch. Hits do 1.6x
+   * damage, the clock is 45 s, and the entrance plays only before the first round.
+   */
+  demo: params.get('demo') === '1',
+  /** `?forge=hq`: the slower, sharper forge (bigger sheet, more sculpting steps, bigger textures), for showcase fighters. */
+  forgeQuality: params.get('forge') === 'hq' ? ('hq' as const) : undefined,
 };
 
 function clamp01(v: number) {

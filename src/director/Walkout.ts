@@ -112,7 +112,7 @@ export class Walkout {
 
   /** How long the countdown's first beat lasts (the host's fallback timer; the music normally ends it). */
   get length() {
-    if (!walkoutEnabled) return 0;
+    if (!walkoutEnabled || this.skipNext()) return 0;
     // The music's end normally ends it (frame()); this is the backstop, with room for a slow start.
     return this.hold === null ? this.track.beats.end + 1.5 : Infinity;
   }
@@ -178,8 +178,15 @@ export class Walkout {
     }
   }
 
+  /** A demo booth (`?demo=1`) plays the entrance before the first round only; rematches go straight to ROUND 1. */
+  private played = false;
+  private skipNext() {
+    return config.demo && this.played && !this.active;
+  }
+
   private start() {
-    if (!walkoutEnabled) return;
+    if (!walkoutEnabled || this.skipNext()) return;
+    this.played = true;
     if (import.meta.env.DEV) console.debug('[walkout] start', performance.now().toFixed(0));
     void this.findTrack(); // normally done on the first click already
     const { players } = useGameStore.getState();

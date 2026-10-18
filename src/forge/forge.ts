@@ -94,7 +94,7 @@ export async function submitForge(name: string, frames: ScanFrames, api = config
   const res = await fetch(`${trimSlash(api)}/api/forge`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-forge-key': config.forgeKey },
-    body: JSON.stringify({ name, username, frames: present }),
+    body: JSON.stringify({ name, username, frames: present, ...(config.forgeQuality ? { quality: config.forgeQuality } : {}) }),
     signal: AbortSignal.timeout(timeoutMs),
   }).catch((err: Error) => {
     throw new Error(`Couldn't reach the forge: ${err.message}`);

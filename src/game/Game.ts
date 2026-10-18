@@ -34,6 +34,9 @@ import { HighlightRecorder } from './HighlightRecorder';
 import { Commentary, TEMPLATES, fill, spoken, type Line } from './Commentary';
 import { localPlayerId, pushPopup, updatePlayer, useGameStore } from './store';
 
+/** Round length: shorter at a demo booth (`?demo=1`). */
+const ROUND = config.demo ? 45 : ROUND_SECONDS;
+
 /** What drives a CPU slot: the real CPU, or Training's dummy. */
 type Brain = { think(engine: FightEngine, tick: number): CpuOutput; reset(): void };
 
@@ -81,7 +84,7 @@ export type FighterChoice =
 export class Game {
   readonly renderer: Renderer;
   readonly input = new InputHub();
-  private readonly fight = new FightEngine();
+  private readonly fight = new FightEngine({ damageScale: config.demo ? 1.6 : 1 });
   /** Intent + fight state -> the move that happens (lunges, knee vs kick, punishing a duck...). */
   private readonly resolver = new Resolver();
   private readonly effects: Effects;
@@ -100,7 +103,7 @@ export class Game {
   private cpuRoster: Promise<ForgedFighter[]> | null = null;
   private cpuPick: { opponent: string; fighter: Promise<ForgedFighter | undefined> } | null = null;
   /** Seconds left in the round (the store shows it rounded up). */
-  private clock = ROUND_SECONDS;
+  private clock = ROUND;
   private hostSession: HostSession | null = null;
   private client: ClientSession | null = null;
   /** Host: P2's moves as read on the client laptop (newer clients read their own camera), waiting for the tick. */
@@ -520,8 +523,8 @@ export class Game {
 
   private startCountdown() {
     this.phaseTimer = 0;
-    this.clock = ROUND_SECONDS;
-    useGameStore.setState({ phase: 'countdown', countdown: COUNTDOWN_FROM, timeLeft: ROUND_SECONDS, ending: null });
+    this.clock = ROUND;
+    useGameStore.setState({ phase: 'countdown', countdown: COUNTDOWN_FROM, timeLeft: ROUND, ending: null });
   }
 
   private update = (dt: number, frozen: boolean) => {
@@ -843,7 +846,7 @@ export class Game {
     this.highlight.start(this.renderer.renderer.domElement, {
       p1: side('p1'), p2: side('p2'), winner, move: finish.move,
       combo: this.combo.player === winner ? Math.max(1, this.combo.hits) : 1,
-      roundTime: Math.round((ROUND_SECONDS - this.clock) * 10) / 10,
+      roundTime: Math.round((ROUND - this.clock) * 10) / 10,
     });
     if (this.highlight.recording) this.renderer.onDrawn = () => this.highlight.frame();
   }

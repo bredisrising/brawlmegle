@@ -48,6 +48,8 @@ const PUNCHES = new Set<AttackMove>(['jab', 'cross', 'hook', 'uppercut']);
 type Moment = { distance: number } & Record<PlayerId, { phase: Fighter['phase']; attack: Attack | null; evade: 'slip' | 'duck' | undefined }>;
 
 export class FightEngine {
+  /** Every hit's and chip's damage times this (a demo booth wants rounds that end fast). */
+  private readonly damageScale: number;
   private fighters: Record<PlayerId, Fighter> = { p1: fresh(-0.5), p2: fresh(0.5) };
   /** Global freeze after a hit: both fighters stop for a few frames so the impact lands. */
   private hitstop = 0;
@@ -55,6 +57,10 @@ export class FightEngine {
   private shots: (Projectile & { scale: number; passed: boolean })[] = [];
   private nextShot = 1;
   private tick = 0;
+
+  constructor({ damageScale = 1 }: { damageScale?: number } = {}) {
+    this.damageScale = Number.isFinite(damageScale) && damageScale > 0 ? damageScale : 1;
+  }
 
   /** Advance one 60 Hz tick. */
   step(commands: Command[], stances: Record<PlayerId, Stance>): FightEvent[] {
@@ -286,7 +292,7 @@ export class FightEngine {
     // You can block while free or already blocking, not mid-attack or while reeling from a hit.
     const canBlock = before.phase === 'idle' || before.phase === 'blockstun';
     if (stances[defenderId]?.guard && canBlock) {
-      const chip = Math.max(1, Math.round(a.spec.chip * a.scale));
+      const chip = Math.max(1, Math.round(a.spec.chip * a.scale * this.damageScale));
       g.hp = Math.max(0, g.hp - chip);
       // Into a guard: the attacker is left open (longer recovery, no chain) and pays for it (FIGHT.blockRecovery).
       a.blocked = true;
@@ -305,7 +311,7 @@ export class FightEngine {
 
     // Caught mid-attack, or ducking into an uppercut: counter hit.
     const counter = before.phase === 'startup' || before.phase === 'recovery' || (evade === 'duck' && a.spec.beatsDuck);
-    const damage = Math.round(a.spec.damage * a.scale * (counter ? FIGHT.counterMultiplier : 1));
+    const damage = Math.round(a.spec.damage * a.scale * this.damageScale * (counter ? FIGHT.counterMultiplier : 1));
     g.hp = Math.max(0, g.hp - damage);
     a.landed = true;
     f.lastLanded = true;
@@ -359,7 +365,7 @@ export class FightEngine {
         }
         const spec = MOVES.fireball;
         if (stances[defenderId]?.guard && (g.phase === 'idle' || g.phase === 'blockstun')) {
-          const chip = Math.max(1, Math.round(spec.chip * s.scale));
+          const chip = Math.max(1, Math.round(spec.chip * s.scale * this.damageScale));
           g.hp = Math.max(0, g.hp - chip);
           g.phase = 'blockstun';
           g.stun = FIGHT.blockstun + 4;
@@ -370,7 +376,7 @@ export class FightEngine {
           if (g.hp <= 0) this.ko(defenderId, s.owner, 'fireball', events);
         } else {
           const counter = g.phase === 'startup' || g.phase === 'recovery';
-          const damage = Math.round(spec.damage * s.scale * (counter ? FIGHT.counterMultiplier : 1));
+          const damage = Math.round(spec.damage * s.scale * this.damageScale * (counter ? FIGHT.counterMultiplier : 1));
           g.hp = Math.max(0, g.hp - damage);
           g.attack = null;
           g.queue = [];

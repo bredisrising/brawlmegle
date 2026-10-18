@@ -359,6 +359,8 @@ async function handle(req, res) {
       id: crypto.randomUUID(),
       name: typeof body.name === "string" ? body.name.slice(0, 40) : "",
       username: normalizeUsername(body.username),
+      // "hq": the slower, sharper forge for showcase fighters (see HQ in pipeline.js).
+      ...(body.quality === "hq" ? { quality: "hq" } : {}),
       status: "scanning",
       createdAt: Date.now(),
       timings: {},

@@ -24,6 +24,11 @@ const flag = (name, fallback) => (process.env[name] ?? (fallback ? "1" : "0")) !
  * non-experimental 2:3 size (about 3 s slower than 1024x1536). TRELLIS reads the sheet at 1024 px tall anyway.
  */
 const SHEET_SIZE = process.env.FORGE_SHEET_SIZE ?? (GOLDSRC || FAST_SHEET ? "1024x1536" : "1536x2304");
+/**
+ * A showcase forge (`quality: "hq"`, the game's `?forge=hq`): the big sunburst sheet and the GPU box's slower settings
+ * (12 steps, 60k faces, 2048 texture). About 60 s instead of 35, for fighters people will look at up close.
+ */
+const HQ = { imageModel: "gpt-image-2.5-sunburst", sheetSize: "1536x2304", gpu: { steps: 12, faces: 60000, texture: 2048 } };
 const CARD_SIZE = "1024x1536";
 /**
  * Draw the back of the sheet too and build the model from front + back (multiview): a real back and hair from
@@ -507,7 +512,10 @@ export async function runForge(job, frames, store) {
         })
         .catch((err) => console.warn("sheet partial failed:", err.message));
     };
-    const sheet = await timed("sheet", () => editImage(frames, sheetPrompt(job.brief), IMAGE_MODEL, SHEET_SIZE, SHEET_PARTIALS > 0 ? onPartial : null));
+    const hq = job.quality === "hq";
+    const sheet = await timed("sheet", () =>
+      editImage(frames, sheetPrompt(job.brief), hq ? HQ.imageModel : IMAGE_MODEL, hq ? HQ.sheetSize : SHEET_SIZE, SHEET_PARTIALS > 0 ? onPartial : null),
+    );
     job.sheetUrl = store.write("sheet.png", sheet);
     // Its WebP copy right away, next to the 3D step, instead of at the end (optimize.js skips copies that exist).
     const webpCopies = () => (store.dir ? optimizeFighter(store.dir, {}, { glb: false }) : Promise.resolve());
@@ -552,7 +560,7 @@ export async function runForge(job, frames, store) {
       store.save();
     };
     const localModel = () =>
-      timed("model", () => (ENGINE_3D === "gradio" ? makeModelGradio(sheet, onStep) : makeModelLocal(sheet, onStep, null, { onPreview })))
+      timed("model", () => (ENGINE_3D === "gradio" ? makeModelGradio(sheet, onStep) : makeModelLocal(sheet, onStep, null, { onPreview, settings: hq ? HQ.gpu : undefined })))
         .then((out) => {
           job.engine3d = ENGINE_3D;
           job.gpuTimings = out.timings;
