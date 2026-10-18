@@ -478,7 +478,7 @@ export class Game {
         const frames = await (scan ?? this.localScan(source, show, signal, () => gen === this.setupGen[id]));
         // Say what the scan got: a partial scan still forges, the missing sides are filled in.
         const got = frames.filter(Boolean).length;
-        updatePlayer(id, { status: 'forging', statusDetail: got < 3 ? `Got ${got} of 3 sides, forging anyway` : 'Forging fighter' });
+        updatePlayer(id, { status: 'forging', statusDetail: got === 1 && frames[0] ? 'Forging from your front photo' : got < 3 ? `Got ${got} of 3 sides, forging anyway` : 'Forging fighter' });
         // The fighter goes by the player's username; the brief's playful nickname stays in brief.name for flavor.
         // Show the design (card, else the sheet) as soon as it exists: the 3D model takes another minute or so.
         // ...and the live preview: the brief typing out, the sheet developing, the voxels and clay from the GPU box.
