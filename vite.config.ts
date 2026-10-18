@@ -17,10 +17,15 @@ function optimizeGlbs(): Plugin {
       for (const file of Object.values(bundle)) {
         if (file.type !== 'asset' || !file.fileName.endsWith('.glb')) continue;
         const input = typeof file.source === 'string' ? new TextEncoder().encode(file.source) : file.source;
-        const result = await optimizeGlb(input, ARENA);
-        if (!result) continue;
-        file.source = new Uint8Array(result.glb);
-        this.info(`${file.fileName}: ${(result.bytesBefore / 1e6).toFixed(2)} -> ${(result.bytesAfter / 1e6).toFixed(2)} MB`);
+        try {
+          const result = await optimizeGlb(input, ARENA);
+          if (!result) continue;
+          file.source = new Uint8Array(result.glb);
+          this.info(`${file.fileName}: ${(result.bytesBefore / 1e6).toFixed(2)} -> ${(result.bytesAfter / 1e6).toFixed(2)} MB`);
+        } catch (err) {
+          // A deploy shouldn't be blocked by this: ship the original (it loads the same, just bigger).
+          this.warn(`${file.fileName} NOT optimized (${(err as Error).message}); run npm ci for the optimizer's packages`);
+        }
       }
     },
   };
