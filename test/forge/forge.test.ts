@@ -23,6 +23,31 @@ describe('forge client', () => {
     expect(f).toEqual({ id: 'a', name: 'Kid', status: 'forging', step: 'sheet', sheetUrl: 'http://x/sheet.png', brief: { title: 'The Menace' } });
   });
 
+  it("keeps the live preview's files and builds the forging card's stages from them", async () => {
+    const { forgePreview } = await import('../../src/forge/status');
+    const f = forge.toForgedFighter({
+      id: 'a',
+      name: 'Kid',
+      status: 'forging',
+      step: 'rig',
+      sheetPartialUrl: 'http://x/sheet-partial-1.webp',
+      previewVoxelsUrl: 'http://x/preview-voxels.bin',
+      previewMeshUrl: 'http://x/preview-shape.glb',
+      brief: { name: 'Static Storm', archetype: 'street boxer', build: 'athletic', signature: ['red wraps', 'a headband'], palette: ['#112233', 'red'] },
+    });
+    expect(forgePreview(f)).toEqual({
+      name: 'Static Storm',
+      archetype: 'street boxer',
+      dossier: ['Build: athletic', 'Signature: red wraps, a headband'],
+      palette: ['#112233'],
+      sheetUrl: 'http://x/sheet-partial-1.webp', // the partial until the final sheet exists
+      voxelsUrl: 'http://x/preview-voxels.bin',
+      meshUrl: 'http://x/preview-shape.glb',
+      step: 'rig',
+    });
+    expect(forgePreview({ ...f, sheetUrl: 'http://x/sheet.png' })).toMatchObject({ sheetUrl: 'http://x/sheet.png', sheetFinal: true });
+  });
+
   it('submits only the frames it has, then polls until ready', async () => {
     const calls: { url: string; body?: { name: string; frames: string[] } }[] = [];
     const statuses: Partial<ForgedFighter>[] = [
