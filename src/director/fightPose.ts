@@ -30,7 +30,7 @@ const MAX_LUNGE = 0.24;
 /** Per-move shape: how much of startup is wind-up, how far the torso turns and leans in. */
 const STRIKES = {
   jab: { wind: 0.2, twist: 0.25, lean: 0.03 },
-  cross: { wind: 0.3, twist: 0.6, lean: 0.06 },
+  cross: { wind: 0.3, twist: 0.8, lean: 0.06 },
   hook: { wind: 0.35, twist: 0.75, lean: 0.05 },
   uppercut: { wind: 0.4, twist: 0.35, lean: 0.03 },
   knee: { wind: 0.35, twist: 0.15, lean: -0.02 },
@@ -82,21 +82,63 @@ const smooth = (t: number) => {
 const easeIn = (t: number) => clamp01(t) ** 2;
 const sideOf = (hand: Hand | undefined) => (hand === 'L' ? 1 : -1);
 
-/** Rough fighting stance: the guard, a breathing bounce, and a slight sway. `time` in seconds. */
-export function stance(out: Pose, time: number, guardHigh: number, step = 0, stepPhase = 0): Pose {
+/**
+ * The fighting stance: bladed like a Street Fighter character, lead shoulder and lead foot toward the opponent,
+ * rear hand by the chin, and alive: a bounce on the knees, fists bobbing out of step, weight rolling side to side.
+ * `lead` 1 leads with the left side (P1), -1 with the right (P2), so both fighters show their chest to the camera.
+ * `time` in seconds; `step` 0..1 is how fast they're moving along the fight line, `stepPhase` the shuffle's phase.
+ */
+export function stance(out: Pose, time: number, guardHigh: number, step = 0, stepPhase = 0, lead: 1 | -1 = 1): Pose {
   copyPose(out, GUARD_POSE);
+  const [leadAnkle, rearAnkle] = lead === 1 ? (['lAnkle', 'rAnkle'] as const) : (['rAnkle', 'lAnkle'] as const);
+  const [leadWrist, rearWrist] = lead === 1 ? (['lWrist', 'rWrist'] as const) : (['rWrist', 'lWrist'] as const);
+  const [leadElbow, rearElbow] = lead === 1 ? (['lElbow', 'rElbow'] as const) : (['rElbow', 'lElbow'] as const);
+  const leadShoulder = lead === 1 ? 'lShoulder' : 'rShoulder';
+  // Feet staggered: lead foot forward, rear foot back.
+  out[leadAnkle].set(lead * 0.075, 0.03, 0.11);
+  out[rearAnkle].set(-lead * 0.08, 0.03, -0.1);
   // Moving: feet shuffle, the lifted one comes off the floor.
   if (step > 0) {
     const s = Math.sin(stepPhase);
-    out.lAnkle.z += 0.035 * s * step;
-    out.rAnkle.z -= 0.035 * s * step;
-    out.lAnkle.y += 0.03 * Math.max(0, s) * step;
-    out.rAnkle.y += 0.03 * Math.max(0, -s) * step;
+    out[leadAnkle].z += 0.035 * s * step;
+    out[rearAnkle].z -= 0.035 * s * step;
+    out[leadAnkle].y += 0.03 * Math.max(0, s) * step;
+    out[rearAnkle].y += 0.03 * Math.max(0, -s) * step;
   }
-  shift(out, 0.008 * Math.sin(time * 2 * Math.PI * 0.55), 0);
-  crouch(out, 0.014 + 0.01 * Math.sin(time * 2 * Math.PI * (1.6 + step)));
+  // Bladed: hips turned a little, shoulders more; the lead hand sits out front, the rear hand guards the chin.
+  turnHips(out, -lead * 0.3);
+  twist(out, -lead * 0.55);
+  out[leadWrist].z += 0.03;
+  out[leadWrist].y -= 0.01;
+  out[rearWrist].x += lead * 0.02;
+
+  // Life: a bounce on the knees, fists bobbing out of step with it, weight rolling side to side, head riding along.
+  const beat = time * 2 * Math.PI * (1.8 + step * 0.8);
+  shift(out, 0.012 * Math.sin(time * 2 * Math.PI * 0.45), 0);
+  out[leadWrist].y += 0.014 * Math.sin(beat + 0.9);
+  out[leadElbow].y += 0.007 * Math.sin(beat + 0.9);
+  out[rearWrist].y += 0.012 * Math.sin(beat + 2.6);
+  out[rearElbow].y += 0.006 * Math.sin(beat + 2.6);
+  out[leadShoulder].y += 0.008 * Math.sin(beat + 1.4);
+  out.head.y += 0.006 * Math.sin(beat - 0.7);
+  out.head.x += 0.006 * Math.sin(time * 2 * Math.PI * 0.45 - 0.5);
+  crouch(out, 0.024 + 0.016 * Math.sin(beat));
   if (guardHigh > 0) highGuard(out, guardHigh);
   return out;
+}
+
+/** Turn the hips about the vertical through their middle (+ brings the right hip forward). */
+function turnHips(p: Pose, angle: number) {
+  const c = hipMid(p, tA);
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  for (const j of ['lHip', 'rHip'] as const) {
+    const v = p[j];
+    const x = v.x - c.x;
+    const z = v.z - c.z;
+    v.x = c.x + x * cos + z * sin;
+    v.z = c.z - x * sin + z * cos;
+  }
 }
 
 /** Hands up in front of the face, elbows tucked: blocking. */

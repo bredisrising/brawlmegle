@@ -84,6 +84,8 @@ export class FighterView {
   /** Materialize-in: world height up to which the fighter is drawn (rises from the floor when it spawns). */
   private readonly reveal = { value: 100 };
   private readonly revealColor = { value: new THREE.Color() };
+  /** Rim light in the player's color: the fighter's edges glow, so it pops off the arena and you know whose it is. */
+  private readonly rimColor = { value: new THREE.Color() };
   private revealT = -1;
 
   constructor(id: PlayerId) {
@@ -113,6 +115,7 @@ export class FighterView {
     this.body.add(this.placeholder);
     this.flashMaterials = [{ material, emissive: material.emissive.clone(), intensity: material.emissiveIntensity }];
     this.revealColor.value.set(PLAYER_COLORS[id]).multiplyScalar(6);
+    this.rimColor.value.set(PLAYER_COLORS[id]).multiplyScalar(0.7);
     this.patchReveal(material);
     this.applyPose(copyPose(this.pose, GUARD_POSE));
   }
@@ -148,6 +151,7 @@ export class FighterView {
       });
       // Forged fighters (Tripo) are exported facing +x; this fighter space faces +z toward the opponent.
       if (fighter.glbUrl?.includes('/api/forge/')) model.rotation.y = -Math.PI / 2;
+      if (config.outline) this.addOutlines(model);
       // Rest data is captured with the body upright and unshifted.
       this.body.position.set(0, 0, 0);
       this.body.rotation.set(0, 0, 0);
@@ -205,7 +209,7 @@ export class FighterView {
     this.wonTime = opponentKo && state.phase !== 'ko' ? this.wonTime + dt : 0;
     if (state.phase !== 'hitstun') this.hit = null;
 
-    stance(this.target, this.time, this.guardAmt, this.step, this.stepPhase);
+    stance(this.target, this.time, this.guardAmt, this.step, this.stepPhase, this.id === 'p1' ? 1 : -1);
     if (live) this.blendLive(live);
     applyAction(
       this.target,
@@ -314,16 +318,18 @@ export class FighterView {
     material.userData.reveal = true;
     const reveal = this.reveal;
     const color = this.revealColor;
+    const rim = this.rimColor;
     material.onBeforeCompile = (shader) => {
       shader.uniforms.uReveal = reveal;
       shader.uniforms.uRevealColor = color;
+      shader.uniforms.uRimColor = rim;
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', '#include <common>\nvarying vec3 vRevealPos;')
         .replace('#include <project_vertex>', '#include <project_vertex>\nvRevealPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
       shader.fragmentShader = shader.fragmentShader
         .replace(
           '#include <common>',
-          '#include <common>\nvarying vec3 vRevealPos;\nuniform float uReveal;\nuniform vec3 uRevealColor;',
+          '#include <common>\nvarying vec3 vRevealPos;\nuniform float uReveal;\nuniform vec3 uRevealColor;\nuniform vec3 uRimColor;',
         )
         .replace(
           '#include <clipping_planes_fragment>',
@@ -335,11 +341,54 @@ export class FighterView {
           '#include <emissivemap_fragment>',
           `#include <emissivemap_fragment>
           float revealBand = 1.0 - smoothstep(0.0, 0.06, uReveal + revealNoise - vRevealPos.y);
-          totalEmissiveRadiance += uRevealColor * revealBand * step(uReveal, 50.0);`,
+          totalEmissiveRadiance += uRevealColor * revealBand * step(uReveal, 50.0);
+          float rimFacing = abs(dot(normalize(normal), normalize(vViewPosition)));
+          totalEmissiveRadiance += uRimColor * pow(1.0 - rimFacing, 4.0);`,
         );
     };
     material.customProgramCacheKey = () => 'reveal';
     material.needsUpdate = true;
+  }
+
+  /**
+   * Ink outline (inverted hull): a copy of each mesh, pushed out along its normals and drawn back faces only in
+   * near-black, bound to the same skeleton so it follows every pose. Clipped by the materialize-in like the body.
+   */
+  private addOutlines(model: THREE.Object3D) {
+    const meshes: THREE.Mesh[] = [];
+    model.traverse((o) => {
+      if (o instanceof THREE.Mesh && !o.userData.outline) meshes.push(o);
+    });
+    model.updateMatrixWorld(true);
+    const reveal = this.reveal;
+    for (const mesh of meshes) {
+      const scale = mesh.getWorldScale(new THREE.Vector3()).x || 1;
+      const width = { value: 0.0045 / scale };
+      const material = new THREE.MeshBasicMaterial({ color: '#0b0a10', side: THREE.BackSide });
+      material.onBeforeCompile = (shader) => {
+        shader.uniforms.uOutline = width;
+        shader.uniforms.uReveal = reveal;
+        shader.vertexShader = shader.vertexShader
+          .replace('#include <common>', '#include <common>\nuniform float uOutline;\nvarying vec3 vRevealPos;')
+          .replace('#include <begin_vertex>', '#include <begin_vertex>\ntransformed += normalize(normal) * uOutline;')
+          .replace('#include <project_vertex>', '#include <project_vertex>\nvRevealPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+        shader.fragmentShader = shader.fragmentShader
+          .replace('#include <common>', '#include <common>\nuniform float uReveal;\nvarying vec3 vRevealPos;')
+          .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\nif (vRevealPos.y > uReveal) discard;');
+      };
+      material.customProgramCacheKey = () => 'outline';
+      const outline =
+        mesh instanceof THREE.SkinnedMesh
+          ? Object.assign(new THREE.SkinnedMesh(mesh.geometry, material), { frustumCulled: false })
+          : new THREE.Mesh(mesh.geometry, material);
+      if (outline instanceof THREE.SkinnedMesh && mesh instanceof THREE.SkinnedMesh) outline.bind(mesh.skeleton, mesh.bindMatrix);
+      outline.userData.outline = true;
+      outline.position.copy(mesh.position);
+      outline.quaternion.copy(mesh.quaternion);
+      outline.scale.copy(mesh.scale);
+      outline.castShadow = false;
+      mesh.parent?.add(outline);
+    }
   }
 
   /** Hit flash: the fighter's materials glow white for a moment. */

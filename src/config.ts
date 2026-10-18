@@ -31,6 +31,8 @@ export const config = {
    * Key frames (a strike landing, a hit) always show on the frame they happen. `?fps=` overrides.
    */
   animFps: Math.max(0, Number(params.get('fps') ?? 12) || 0),
+  /** Ink outline around the fighters (`?outline=0` turns it off). */
+  outline: params.get('outline') !== '0',
   /** Full-screen impact frames on big hits (`?fx=low` turns them off, e.g. for flashing-light sensitivity). */
   impactFrames: params.get('fx') !== 'low',
 };
