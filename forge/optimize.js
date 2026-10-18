@@ -17,7 +17,7 @@ import path from "node:path";
  *   textures?: Record<string, TextureSetting>,
  *   geometry?: "meshopt" | "quantize" | "none",
  *   quantizePosition?: boolean,
- *   texcoordBits?: number,
+ *   texcoordBits?: number | null,
  * }} GlbProfile
  */
 
@@ -41,11 +41,11 @@ export const FIGHTER = {
 
 /**
  * The arena's baked GLBs (models/*.glb): same texture size (they're sampled with nearest filtering, so resizing would
- * change the pixel look), 16-bit UVs so texel edges don't move, float positions (Hills.ts instances the bare
- * geometry without its node, and Arena.ts reads positions to fix inside-out parts).
+ * change the pixel look). Geometry is compressed but decodes to the same float positions and UVs (texcoordBits null):
+ * the arena code reads them (Hills.ts instances and simplifies the bare geometry, Arena.ts fixes inside-out parts).
  * @type {GlbProfile}
  */
-export const ARENA = { textures: { default: { size: 4096, quality: 90 } }, geometry: "meshopt", quantizePosition: false, texcoordBits: 16 };
+export const ARENA = { textures: { default: { size: 4096, quality: 90 } }, geometry: "meshopt", quantizePosition: false, texcoordBits: null };
 
 let depsPromise;
 /** The optimizer's packages, loaded once on first use. */
@@ -132,6 +132,7 @@ export async function optimizeGlb(input, profile = FIGHTER) {
     const meshoptOn = geometry === "meshopt";
     const semantics = meshoptOn ? ["TEXCOORD", "JOINTS", "WEIGHTS", "COLOR"] : ["NORMAL", "TANGENT", "TEXCOORD", "JOINTS", "WEIGHTS", "COLOR"];
     if (profile.quantizePosition !== false) semantics.unshift("POSITION");
+    if (profile.texcoordBits === null) semantics.splice(semantics.indexOf("TEXCOORD"), 1);
     if (meshoptOn) await doc.transform(d.reorder({ encoder: d.MeshoptEncoder, target: "size" }));
     await doc.transform(
       d.quantize({
