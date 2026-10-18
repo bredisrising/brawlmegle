@@ -38,7 +38,7 @@ export function AvatarScreen() {
 
       <header className="relative flex flex-wrap items-center justify-between gap-4 px-5 pt-5 sm:px-10 sm:pt-8">
         <div className="flex items-center gap-5">
-          <span className="font-display text-xl uppercase tracking-tight">Brawlegle</span>
+          <span className="font-display text-xl uppercase tracking-tight">Brawlmegle</span>
           <span className="h-6 w-[2px] bg-line" />
           {step === 'choose' ? (
             <>

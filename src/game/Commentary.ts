@@ -19,7 +19,8 @@ export class Commentary {
   private queue: (Line & { at: number })[] = [];
   private speaking = false;
   private audio: HTMLAudioElement | null = null;
-  muted = false;
+  /** Voices are off unless `?voices=1` (the TTS voices weren't hype enough): captions only. */
+  muted = new URLSearchParams(window.location.search).get('voices') !== '1';
 
   /** Say a line (or two) soon. `urgent` jumps the queue (a K.O. beats a combo call). */
   say(lines: Line[], urgent = false) {
@@ -115,47 +116,54 @@ export class Commentary {
 
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** Instant lines for the big moments. {a} = attacker, {d} = defender, {w} = winner, {n} = hits. */
+/** Instant lines for the big moments. {a} = attacker, {d} = defender, {w} = winner, {n} = hits. Short and loud. */
 export const TEMPLATES = {
   first: [
-    { voice: 'A', text: '{a} draws first blood!' },
-    { voice: 'A', text: 'First hit goes to {a}!' },
-    { voice: 'B', text: '{d} was still stretching, apparently.' },
+    { voice: 'A', text: 'FIRST BLOOD! {a}!' },
+    { voice: 'A', text: '{a} STRIKES FIRST!' },
+    { voice: 'B', text: '{d} came here to watch, apparently.' },
   ],
   counter: [
-    { voice: 'A', text: 'COUNTER! {a} saw that coming a mile away!' },
-    { voice: 'A', text: 'What a counter from {a}!' },
-    { voice: 'B', text: '{d} walked right into that one.' },
+    { voice: 'A', text: 'COUNTER HIT! {a} READ THAT!' },
+    { voice: 'A', text: 'OH! {d} WALKED RIGHT INTO IT!' },
+    { voice: 'B', text: '{d} is fighting on airplane mode.' },
   ],
   combo: [
-    { voice: 'A', text: '{n}-hit combo from {a}!' },
-    { voice: 'A', text: '{a} is putting it together! {n} hits!' },
-    { voice: 'B', text: '{d} is just collecting those now.' },
+    { voice: 'A', text: '{n} HITS! {a} IS COOKING!' },
+    { voice: 'A', text: '{n}-HIT COMBO! UNREAL!' },
+    { voice: 'B', text: '{d} is just a punching bag with a username.' },
   ],
   fireball: [
-    { voice: 'A', text: '{a} charges up... FIREBALL!' },
-    { voice: 'A', text: 'Here comes the super from {a}!' },
+    { voice: 'A', text: '{a} LETS IT RIP! FIREBALL!' },
+    { voice: 'A', text: 'FIREBALL INCOMING!' },
   ],
   fireballHit: [
-    { voice: 'A', text: 'Fireball connects! {d} is cooked!' },
-    { voice: 'B', text: '{d} has never seen a fireball before, clearly.' },
+    { voice: 'A', text: 'IT CONNECTS! {d} IS TOAST!' },
+    { voice: 'B', text: '{d} forgot fireballs exist.' },
   ],
-  fireballBlocked: [{ voice: 'B', text: '{d} ate that fireball on the guard. Respect.' }],
+  fireballBlocked: [{ voice: 'B', text: '{d} blocks it. Boring, but smart.' }],
   danger: [
-    { voice: 'B', text: '{d} is running on fumes!' },
-    { voice: 'A', text: 'One more clean shot and {d} is done!' },
+    { voice: 'A', text: '{d} IS ON THE ROPES!' },
+    { voice: 'B', text: "{d}, it's not too late to forfeit." },
   ],
   ko: [
-    { voice: 'A', text: 'K.O.! {w} takes it!' },
-    { voice: 'A', text: 'DOWN GOES {d}! {w} wins!' },
+    { voice: 'A', text: 'K.O.!!! {w} TAKES IT!' },
+    { voice: 'A', text: 'LIGHTS OUT! {w} WINS!' },
+    { voice: 'B', text: '{d} has left the chat.' },
   ],
-  time: [{ voice: 'A', text: "Time! {w} takes it on points!" }],
-  draw: [{ voice: 'A', text: "Time! It's a draw!" }],
+  time: [{ voice: 'A', text: 'TIME! {w} WINS ON POINTS!' }],
+  draw: [{ voice: 'A', text: "TIME! IT'S A DRAW!" }],
   intro: [
-    { voice: 'A', text: '{a} versus {d}! Let’s get it on!' },
-    { voice: 'A', text: 'Ladies and gentlemen... {a} and {d}!' },
+    { voice: 'A', text: '{a} VERSUS {d}! LET\u2019S GO!' },
+    { voice: 'A', text: 'IT\u2019S {a} AND {d}! FIGHT!' },
   ],
 } as const satisfies Record<string, readonly Line[]>;
+
+/** How the commentators say a fighter's name: "bred (CPU hard)" is just "Bred". */
+export function spoken(name: string) {
+  const bare = name.replace(/\s*\(cpu[^)]*\)\s*$/i, '').trim();
+  return bare ? bare[0].toUpperCase() + bare.slice(1) : name;
+}
 
 export function fill(lines: readonly Line[], vars: Record<string, string | number>, pick = Math.random): Line {
   const line = lines[Math.floor(pick() * lines.length)];

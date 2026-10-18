@@ -1,4 +1,4 @@
-# Brawlegle: notes for agents
+# Brawlmegle: notes for agents
 
 Read `SPEC.md` (what we're building) and `architecture.md` (how the code is laid out) first.
 

@@ -1,8 +1,8 @@
-# Brawlegle spec
+# Brawlmegle spec
 
 Working name. This is a living doc, so edit it whenever a decision changes.
 
-First there was Omegle: talking to strangers. Then there was Omoggle: talking and mogging against strangers. Brawlegle is the pose- and camera-based version for fighting. You get scanned into an exaggerated video-game version of yourself, then fight the other player with your real body.
+First there was Omegle: talking to strangers. Then there was Omoggle: talking and mogging against strangers. Brawlmegle is the pose- and camera-based version for fighting. You get scanned into an exaggerated video-game version of yourself, then fight the other player with your real body.
 
 ## The demo, start to finish
 

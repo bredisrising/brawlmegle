@@ -24,7 +24,7 @@ import { ClientSession } from './ClientSession';
 import type { MatchPlayer, MirrorEvent, MirrorFrame } from '../net/protocol';
 import { HostSession } from './HostSession';
 import { MatchRecorder, recordingEnabled } from './MatchRecorder';
-import { Commentary, TEMPLATES, fill, type Line } from './Commentary';
+import { Commentary, TEMPLATES, fill, spoken, type Line } from './Commentary';
 import { localPlayerId, pushPopup, updatePlayer, useGameStore } from './store';
 
 /** K.O. replay: ticks kept, ticks shown before and after the K.O., playback speed, and a hold on the end. */
@@ -732,14 +732,14 @@ export class Game {
 
   private cast() {
     const { players } = useGameStore.getState();
-    return { p1: { id: this.fighters.p1?.id, name: players.p1.name }, p2: { id: this.fighters.p2?.id, name: players.p2.name } };
+    return { p1: { id: this.fighters.p1?.id, name: spoken(players.p1.name) }, p2: { id: this.fighters.p2?.id, name: spoken(players.p2.name) } };
   }
 
   /** The big moments get a line. */
   private react(event: FightEvent) {
     const { players } = useGameStore.getState();
     const d = opponentOf(event.attacker);
-    const vars = { a: players[event.attacker].name, d: players[d].name };
+    const vars = { a: spoken(players[event.attacker].name), d: spoken(players[d].name) };
     if (event.type === 'startup') {
       if (event.move === 'fireball') this.call([fill(TEMPLATES.fireball, vars)], true);
       return;
@@ -776,8 +776,8 @@ export class Game {
   /** The finish: an instant call, then the LLM's roast (over the replay). */
   private callFinish(winner: PlayerId | null, ending: string | null) {
     const { players } = useGameStore.getState();
-    const w = winner ? players[winner].name : '';
-    const l = winner ? players[opponentOf(winner)].name : '';
+    const w = winner ? spoken(players[winner].name) : '';
+    const l = winner ? spoken(players[opponentOf(winner)].name) : '';
     if (!winner) this.call([fill(TEMPLATES.draw, {})], true);
     else this.call([fill(ending === 'time' ? TEMPLATES.time : TEMPLATES.ko, { w, d: l })], true);
     const moment = !winner
@@ -905,8 +905,7 @@ export class Game {
   private onMuteKey = (e: KeyboardEvent) => {
     if (e.code !== 'KeyM' || e.target instanceof HTMLInputElement) return;
     this.sfx.muted = !this.sfx.muted;
-    this.commentary.muted = this.sfx.muted;
-    if (this.sfx.muted) this.commentary.hush();
+
   };
 
   /** Dev only: press 1 / 2 to fake a hit on P1 / P2 (Shift = counter) until the fight engine exists. */

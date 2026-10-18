@@ -1,4 +1,4 @@
-# Brawlegle
+# Brawlmegle
 
 Working name. DubHacks '26.
 

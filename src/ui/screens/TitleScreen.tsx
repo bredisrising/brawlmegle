@@ -39,7 +39,7 @@ export function TitleScreen() {
       <div className="relative flex h-full flex-col justify-between gap-10 p-6 sm:p-12">
         <div className="animate-in-l">
           <h1 className="font-display text-[clamp(3.5rem,10.5vw,10rem)] uppercase leading-[0.82] tracking-tighter">
-            Brawl<span className="text-hp">egle</span>
+            Brawl<span className="text-hp">megle</span>
           </h1>
           <p className="mt-5 inline-block bg-paper px-3 py-1.5 font-cond text-base font-extrabold uppercase tracking-[0.3em] text-ink sm:text-lg">
             Get scanned. Get forged. Throw hands.

@@ -97,7 +97,7 @@ export class MatchRecorder {
       } catch (err) {
         // The server's cap is 12 MB per file; anything that didn't make it is saved on this laptop instead.
         console.warn('[record] upload failed, saving locally', err);
-        download(new Blob([body], { type: 'application/x-ndjson' }), `brawlegle-match-${stamp}-${id}.jsonl`);
+        download(new Blob([body], { type: 'application/x-ndjson' }), `brawlmegle-match-${stamp}-${id}.jsonl`);
       }
     }
   }
@@ -119,7 +119,7 @@ export class MatchRecorder {
     if (!v) return;
     this.video = null;
     const stamp = new Date(this.startedAt).toISOString().replace(/[:.]/g, '-');
-    v.recorder.onstop = () => download(new Blob(v.chunks, { type: 'video/webm' }), `brawlegle-match-${stamp}.webm`);
+    v.recorder.onstop = () => download(new Blob(v.chunks, { type: 'video/webm' }), `brawlmegle-match-${stamp}.webm`);
     v.recorder.stop();
   }
 }
@@ -149,7 +149,7 @@ export class VideoClip {
     if (!r) return;
     this.rec = null;
     const stamp = new Date(r.started).toISOString().replace(/[:.]/g, '-');
-    r.recorder.onstop = () => download(new Blob(r.chunks, { type: 'video/webm' }), `brawlegle-match-${stamp}-${tag}.webm`);
+    r.recorder.onstop = () => download(new Blob(r.chunks, { type: 'video/webm' }), `brawlmegle-match-${stamp}-${tag}.webm`);
     r.recorder.stop();
   }
 }
