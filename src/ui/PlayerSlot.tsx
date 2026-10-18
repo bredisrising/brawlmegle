@@ -2,7 +2,9 @@ import { localPlayerId, useGameStore } from '../game/store';
 import type { PlayerId } from '../types';
 import { ACCENT } from './accent';
 import { ArcadeButton, TextButton } from './ArcadeButton';
+import { ForgePreview } from './ForgePreview';
 import { ForgeSteps } from './ForgeSteps';
+import { PLAYER_COLORS } from '../game/constants';
 import { useGame } from './GameContext';
 
 /** Half-width of the diagonal where the two panels meet, and the player-color edge along it. */
@@ -106,8 +108,17 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
                 {player.statusDetail}
                 <span className="animate-blink">_</span>
               </p>
-              {/* The design arrives about a minute before the 3D model: show it off while they wait. */}
-              {player.status === 'forging' && player.portraitUrl && <DesignPreview url={player.portraitUrl} color={accent.bg} right={right} />}
+              {/* Something to watch while it forges: the brief, the sheet developing, then the 3D stages live. */}
+              {player.status === 'forging' && (player.forge || player.portraitUrl) && (
+                <ForgePreview
+                  preview={player.forge}
+                  art={player.portraitUrl}
+                  color={accent.bg}
+                  hex={PLAYER_COLORS[id]}
+                  other={PLAYER_COLORS[right ? 'p1' : 'p2']}
+                  right={right}
+                />
+              )}
               {player.status === 'forging' && !remote && (
                 <TextButton onClick={() => game.skipForgeWait(id)} title="Fight as a stand-in now; your fighter materializes in when it's ready">
                   Don't wait: fight now
@@ -162,18 +173,6 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
           )}
         </div>
       </div>
-    </div>
-  );
-}
-
-/** The fighter's design art while the 3D model is still being built. */
-export function DesignPreview({ url, color, right }: { url: string; color: string; right: boolean }) {
-  return (
-    <div className={`animate-slam flex flex-col gap-1 ${right ? 'items-end origin-right' : 'items-start origin-left'}`}>
-      <div className={`cut ${color} p-[4px] [--cut:14px]`}>
-        <img src={url} alt="Your fighter's design" className="cut block max-h-[34vh] w-auto bg-ink object-contain [--cut:12px]" />
-      </div>
-      <span className="font-cond text-sm font-bold uppercase tracking-[0.25em] text-paper/70">Your fighter. Building it in 3D…</span>
     </div>
   );
 }

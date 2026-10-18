@@ -3,7 +3,8 @@ import type { Phase } from '../../types';
 import { ACCENT } from '../accent';
 import { ForgeSteps } from '../ForgeSteps';
 import { MoveGuide } from '../MoveGuide';
-import { DesignPreview } from '../PlayerSlot';
+import { ForgePreview } from '../ForgePreview';
+import { PLAYER_COLORS } from '../../game/constants';
 import { TextButton } from '../ArcadeButton';
 import { useGame } from '../GameContext';
 
@@ -56,7 +57,9 @@ export function ClientScreen() {
             <span className="animate-blink">_</span>
           </p>
         )}
-        {player.status === 'forging' && player.portraitUrl && <DesignPreview url={player.portraitUrl} color={accent.bg} right={false} />}
+        {player.status === 'forging' && (player.forge || player.portraitUrl) && (
+          <ForgePreview preview={player.forge} art={player.portraitUrl} color={accent.bg} hex={PLAYER_COLORS.p2} other={PLAYER_COLORS.p1} right={false} />
+        )}
         {player.status === 'forging' && (
           <TextButton className="self-start" onClick={() => game.skipForgeWait('p2')}>
             Don't wait: fight now

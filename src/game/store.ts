@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { PLAYER_IDS, type ForgedFighter, type Phase, type PlayerId, type PlayerStatus, type Role } from '../types';
+import { PLAYER_IDS, type ForgedFighter, type ForgePreview, type Phase, type PlayerId, type PlayerStatus, type Role } from '../types';
 import { MAX_HP, PLAYER_NAMES } from './constants';
 import type { LinkStats } from '../net/Peer';
 
@@ -16,6 +16,8 @@ export interface PlayerState {
   meter: number;
   /** Generated hero portrait (from the forge pipeline), shown in the HUD. */
   portraitUrl: string | null;
+  /** While forging: the stages the live preview shows (null when there's nothing to show). */
+  forge: ForgePreview | null;
 }
 
 export interface HitPopup {
@@ -82,6 +84,7 @@ const initialPlayer = (id: PlayerId): PlayerState => ({
   hp: MAX_HP,
   meter: 0,
   portraitUrl: null,
+  forge: null,
 });
 
 export const useGameStore = create<GameState>(() => ({

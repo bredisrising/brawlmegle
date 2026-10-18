@@ -16,7 +16,7 @@ import type { Intent } from '../intent/intents';
 import { InputHub, createLocalSource, preloadLocalInput, type InputSource } from '../input';
 import { MockSource } from '../input/sources/MockSource';
 import { captureScan, forgeBusy, forgeFighter, type ScanFrames } from '../forge/forge';
-import { forgeStatus, onChange, scanStatus } from '../forge/status';
+import { forgePreview, forgeStatus, onChange, samePreview, scanStatus } from '../forge/status';
 import { fetchServerFighters, maskedFighter, saveFighter } from '../forge/roster';
 import { preloadModel } from '../forge/models';
 import { recordMatch } from '../forge/leaderboard';
@@ -56,6 +56,10 @@ const REPLAY_HOLD = 0.8;
 const REPLAY_DELAY = 1.2;
 type ReplayFrame = MirrorFrame & { live: Record<PlayerId, PoseFrame | null>; events: MirrorEvent[] };
 /** Roughly head height between the two fighters. */
+/** How long a fresh forge shows itself off in the forging card (textured, then the rig flashes) before it's ready. */
+const REVEAL_MS = 1800;
+const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 const ARENA_CENTER = new THREE.Vector3(0, 0.5, 0);
 const ARENA_FLOOR = new THREE.Vector3(0, 0.01, 0);
 
@@ -395,6 +399,7 @@ export class Game {
       this.input.assign(id, source);
 
       let fighter: ForgedFighter;
+      let revealGlb: string | null = null;
       if (choice.kind === 'scan') {
         // Don't make them turn around for 20 s just to hear the forge is full.
         const busy = scan ? null : await forgeBusy();
@@ -408,9 +413,13 @@ export class Game {
         updatePlayer(id, { status: 'forging', statusDetail: got < 3 ? `Got ${got} of 3 sides, forging anyway` : 'Forging fighter' });
         // The fighter goes by the player's username; the brief's playful nickname stays in brief.name for flavor.
         // Show the design (card, else the sheet) as soon as it exists: the 3D model takes another minute or so.
+        // ...and the live preview: the brief typing out, the sheet developing, the voxels and clay from the GPU box.
         const preview = (f: ForgedFighter) => {
           const art = f.cardUrl ?? f.sheetUrl ?? null;
-          if (art && art !== useGameStore.getState().players[id].portraitUrl) updatePlayer(id, { portraitUrl: art });
+          const current = useGameStore.getState().players[id];
+          if (art && art !== current.portraitUrl) updatePlayer(id, { portraitUrl: art });
+          const forge = forgePreview(f);
+          if (!samePreview(forge, current.forge)) updatePlayer(id, { forge });
         };
         const forging = forgeFighter(name, frames, (f) => (show(forgeStatus(f)), preview(f)), { username: choice.username, signal });
         const skipped = new Promise<null>((resolve) => (this.skipForge[id] = () => resolve(null)));
@@ -418,6 +427,7 @@ export class Game {
         delete this.skipForge[id];
         if (done) {
           fighter = done;
+          if (done.status === 'ready' && done.glbUrl) revealGlb = done.glbUrl;
           if (fighter.status === 'ready') saveFighter(fighter); // they said yes to "save fighter to memory card"
           // A failed forge still fights: no glbUrl means the default model (SPEC fallback ladder).
           else console.warn('forge failed, using the default fighter:', fighter.error);
@@ -431,11 +441,14 @@ export class Game {
       } else {
         fighter = choice.fighter;
       }
-      await this.loadFighter(id, fighter);
+      // A fresh forge shows itself off in the forging card (textured, then the rig flashes) while its model loads.
+      const forge = useGameStore.getState().players[id].forge;
+      const reveal = revealGlb && forge ? (updatePlayer(id, { forge: { ...forge, glbUrl: revealGlb } }), wait(REVEAL_MS)) : null;
+      await Promise.all([this.loadFighter(id, fighter), reveal]);
       this.lifetime.signal.throwIfAborted();
 
       this.spawn(id);
-      updatePlayer(id, { status: 'ready', statusDetail: '', portraitUrl: fighter.cardUrl ?? null });
+      updatePlayer(id, { status: 'ready', statusDetail: '', portraitUrl: fighter.cardUrl ?? null, forge: null });
       this.fighters[id] = fighter;
       this.sendMatch();
       // Practice: bring in the CPU as soon as the player is set (unless someone's already in P2).
@@ -453,7 +466,7 @@ export class Game {
       console.error(err);
       // Say what actually broke (camera denied, nobody in view, forge down...), not just "something".
       const reason = err instanceof Error ? err.message : String(err);
-      updatePlayer(id, { status: 'waiting', statusDetail: `Couldn't set up your fighter: ${reason}` });
+      updatePlayer(id, { status: 'waiting', statusDetail: `Couldn't set up your fighter: ${reason}`, forge: null });
       const { role } = useGameStore.getState();
       if (id === localPlayerId(role)) useGameStore.setState({ screen: 'avatar' });
     }
@@ -654,7 +667,7 @@ export class Game {
     this.input.unassign(id);
     this.views[id].setVisible(false);
     delete this.fighters[id];
-    updatePlayer(id, { status: 'waiting', statusDetail: '', portraitUrl: null });
+    updatePlayer(id, { status: 'waiting', statusDetail: '', portraitUrl: null, forge: null });
     useGameStore.setState({ phase: 'lobby', countdown: null, winner: null, ending: null, timeLeft: null, combo: null, callout: null, screen: 'avatar' });
     this.sendMatch();
   }

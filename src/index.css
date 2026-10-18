@@ -183,6 +183,21 @@ html, body, #root {
   background-size: 28px 100%;
 }
 
+/* Forge preview: CRT scanlines over the whole card, and a scan band sweeping down while something develops. */
+@utility forge-scanlines {
+  background-image: repeating-linear-gradient(0deg, rgb(0 0 0 / 0.28) 0 1px, transparent 1px 3px);
+  box-shadow: inset 0 0 40px rgb(0 0 0 / 0.6);
+}
+@utility forge-develop {
+  background-image: linear-gradient(180deg, transparent 0%, rgb(255 45 149 / 0.18) 46%, rgb(31 139 255 / 0.35) 50%, transparent 54%);
+  background-size: 100% 220%;
+  animation: forge-develop 1.6s steps(12) infinite;
+}
+@keyframes forge-develop {
+  from { background-position: 0 100%; }
+  to { background-position: 0 -120%; }
+}
+
 /* Hollow display type for oversized background numerals. */
 @utility text-hollow {
   color: transparent;

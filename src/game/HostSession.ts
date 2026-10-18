@@ -248,7 +248,8 @@ export class HostSession {
     if (failed) msg = { type: 'fighter', fighter: { ...base, status: 'failed', error: failed } };
     else if (this.input.source(REMOTE) !== this.remote) return;
     else if (p2.status === 'forging') {
-      msg = { type: 'fighter', fighter: { ...base, status: 'forging', ...(p2.portraitUrl ? { cardUrl: p2.portraitUrl } : {}) }, detail: p2.statusDetail };
+      const preview = p2.forge ? { preview: p2.forge } : {};
+      msg = { type: 'fighter', fighter: { ...base, status: 'forging', ...(p2.portraitUrl ? { cardUrl: p2.portraitUrl } : {}) }, detail: p2.statusDetail, ...preview };
     }
     else if (p2.status === 'ready') msg = { type: 'fighter', fighter: { ...base, status: 'ready', ...(p2.portraitUrl ? { cardUrl: p2.portraitUrl } : {}) } };
     else return;

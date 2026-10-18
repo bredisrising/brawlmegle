@@ -1,4 +1,4 @@
-import type { FightEvent, FighterState, ForgedFighter, Hand, Phase, PlayerId, PoseFrame, Projectile, Stance } from '../types';
+import type { FightEvent, FighterState, ForgedFighter, ForgePreview, Hand, Phase, PlayerId, PoseFrame, Projectile, Stance } from '../types';
 import type { Intent } from '../intent/intents';
 
 /**
@@ -38,7 +38,7 @@ export type HostMessage =
   | { type: 'match'; players: Record<PlayerId, MatchPlayer> } // who's fighting as what; on connect and whenever it changes
   | { type: 'frame'; frame: MirrorFrame } // every sim tick while a fight is on ("poses" channel: lossy)
   | { type: 'events'; events: MirrorEvent[] } // hits, blocks, wind-ups, moves read: the moments that need effects
-  | { type: 'fighter'; fighter: ForgedFighter; detail?: string }; // P2's forge progress (detail: the host's status text); sent with status 'ready' once P2's fighter is set (scan, masked or pick)
+  | { type: 'fighter'; fighter: ForgedFighter; detail?: string; preview?: ForgePreview }; // P2's forge progress (detail: the host's status text, preview: the live forge preview); sent with status 'ready' once P2's fighter is set (scan, masked or pick)
 
 export type MatchPlayer = { name: string; fighter: ForgedFighter | null; hp: number };
 

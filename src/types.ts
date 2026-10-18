@@ -111,4 +111,19 @@ export type ForgedFighter = {
   sheetUrl?: string; // A-pose model sheet (input to the 3D step)
   brief?: Record<string, unknown>; // see SPEC.md "Prompts" for the shape
   error?: string; // why the forge failed
+  // The forging screen's live preview (forge/pipeline.js), each as soon as it exists:
+  sheetPartialUrl?: string; // the sheet while OpenAI is still drawing it (WebP)
+  previewVoxelsUrl?: string; // TRELLIS stage 1's sparse voxels: uint16 resolution, then x, y, z bytes (z up)
+  previewMeshUrl?: string; // the untextured shape (small GLB, y up)
+};
+
+/** What a forging fighter's live preview shows, stage by stage (see ForgePreview.tsx). */
+export type ForgePreview = {
+  name?: string; // the brief's fighter name and archetype, typed out
+  archetype?: string;
+  sheetUrl?: string; // the sheet developing: the partial, then the final one
+  sheetFinal?: boolean;
+  voxelsUrl?: string; // a voxel hologram
+  meshUrl?: string; // gray clay
+  glbUrl?: string; // textured, then the rig flashes: the finished fighter
 };

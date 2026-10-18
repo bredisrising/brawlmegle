@@ -1,4 +1,4 @@
-import type { ForgedFighter } from '../types';
+import type { ForgedFighter, ForgePreview } from '../types';
 import type { ScanProgress } from './scanBuckets';
 
 /** Player-facing text for scan and forge progress (statusDetail on the lobby / client screens). */
@@ -31,4 +31,25 @@ export function onChange(set: (text: string) => void): (text: string) => void {
   return (text) => {
     if (text !== last) set((last = text));
   };
+}
+
+/** The live preview's stages from a forge status: whatever exists so far (the GPU box streams voxels and clay). */
+export function forgePreview(f: ForgedFighter): ForgePreview {
+  const brief = f.brief ?? {};
+  const text = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
+  const preview: ForgePreview = {
+    name: text(brief.name),
+    archetype: text(brief.archetype),
+    sheetUrl: f.sheetUrl ?? f.sheetPartialUrl,
+    sheetFinal: Boolean(f.sheetUrl),
+    voxelsUrl: f.previewVoxelsUrl,
+    meshUrl: f.previewMeshUrl,
+  };
+  for (const key of Object.keys(preview) as (keyof ForgePreview)[]) if (preview[key] === undefined) delete preview[key];
+  return preview;
+}
+
+/** Same preview? (The forge's status arrives every 1.5 s; the store only changes when the preview does.) */
+export function samePreview(a: ForgePreview | null, b: ForgePreview | null): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }

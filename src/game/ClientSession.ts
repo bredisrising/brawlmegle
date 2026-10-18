@@ -5,7 +5,7 @@ import { Peer } from '../net/Peer';
 import { Signaling } from '../net/Signaling';
 import { PROTOCOL_VERSION, type ClientMessage, type HostMessage, type MatchPlayer, type MirrorEvent, type MirrorFrame } from '../net/protocol';
 import { config } from '../config';
-import type { ForgedFighter, PlayerId, PoseFrame } from '../types';
+import type { ForgedFighter, ForgePreview, PlayerId, PoseFrame } from '../types';
 import { IntentReader } from '../intent/IntentReader';
 import type { Intent } from '../intent/intents';
 import type { FighterChoice } from './Game';
@@ -208,12 +208,12 @@ export class ClientSession {
         break;
       case 'fighter':
         this.confirmed = true;
-        this.showFighter(msg.fighter, msg.detail);
+        this.showFighter(msg.fighter, msg.detail, msg.preview);
         break;
     }
   }
 
-  private showFighter(fighter: ForgedFighter, detail?: string) {
+  private showFighter(fighter: ForgedFighter, detail?: string, preview?: ForgePreview) {
     switch (fighter.status) {
       case 'scanning':
       case 'forging':
@@ -222,6 +222,7 @@ export class ClientSession {
           status: 'forging',
           statusDetail: detail || (fighter.step ? FORGE_STEPS[fighter.step] : 'Forging your fighter'),
           ...(fighter.cardUrl ? { portraitUrl: fighter.cardUrl } : {}),
+          forge: preview ?? null,
         });
         break;
       case 'failed':
@@ -229,7 +230,7 @@ export class ClientSession {
         updatePlayer(PLAYER, { status: 'forging', statusDetail: 'Forge hiccup, picking a backup fighter' });
         break;
       case 'ready': {
-        updatePlayer(PLAYER, { name: fighter.name, status: 'ready', statusDetail: '', portraitUrl: fighter.cardUrl ?? null });
+        updatePlayer(PLAYER, { name: fighter.name, status: 'ready', statusDetail: '', portraitUrl: fighter.cardUrl ?? null, forge: null });
         // Rejoined mid-fight: straight back to the fight.
         const { phase, screen } = useGameStore.getState();
         if (phase !== 'lobby' && screen === 'client') useGameStore.setState({ screen: 'game' });
