@@ -168,8 +168,10 @@ describe('delete my fighter', () => {
     expect(fs.readdirSync(path.join(data, 'highlights')).filter((f) => f.endsWith('.webm'))).toHaveLength(1);
     expect(JSON.parse(fs.readFileSync(path.join(data, 'highlights', 'index.json'), 'utf8'))).toHaveLength(1);
 
-    // Gone is gone: 404, and a server restart doesn't bring any of it back.
+    // Gone is gone: 404, a clip of a fight that was still on isn't kept, and a restart doesn't bring any of it back.
     expect((await s.del(id, ownerKey)).status).toBe(404);
+    expect((await s.upload({ id, name: 'phoenix' })).status).toBe(410);
+    expect(await s.highlights()).toHaveLength(1);
     for (const child of running.splice(0)) child.kill();
     const again = await startForge({}, data);
     expect(await again.list()).toEqual(['p-old']);
@@ -201,11 +203,16 @@ describe('delete my fighter', () => {
     expect(fs.existsSync(path.join(s.data, id))).toBe(true);
   });
 
-  it('rate-limits delete tries', async () => {
+  it('rate-limits delete tries, codes apart from keys', async () => {
     const s = await startForge({ FORGE_MAX_DELETES: '2' });
+    const { id, ownerKey } = await s.forge();
     expect((await s.delCode('0000-0000-0000-0000')).status).toBe(403);
     expect((await s.delCode('0000-0000-0000-0001')).status).toBe(403);
     expect((await s.delCode('0000-0000-0000-0002')).status).toBe(429);
+    // Guessing codes doesn't lock out an owner with a key.
+    expect((await s.del(id, 'wrong')).status).toBe(403);
+    expect((await s.del(id, ownerKey)).status).toBe(200);
+    expect((await s.del(id, ownerKey)).status).toBe(429);
   });
 
   it('lets the game page call it cross-origin', async () => {

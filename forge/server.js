@@ -177,8 +177,10 @@ function withLineage(all) {
   return out;
 }
 
-/** One try per call, for both ways of deleting (a delete code is 80 bits, but there's no reason to allow guessing). */
-const deleteAllowed = limiter(Number(process.env.FORGE_MAX_DELETES ?? 30), 10 * 60_000);
+/** Delete tries, owner key and delete code apart, so someone guessing codes can't lock out an owner with a key. */
+const deleteAllowed = { key: limiter(Number(process.env.FORGE_MAX_DELETES ?? 30), 10 * 60_000), code: limiter(Number(process.env.FORGE_MAX_DELETES ?? 30), 10 * 60_000) };
+/** Fighters deleted since the server started: a K.O. clip of a fight that was still on when it went isn't kept. */
+const deletedIds = new Set();
 const ADMIN_KEY_HASH = sha256(adminKey(DATA));
 
 /**
@@ -189,6 +191,7 @@ const ADMIN_KEY_HASH = sha256(adminKey(DATA));
 function deleteFighter(fighter) {
   if (fighter.status === "forging" || fighter.status === "scanning") return "it's still forging: try again when it's done";
   fighters.delete(fighter.id);
+  deletedIds.add(fighter.id);
   for (const kind of ["card", "sheet"]) webpCopies.delete(`${fighter.id}/${kind}.webp`);
   const gone = purgeFighter(DATA, fighter.id, { records, highlights });
   console.log(`deleted fighter ${fighter.id.slice(0, 8)}: ${gone.files} files, record ${gone.record ? "removed" : "none"}, ${gone.highlights} highlights`);
@@ -370,7 +373,7 @@ async function handle(req, res) {
   // "Delete my fighter": with the owner key the scanning browser kept, or the delete code from the screenshot.
   if (req.method === "POST" && parts[0] === "api" && parts[1] === "fighters" && parts.at(-1) === "delete" && parts.length <= 4) {
     if (ACCESS_KEY && req.headers["x-forge-key"] !== ACCESS_KEY) return json(res, 403, { error: "bad forge key" });
-    if (!deleteAllowed()) return json(res, 429, { error: "too many tries, wait a few minutes" });
+    if (!deleteAllowed[parts.length === 4 ? "key" : "code"]()) return json(res, 429, { error: "too many tries, wait a few minutes" });
     let body;
     try {
       body = await readJson(req);
@@ -677,6 +680,7 @@ async function handleHighlights(req, res, parts, base) {
     if (!ext) return json(res, 415, { error: "send video/webm or video/mp4" });
     const meta = highlightMeta(req.headers["x-highlight-meta"]);
     if (typeof meta === "string") return json(res, 400, { error: meta });
+    if (deletedIds.has(meta.p1.id) || deletedIds.has(meta.p2.id)) return json(res, 410, { error: "that fighter was deleted" });
     if (!highlightAllowed()) return json(res, 429, { error: "slow down" });
     let video;
     try {

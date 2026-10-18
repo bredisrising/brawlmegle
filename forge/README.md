@@ -14,13 +14,30 @@ Then set `VITE_FORGE_API=http://127.0.0.1:8787` in the root `.env` for the game.
 
 | Call | Returns |
 |---|---|
-| `POST /api/forge` `{name, frames: [front, left, right]}` (1–3 base64 JPEG/PNG or data URLs) | `{id}`, then the forge runs in the background |
+| `POST /api/forge` `{name, frames: [front, left, right]}` (1–3 base64 JPEG/PNG or data URLs) | `{id, ownerKey, deleteCode}`, then the forge runs in the background. The key and code are handed out only here (see "Deleting fighters") |
 | `GET /api/forge/:id` | The fighter: `status` (`scanning` → `forging` → `ready` or `failed`), `step` (`brief` → `sheet` → `model`), `brief`, `sheetUrl`, `cardUrl`, `timings`, `error` |
 | `GET /api/fighters` | Ready fighters, newest first (for the roster) |
+| `POST /api/fighters/:id/delete` `{key}` / `POST /api/fighters/delete` `{code}` (`x-forge-key`) | `{ok, id, name}`: the fighter is deleted for good. 403 wrong key or code, 404 already gone, 409 still forging, 429 too many tries (`FORGE_MAX_DELETES` per 10 min, default 30, keys and codes counted apart) |
 | `POST /api/highlights` (body: the clip, `video/webm` or `video/mp4`, up to 6 MB; `x-forge-key`; `x-highlight-meta`: URI-encoded JSON `{p1, p2, winner, move, combo, roundTime, duration}`, sides `{id?, name, cpu?}`) | The highlight. K.O. replays the game records, kept in `FORGE_DATA/highlights/` (newest 40) |
 | `GET /api/highlights` | `{highlights}`, newest first, each with `url` (clips are immutable and served with byte ranges) |
 
 Fighters are saved in `forge/data/<id>/` (gitignored). An empty `name` gets the fighter name from the brief.
+
+### Deleting fighters
+
+No logins: each forge makes an owner key (32 random bytes) and a delete code (16 Crockford base32 characters, 80
+bits, `XXXX-XXXX-XXXX-XXXX`) and keeps only their SHA-256 hashes in `fighter.json` (`ownerKeyHash`, `deleteCodeHash`,
+never in any answer). The browser that scanned keeps the key (localStorage `brawlegle.owned`) and shows "Delete my
+fighter" on the memory card; the code is shown once the forge is done, to screenshot, and works from any laptop
+(Leaders or the memory card: "Delete a fighter with a code"). A delete removes the whole `<id>/` folder (photos,
+sheet, card, every GLB, `*.pre-rescue`/`*.pre-face` backups), its record in `records.json`, and every highlight that
+shows it (index entry and clip). The username's previous fighter is current again. Code: `owner.js`.
+
+Fighters from before owner keys (or a lost code): delete by hand on the server, by id or username (a username means
+all of its fighters). Without `--yes` it only lists them. It asks the running server (localhost-only `/admin/delete`,
+with the key in `FORGE_DATA/.admin-key`), or deletes on disk when the server is stopped:
+
+    cd /opt/brawlegle/forge && sudo -u brawlegle FORGE_DATA=/var/lib/brawlegle/forge node delete-fighter.mjs <id|username> [--yes]
 
 ## Pipeline
 
