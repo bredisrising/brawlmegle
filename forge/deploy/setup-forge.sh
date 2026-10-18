@@ -7,8 +7,9 @@ SRC="$(cd "$(dirname "$0")/.." && pwd)"
 APP=/opt/brawlegle/forge
 [ -s /etc/brawlegle/forge.env ] || { echo "missing /etc/brawlegle/forge.env"; exit 1; }
 install -d "$APP"
-# Every top-level module and data file the server imports (a new module missed here crash-loops the service).
-cp "$SRC"/*.js "$SRC"/*.json "$APP/"
+# Every top-level module and data file the server imports (a new module missed here crash-loops the service), and the
+# admin scripts (delete-fighter.mjs).
+cp "$SRC"/*.js "$SRC"/*.mjs "$SRC"/*.json "$APP/"
 rm -rf "$APP/public" && cp -r "$SRC/public" "$APP/public"
 # The fighter optimizer's packages (gltf-transform, meshoptimizer, sharp with its prebuilt arm64 libvips).
 (cd "$APP" && npm ci --omit=dev --no-audit --no-fund --silent)

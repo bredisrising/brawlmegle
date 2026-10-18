@@ -2,10 +2,12 @@
  * Brawlegle forge server: scan frames in, fighter out (brief, model sheet, card art; 3D model later).
  * Holds the API keys so the browser never sees them. Matches src/forge/forge.ts:
  *
- *   POST /api/forge              { name, username?, frames: [front, left, right] }  ->  { id }
+ *   POST /api/forge              { name, username?, frames: [front, left, right] }  ->  { id, ownerKey, deleteCode }
  *   GET  /api/forge/:id          ->  ForgedFighter (+ sheetUrl, timings, error)
  *   GET  /api/fighters           ->  ready fighters, newest first
  *   GET  /api/profiles/:username ->  { username, fighter: latest ready fighter | null, forging: id | null }
+ *   POST /api/fighters/:id/delete { key }  ->  { ok, id, name }: deletes the fighter for good (403 wrong key, 404 gone)
+ *   POST /api/fighters/delete    { code }  ->  { ok, id, name }: the same, with the delete code shown after the forge
  *   POST /api/highlights         video/webm body + x-highlight-meta  ->  the highlight (see "Highlights" below)
  *   GET  /api/highlights         ->  { highlights: newest first }
  *
@@ -21,6 +23,7 @@ import { pipeline } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { runForge, models, commentate, speak, voiceKey } from "./pipeline.js";
 import { available as rigCheckAvailable } from "./rigcheck.js";
+import { adminKey, matchesHash, newOwner, normalizeCode, publicFighter, purgeFighter, sha256 } from "./owner.js";
 
 if (!process.env.OPENAI_API_KEY) {
   console.error("OPENAI_API_KEY is missing. Put it in the repo root .env");
@@ -84,6 +87,14 @@ let records = {};
 try {
   records = JSON.parse(fs.readFileSync(RECORDS_FILE, "utf8"));
 } catch {}
+/** Written synchronously (it's small and rare), so a write can't land after a deletion's and bring a record back. */
+function saveRecords() {
+  try {
+    fs.writeFileSync(RECORDS_FILE, JSON.stringify(records));
+  } catch (err) {
+    console.warn("records save failed:", err.message);
+  }
+}
 const seenMatches = new Set();
 const matchesAllowed = (() => {
   const times = [];
@@ -166,9 +177,28 @@ function withLineage(all) {
   return out;
 }
 
+/** One try per call, for both ways of deleting (a delete code is 80 bits, but there's no reason to allow guessing). */
+const deleteAllowed = limiter(Number(process.env.FORGE_MAX_DELETES ?? 30), 10 * 60_000);
+const ADMIN_KEY_HASH = sha256(adminKey(DATA));
+
+/**
+ * Deletes a fighter for good (owner.js purgeFighter: folder, record, highlights) and forgets it here, so the
+ * username's previous fighter is the current one again. A forge still running is refused (it would keep writing
+ * files); returns why as a string, else what went.
+ */
+function deleteFighter(fighter) {
+  if (fighter.status === "forging" || fighter.status === "scanning") return "it's still forging: try again when it's done";
+  fighters.delete(fighter.id);
+  for (const kind of ["card", "sheet"]) webpCopies.delete(`${fighter.id}/${kind}.webp`);
+  const gone = purgeFighter(DATA, fighter.id, { records, highlights });
+  console.log(`deleted fighter ${fighter.id.slice(0, 8)}: ${gone.files} files, record ${gone.record ? "removed" : "none"}, ${gone.highlights} highlights`);
+  return gone;
+}
+
 /** Fighter JSON with absolute URLs, so the game can use them directly. */
 function view(fighter, base) {
-  const out = { ...fighter };
+  // Never the owner key's or delete code's hash.
+  const out = publicFighter(fighter);
   for (const key of ["sheetUrl", "cardUrl"]) if (out[key]) out[key] = preferWebp(out[key]);
   for (const key of ["sheetUrl", "cardUrl", "glbUrl", "modelUrl", "sheetPartialUrl", "previewVoxelsUrl", "previewMeshUrl"]) {
     if (out[key]?.startsWith("/")) out[key] = base + out[key];
@@ -291,6 +321,23 @@ async function handle(req, res) {
     return res.end(devPage);
   }
   if (req.method === "GET" && url.pathname === "/health") return json(res, 200, { ok: true, models });
+
+  // The admin script (delete-fighter.mjs) on this machine: delete by id, no owner key needed. Not under /api/, so
+  // nginx never forwards it; the key is in FORGE_DATA/.admin-key, readable only by whoever can delete the files anyway.
+  if (req.method === "POST" && url.pathname === "/admin/delete") {
+    if (!matchesHash(String(req.headers["x-admin-key"] ?? ""), ADMIN_KEY_HASH)) return json(res, 403, { error: "bad admin key" });
+    let body;
+    try {
+      body = await readJson(req);
+    } catch (err) {
+      return json(res, err.status ?? 400, { error: err.message });
+    }
+    const fighter = fighters.get(body?.id);
+    if (!fighter) return json(res, 404, { error: "no such fighter" });
+    const deleted = deleteFighter(fighter);
+    if (typeof deleted === "string") return json(res, 409, { error: deleted });
+    return json(res, 200, { ok: true, ...deleted });
+  }
   if (parts[0] === "api" && parts[1] === "highlights") return handleHighlights(req, res, parts, base);
 
   if (req.method === "GET" && parts[0] === "api" && parts[1] === "profiles" && parts.length === 3) {
@@ -320,6 +367,33 @@ async function handle(req, res) {
 
   if (req.method === "GET" && url.pathname === "/api/fighters") return json(res, 200, current().map((f) => view(f, base)));
 
+  // "Delete my fighter": with the owner key the scanning browser kept, or the delete code from the screenshot.
+  if (req.method === "POST" && parts[0] === "api" && parts[1] === "fighters" && parts.at(-1) === "delete" && parts.length <= 4) {
+    if (ACCESS_KEY && req.headers["x-forge-key"] !== ACCESS_KEY) return json(res, 403, { error: "bad forge key" });
+    if (!deleteAllowed()) return json(res, 429, { error: "too many tries, wait a few minutes" });
+    let body;
+    try {
+      body = await readJson(req);
+    } catch (err) {
+      return json(res, err.status ?? 400, { error: err.message });
+    }
+    let fighter;
+    if (parts.length === 4) {
+      fighter = fighters.get(parts[2]);
+      if (!fighter) return json(res, 404, { error: "that fighter is already gone" });
+      if (!matchesHash(body?.key, fighter.ownerKeyHash)) return json(res, 403, { error: "wrong owner key" });
+    } else {
+      const code = normalizeCode(body?.code);
+      if (!code) return json(res, 400, { error: "a delete code is 16 letters and digits, like ABCD-EFGH-JKMN-PQRS" });
+      // Every fighter is checked (no early exit), each compare in constant time.
+      for (const f of fighters.values()) if (matchesHash(code, f.deleteCodeHash) && !fighter) fighter = f;
+      if (!fighter) return json(res, 403, { error: "that code doesn't match any fighter (check it, or it's already deleted)" });
+    }
+    const deleted = deleteFighter(fighter);
+    if (typeof deleted === "string") return json(res, 409, { error: deleted });
+    return json(res, 200, { ok: true, id: fighter.id, name: fighter.name });
+  }
+
   // Leaderboard: every fighter's record. A rescan's record carries the earlier fighters' under that username too.
   if (req.method === "GET" && url.pathname === "/api/records") return json(res, 200, { records: withLineage(records) });
 
@@ -347,7 +421,7 @@ async function handle(req, res) {
       else if (winner === side) records[id] = { ...r, wins: r.wins + 1, streak: r.streak + 1, bestStreak: Math.max(r.bestStreak, r.streak + 1), recentResults };
       else records[id] = { ...r, losses: r.losses + 1, streak: 0, recentResults };
     }
-    fs.writeFile(RECORDS_FILE, JSON.stringify(records), (err) => err && console.warn("records save failed:", err.message));
+    saveRecords();
     return json(res, 200, { ok: true });
   }
 
@@ -420,6 +494,8 @@ async function handle(req, res) {
     if (frames.length < 1 || frames.length > 3 || frames.includes(null)) {
       return json(res, 400, { error: "frames must be 1 to 3 JPEG or PNG images, base64 or data URLs" });
     }
+    // The owner key and delete code go back once, in this response; only their hashes are kept (owner.js).
+    const owner = newOwner();
     const fighter = {
       id: crypto.randomUUID(),
       name: typeof body.name === "string" ? body.name.slice(0, 40) : "",
@@ -429,6 +505,8 @@ async function handle(req, res) {
       status: "scanning",
       createdAt: Date.now(),
       timings: {},
+      ownerKeyHash: owner.ownerKeyHash,
+      deleteCodeHash: owner.deleteCodeHash,
     };
     fighters.set(fighter.id, fighter);
     const store = storeFor(fighter);
@@ -438,7 +516,7 @@ async function handle(req, res) {
     runForge(fighter, frames, store)
       .then(() => console.log(`forge ${fighter.id.slice(0, 8)} ${fighter.status}`, fighter.timings, fighter.error ?? ""))
       .catch((err) => console.error(`forge ${fighter.id.slice(0, 8)} crashed:`, err));
-    return json(res, 202, { id: fighter.id });
+    return json(res, 202, { id: fighter.id, ownerKey: owner.key, deleteCode: owner.code });
   }
 
   if (req.method === "GET" && parts[0] === "api" && parts[1] === "forge" && parts.length >= 3) {
@@ -543,8 +621,13 @@ function readBytes(req, max) {
   });
 }
 
+/** Synchronous, like saveRecords: a deletion's rewrite of the index must be the last word. */
 function saveHighlights() {
-  fs.writeFile(HIGHLIGHTS_INDEX, JSON.stringify(highlights), (err) => err && console.warn("highlights save failed:", err.message));
+  try {
+    fs.writeFileSync(HIGHLIGHTS_INDEX, JSON.stringify(highlights));
+  } catch (err) {
+    console.warn("highlights save failed:", err.message);
+  }
 }
 
 const highlightView = ({ file, ...h }, base) => ({ ...h, url: `${base}/api/highlights/${file}` });
