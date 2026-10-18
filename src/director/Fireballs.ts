@@ -5,25 +5,39 @@ import type { PlayerId, Projectile } from '../types';
 /** Height of a fireball above the floor (world units: about chest height on the scaled fighters). */
 const HEIGHT = 0.46;
 
-type Ball = { group: THREE.Group; core: THREE.Mesh; glow: THREE.Sprite; trail: THREE.Points; trailPos: Float32Array; age: number };
+type Ball = { owner: PlayerId; group: THREE.Group; core: THREE.Mesh; glow: THREE.Sprite; trail: THREE.Points; trailPos: Float32Array; age: number };
 
 /**
  * Fireballs in flight, drawn from the engine's projectile list (the host's engine, or the host's frames on the
  * client). A hot core, a pulsing glow and a short trail, in the thrower's color; bloom does the rest.
+ * Balls are pooled per thrower and their materials kept: disposing them deleted the shaders, so a fireball after a
+ * quiet spell compiled them again on the frame it was thrown.
  */
 export class Fireballs {
   private readonly balls = new Map<number, Ball>();
+  private readonly free: Record<PlayerId, Ball[]> = { p1: [], p2: [] };
+  private readonly all: Ball[] = [];
   private readonly coreGeometry = new THREE.IcosahedronGeometry(0.05, 2);
   private readonly glowTexture = glowTexture();
+  /** Warm-up: one ball per thrower drawn at zero size for a couple of frames, so its shaders exist before a throw. */
+  private warm: Ball[] = [];
+  private warmFrames = 2;
 
-  constructor(private readonly scene: THREE.Scene) {}
+  constructor(private readonly scene: THREE.Scene) {
+    for (const owner of ['p1', 'p2'] as PlayerId[]) {
+      const ball = this.make(owner);
+      ball.group.scale.setScalar(0);
+      ball.group.position.set(0, HEIGHT, 0);
+      this.scene.add(ball.group);
+      this.warm.push(ball);
+    }
+  }
 
   /** Match the shown fireballs to the engine's list. */
   sync(list: readonly Projectile[]) {
-    const live = new Set(list.map((p) => p.id));
     for (const [id, ball] of this.balls) {
-      if (live.has(id)) continue;
-      this.remove(ball);
+      if (list.some((p) => p.id === id)) continue;
+      this.release(ball);
       this.balls.delete(id);
     }
     for (const p of list) {
@@ -34,6 +48,13 @@ export class Fireballs {
 
   /** Per render frame: pulse, spin and trail (keeps going during hit-stop). */
   update(dt: number) {
+    if (this.warmFrames > 0 && --this.warmFrames === 0) {
+      for (const ball of this.warm) {
+        ball.group.scale.setScalar(1);
+        this.release(ball);
+      }
+      this.warm = [];
+    }
     for (const ball of this.balls.values()) {
       ball.age += dt;
       const pulse = 1 + 0.18 * Math.sin(ball.age * 40);
@@ -54,13 +75,33 @@ export class Fireballs {
   }
 
   dispose() {
-    for (const ball of this.balls.values()) this.remove(ball);
+    for (const ball of this.all) {
+      ball.group.removeFromParent();
+      (ball.core.material as THREE.Material).dispose();
+      ball.glow.material.dispose();
+      ball.trail.geometry.dispose();
+      (ball.trail.material as THREE.Material).dispose();
+    }
     this.balls.clear();
+    this.all.length = 0;
     this.coreGeometry.dispose();
     this.glowTexture.dispose();
   }
 
   private add(id: number, owner: PlayerId) {
+    const ball = this.free[owner].pop() ?? this.make(owner);
+    ball.age = 0;
+    this.scene.add(ball.group);
+    this.balls.set(id, ball);
+    return ball;
+  }
+
+  private release(ball: Ball) {
+    ball.group.removeFromParent();
+    this.free[ball.owner].push(ball);
+  }
+
+  private make(owner: PlayerId): Ball {
     const color = new THREE.Color(PLAYER_COLORS[owner]);
     const group = new THREE.Group();
     const core = new THREE.Mesh(this.coreGeometry, new THREE.MeshBasicMaterial({ color: color.clone().lerp(new THREE.Color('#ffffff'), 0.55).multiplyScalar(5) }));
@@ -76,18 +117,9 @@ export class Fireballs {
     trail.scale.set(owner === 'p1' ? -1 : 1, 1, 1);
     trail.frustumCulled = false;
     group.add(core, glow, trail);
-    this.scene.add(group);
-    const ball: Ball = { group, core, glow, trail, trailPos, age: 0 };
-    this.balls.set(id, ball);
+    const ball: Ball = { owner, group, core, glow, trail, trailPos, age: 0 };
+    this.all.push(ball);
     return ball;
-  }
-
-  private remove(ball: Ball) {
-    ball.group.removeFromParent();
-    (ball.core.material as THREE.Material).dispose();
-    ball.glow.material.dispose();
-    ball.trail.geometry.dispose();
-    (ball.trail.material as THREE.Material).dispose();
   }
 }
 
