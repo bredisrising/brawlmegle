@@ -51,9 +51,11 @@ InputSource interface, InputHub (the wrapper), CameraSource, RemoteSource, MockS
 
 ### net/
 Signaling (AWS WebSocket), Peer (WebRTC), protocol.ts (message types).
-Client side is done: Peer.join answers the host's offer, chunks big control messages,
-and game/ClientSession.ts sends profile/scan/pick, streams poses, and rejoins on drop.
-- TODO: Peer.host() (offer + create both channels), the tiny AWS signaling server.
+Peer.join answers the host's offer, chunks big control messages, and game/ClientSession.ts sends
+profile/scan/pick, streams poses, and rejoins on drop. Peer.host keeps the room open, makes a fresh
+connection (both channels + offer) per peer-joined, watches the RTCPeerConnection for drops, and
+reopens the room if signaling drops; game/HostSession.ts feeds P2's poses into a RemoteSource and sets
+P2 up from what the client sends. The matchmaker lives in matchmaker/.
 
 ### intent/
 IntentReader, one per player, runs on the host.
@@ -74,8 +76,8 @@ config.forgeApi, mocked when empty), roster.ts (memory card: forge server's figh
 
 ### game/
 Game.ts wires everything on the host and runs the phases. store.ts is UI state.
-- TODO: remote players (assign RemoteSource when a client connects; send welcome, roster,
-  phase, and `fighter` updates for P2, ending with status 'ready').
+HostSession.ts (host) and ClientSession.ts (client) are the two ends of the P2P link: the host sends
+welcome, roster, phase and P2's `fighter` progress; the client sends profile/scan/pick and poses.
 
 ### ui/
 screens/: TitleScreen (Host / Connect), AvatarScreen (scan new / choose existing / name),

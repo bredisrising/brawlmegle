@@ -58,7 +58,7 @@ export class HostSession {
     this.cleanup.push(
       this.peer.onMessage((msg) => this.onMessage(msg as ClientMessage)),
       this.peer.onConnected(this.onConnected),
-      this.peer.onClose(() => useGameStore.setState({ connection: 'reconnecting' })),
+      this.peer.onClose(this.onDrop),
       this.peer.onRoom((roomCode) => useGameStore.setState({ roomCode })),
       useGameStore.subscribe((s, prev) => {
         if (s.phase !== prev.phase || s.countdown !== prev.countdown) this.sendPhase();
@@ -92,6 +92,13 @@ export class HostSession {
       this.roster = fighters;
       if (this.peer.connected) this.peer.send({ type: 'roster', fighters });
     });
+  };
+
+  /** The client dropped. The room stays open for its rejoin; P2 keeps their fighter but goes untracked (holds guard). */
+  private onDrop = () => {
+    useGameStore.setState({ connection: 'reconnecting' });
+    this.remote.latestFrame = null;
+    if (this.input.source(REMOTE) === this.remote) this.input.assign(REMOTE, this.remote);
   };
 
   private onMessage(msg: ClientMessage) {

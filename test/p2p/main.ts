@@ -314,6 +314,7 @@ async function runGameHost() {
   await test('game host: drop shows reconnecting; a rejoin keeps P2 and takes a fresh pose clock', async () => {
     client.peer.close();
     await poll(() => useGameStore.getState().connection === 'reconnecting' || undefined, 'connection reconnecting');
+    assert(g.input.latest('p2') === null, "p2 still has the dropped client's last pose (should go untracked)");
     client = clientPeer();
     await client.peer.join(useGameStore.getState().roomCode!);
     await poll(() => useGameStore.getState().connection === 'open' || undefined, 'connection open again');

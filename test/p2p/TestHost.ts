@@ -2,7 +2,7 @@ import { Signaling } from '../../src/net/Signaling';
 import type { ChunkMessage, SignalMessage } from '../../src/net/protocol';
 
 /**
- * Bare-bones host for testing the client Peer, until Peer.host() exists.
+ * Bare-bones host for testing the client Peer on its own, independent of Peer.host().
  * Opens a room, makes the offer when a client joins, and records what arrives on each channel.
  */
 export class TestHost {

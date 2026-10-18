@@ -26,8 +26,18 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
   const busy = player.status === 'scanning' || player.status === 'forging';
   const remote = id !== localPlayerId(role);
 
+  const rejoining = remote && connection === 'reconnecting';
+
   if (player.status === 'ready') {
-    if (phase !== 'lobby') return null;
+    if (phase !== 'lobby') {
+      // Mid-fight the other laptop dropped: P2 holds guard until it rejoins.
+      if (!rejoining) return null;
+      return (
+        <span className={`absolute bottom-14 bg-ink px-3 py-1 font-cond text-sm font-bold uppercase tracking-[0.25em] text-paper/80 ${right ? 'right-6 sm:right-12' : 'left-6 sm:left-12'}`}>
+          Reconnecting…
+        </span>
+      );
+    }
     return (
       <div className={`absolute bottom-14 flex max-w-[45%] flex-col gap-2 ${right ? 'right-6 items-end sm:right-12' : 'left-6 items-start sm:left-12'}`}>
         <div className={`flex items-stretch ${right ? 'animate-in-r flex-row-reverse' : 'animate-in-l'}`}>
@@ -39,7 +49,7 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
           </span>
         </div>
         <span className="bg-ink px-3 py-1 font-cond text-sm font-bold uppercase tracking-[0.25em] text-paper/60">
-          Waiting for opponent
+          {rejoining ? 'Reconnecting…' : 'Waiting for opponent'}
         </span>
       </div>
     );
@@ -104,7 +114,7 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
               <p className="font-cond text-lg font-semibold uppercase tracking-[0.15em] text-paper/70">
                 {connection === 'open' ? (
                   'Picking a fighter on the other laptop'
-                ) : connection === 'reconnecting' ? (
+                ) : rejoining ? (
                   'Lost the other laptop. Rejoin with'
                 ) : (
                   <>
