@@ -44,7 +44,7 @@
   const q = new URLSearchParams(location.search);
   const card = q.get("card") || "title";
   const A = q.get("a") || "", B = q.get("b") || "", C = q.get("c") || "";
-  const color = { p1: "var(--p1)", p2: "var(--p2)", hp: "var(--hp)", dmg: "var(--dmg)" }[q.get("color") || "p1"];
+  const color = { p1: "var(--p1)", p2: "var(--p2)", hp: "var(--hp)", dmg: "var(--dmg)", paper: "var(--paper)" }[q.get("color") || "p1"];
   const dur = Number(q.get("dur") || 2);
   const tall = innerHeight > innerWidth;
   if (tall) document.body.classList.add("tall");
@@ -126,6 +126,22 @@
         </div>
       </div>
       <div class="flash" style="${anim("flash", 0.08, 0.3, "linear")}"></div>`;
+  } else if (card === "year") {
+    // Retro open: a big year and what we did with cameras back then (top left, over period footage).
+    root.innerHTML = `
+      <div style="position:absolute; left:${tall ? 6 : 4}vw; top:${tall ? 6 : 6}vh; ${out()}">
+        <div class="anim display" style="font-size:${tall ? 22 : 11}vw; color:${color}; -webkit-text-stroke:0.35vw var(--ink); paint-order:stroke fill; ${anim("slamL", 0, 0.28)}">${A}</div>
+        <div class="anim chip cond" style="margin-top:1vh; background:var(--paper); color:var(--ink); font-size:${tall ? 4.2 : 2.2}vw; ${anim("pop", 0.12, 0.25)}">${B}</div>
+      </div>`;
+  } else if (card === "rpo") {
+    root.innerHTML = `
+      <div class="hatch" style="position:absolute; inset:0; background-color:var(--ink);"></div>
+      <div class="center" style="${out(dur - 0.12)}">
+        <div class="anim cond" style="font-size:${tall ? 4.4 : 2.4}vw; color:var(--paper); letter-spacing:0.35em; ${anim("rise", 0.1, 0.4)}">${A}</div>
+        <div class="anim display" style="margin-top:2vh; font-size:${tall ? 13 : 8.5}vw; color:var(--paper); text-align:center; ${anim("punch", 0.55, 0.3)}">${B}</div>
+        <div class="anim display" style="margin-top:1vh; font-size:${tall ? 16 : 11}vw; color:var(--hp); ${anim("punch", 1.15, 0.28)}">${C}</div>
+      </div>
+      <div class="flash" style="opacity:0; ${anim("flash2", 1.15, 0.25, "linear")}"></div>`;
   } else if (card === "tag") {
     root.innerHTML = `
       <div class="anim chip cond" style="position:absolute; ${B || "left:3vw; top:4vh;"} background:${color}; color:var(--ink); font-size:${tall ? 4.4 : 2.3}vw; letter-spacing:0.2em; ${anim("pop", 0, 0.25)}">${A}</div>`;

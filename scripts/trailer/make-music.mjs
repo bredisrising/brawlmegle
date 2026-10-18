@@ -1,6 +1,7 @@
 // Original trailer music with the ElevenLabs Music API (POST /v1/music), sections laid out on the trailer's cut at
 // 120 bpm (a bar is 2 s, so cuts land on whole seconds). Needs ELEVENLABS_API_KEY in the repo root .env (never printed).
-//   node scripts/trailer/make-music.mjs <outDir> [takes=2]
+//   node scripts/trailer/make-music.mjs <outDir> [takes=2] [plan.json] [name=trailer]
+// plan.json: another composition plan (same shape as the one below).
 import fs from "node:fs";
 import path from "node:path";
 
@@ -21,7 +22,7 @@ const out = path.resolve(process.argv[2] ?? "trailer-music");
 const takes = Number(process.argv[3] ?? 2);
 fs.mkdirSync(out, { recursive: true });
 
-const plan = {
+let plan = {
   positive_global_styles: [
     "fighting game reveal trailer music", "aggressive hybrid trap and rock", "120 bpm", "hard hitting drums",
     "distorted 808 bass", "brass stabs", "arcade synth leads", "huge impacts", "instrumental",
@@ -40,6 +41,9 @@ const plan = {
   ],
 };
 
+if (process.argv[4]) plan = JSON.parse(fs.readFileSync(process.argv[4], "utf8"));
+const NAME = process.argv[5] ?? "trailer";
+
 async function compose(body, file) {
   const res = await fetch("https://api.elevenlabs.io/v1/music?output_format=mp3_44100_192", {
     method: "POST",
@@ -57,6 +61,6 @@ async function compose(body, file) {
 // Two at a time (the API's concurrency limit).
 for (let i = 1; i <= takes; i += 2) {
   await Promise.all(
-    [i, i + 1].filter((n) => n <= takes).map((n) => compose({ composition_plan: plan, model_id: "music_v1" }, path.join(out, `trailer-${n}.mp3`))),
+    [i, i + 1].filter((n) => n <= takes).map((n) => compose({ composition_plan: plan, model_id: "music_v1" }, path.join(out, `${NAME}-${n}.mp3`))),
   );
 }

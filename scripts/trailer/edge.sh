@@ -15,13 +15,13 @@ if [ "$CMD" = stop ]; then
 fi
 FAKE=(--use-fake-ui-for-media-stream --use-fake-device-for-media-stream)
 if [ -n "$CAM" ]; then
-  cp "$CAM" "$LINTMP/cam.y4m"
-  FAKE+=(--use-file-for-fake-video-capture="$WINTMP\\cam.y4m")
+  cp "$CAM" "$LINTMP/cam-$PORT.y4m"
+  FAKE+=(--use-file-for-fake-video-capture="$WINTMP\\cam-$PORT.y4m")
 fi
 HEAD=(--headless=new)
 [ "$MODE" = headed ] && HEAD=(--window-position=0,0 --window-size=1920,1080)
 # --disable-web-security: a local build on a port the shared forge doesn't list can still load its fighters.
-"$EDGE" --user-data-dir="$WINTMP\\profile" --remote-debugging-port="$PORT" "${HEAD[@]}" \
+"$EDGE" --user-data-dir="$WINTMP\\profile-$PORT" --remote-debugging-port="$PORT" "${HEAD[@]}" \
   --no-first-run --no-default-browser-check --disable-features=msEdgeSignin,EdgeCollections \
   --autoplay-policy=no-user-gesture-required --disable-renderer-backgrounding --disable-background-timer-throttling \
   --disable-backgrounding-occluded-windows --disable-web-security "${FAKE[@]}" about:blank >/dev/null 2>&1 &

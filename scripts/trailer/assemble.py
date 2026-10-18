@@ -32,6 +32,6 @@ if os.path.exists(mpath):
             marks[k] = round(game(float(v)) - t0, 3)
 json.dump({"t0": t0, "K": K, "W0": W0, "marks": marks, "duration": frames[-1][1] - t0}, open(os.path.join(src, "marks.json"), "w"), indent=1)
 print("marks", marks)
-subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", lst, "-vf", f"fps={fps},format=yuv420p",
+subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", lst, "-vf", f"fps={fps},scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
                 "-c:v", "libx264", "-preset", "medium", "-crf", crf, out], check=True)
 print("wrote", out)

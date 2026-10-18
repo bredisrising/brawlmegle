@@ -201,18 +201,28 @@ if (SCENE === "forge") {
  * forge's own outputs (brief, sheet, voxels, clay, model) on the timeline that forge took.
  */
 const REPLAY = arg("replay", "");
-const REPLAY_STEPS = [
-  [0, { status: "forging", step: "brief" }, []],
-  [2.1, { step: "sheet" }, ["brief"]],
-  [9, {}, ["sheetPartialUrl"]],
-  [13.8, { step: "model" }, ["sheetUrl", "cardUrl"]],
-  [20.5, {}, ["previewVoxelsUrl"]],
-  [24.5, {}, ["previewMeshUrl"]],
-  [31.5, { step: "rig" }, []],
-  [34.5, { status: "ready" }, ["glbUrl", "modelUrl", "rigged"]],
-];
+/** The replayed forge's steps on its own timeline (its recorded step timings, seconds after the scan was sent). */
+function replaySteps(final) {
+  const t = final.timings ?? {};
+  const brief = (t.brief ?? 2100) / 1000;
+  const sheet = brief + (t.sheet ?? 11700) / 1000;
+  const model = sheet + (t.model ?? 19500) / 1000;
+  const span = model - sheet;
+  return [
+    [0, { status: "forging", step: "brief" }, []],
+    [brief, { step: "sheet" }, ["brief"]],
+    [brief + (sheet - brief) * 0.55, {}, ["sheetPartialUrl"]],
+    [sheet, { step: "model" }, ["sheetUrl", "cardUrl"]],
+    [sheet + span * 0.35, {}, ["previewVoxelsUrl"]],
+    [sheet + span * 0.55, {}, ["previewMeshUrl"]],
+    [sheet + span * 0.9, { step: "rig" }, []],
+    [model + 1, { status: "ready" }, ["glbUrl", "modelUrl", "rigged"]],
+  ];
+}
 if (SCENE === "forge" && REPLAY) {
   const final = await (await fetch(`https://54-149-60-196.sslip.io/api/forge/${REPLAY}`)).json();
+  const REPLAY_STEPS = replaySteps(final);
+  console.log("replay steps", JSON.stringify(REPLAY_STEPS.map(([t, set, keys]) => [+t.toFixed(1), set, keys])));
   let t0 = 0;
   await page.route("**/api/profiles/**", (route) => route.fulfill({ json: { username: NAME, fighter: null, forging: null } }));
   await page.route("**/api/forge", async (route) => {
