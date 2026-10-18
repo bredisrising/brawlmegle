@@ -49,7 +49,7 @@ export type MirrorFrame = {
 
 export type MirrorEvent =
   | { kind: 'fight'; event: FightEvent; by: FighterState; ko: boolean } // `by`: the attacker's state at the time
-  | { kind: 'anticipate'; player: PlayerId; hand: Hand }
+  | { kind: 'anticipate'; player: PlayerId; hand: Hand; cancel?: boolean } // cancel: it wasn't a strike after all
   | { kind: 'move'; player: PlayerId; text: string }; // what the camera read, for that player's picture-in-picture
 
 /**

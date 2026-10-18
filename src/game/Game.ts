@@ -348,6 +348,12 @@ export class Game {
       const out = frame ? this.intent[id].update(frame) : null;
       if (out) {
         commands.push(...this.resolver.resolve(id, out.intents, this.fight));
+        for (const i of out.intents) {
+          if (i.kind !== 'cancel' || (i.limb !== 'armL' && i.limb !== 'armR')) continue;
+          const hand = i.limb === 'armL' ? 'L' : 'R';
+          this.views[id].cancelTell(hand);
+          this.outbox.push({ kind: 'anticipate', player: id, hand, cancel: true });
+        }
         const text = moveText(out.intents);
         if (text && id === localPlayerId(useGameStore.getState().role)) useGameStore.setState({ lastMove: { text, at: performance.now() } });
         else if (text) this.outbox.push({ kind: 'move', player: id, text });
@@ -533,7 +539,10 @@ export class Game {
   private mirrorEvents(events: MirrorEvent[]) {
     for (const e of events) {
       if (e.kind === 'fight') this.showHit(e.event, e.by, e.ko);
-      else if (e.kind === 'anticipate') this.views[e.player].anticipate(e.hand);
+      else if (e.kind === 'anticipate') {
+        if (e.cancel) this.views[e.player].cancelTell(e.hand);
+        else this.views[e.player].anticipate(e.hand);
+      }
       else if (e.player === localPlayerId('client')) useGameStore.setState({ lastMove: { text: e.text, at: performance.now() } });
     }
   }

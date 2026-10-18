@@ -195,6 +195,11 @@ export class FighterView {
     this.tellHand = hand;
   }
 
+  /** The reader decided that wind-up wasn't a strike after all: drop the tell now instead of holding it. */
+  cancelTell(hand: Hand) {
+    if (this.tellHand === hand) this.tellAt = -1;
+  }
+
   /** Called every sim tick with the engine's state and the latest live frame (if any). */
   update({ state, live, guard, distance, opponentKo, phase, dt }: ViewInput) {
     this.time += dt;
