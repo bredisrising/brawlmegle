@@ -308,7 +308,7 @@ export class IntentReader {
       const fromLow = s.anchorTip.y < shoulderY - 0.8;
       // Holding a block, small adjustments aren't punches: it takes a bigger motion to strike out of the shell.
       const needed = def.kind === 'arm' && this.guardUp ? cfg.strikeDist * 1.0 : cfg.strikeDist;
-      const farEnough = def.kind === 'arm' && !fromLow && s.peakDisp >= needed && t - s.since >= 30;
+      const farEnough = def.kind === 'arm' && !fromLow && s.peakDisp >= needed && t - s.since >= (cfg.confirmMs ?? 60);
       // Peaked: the reach hasn't grown for 60 ms. (Not "the speed dropped": the fast signal wobbles mid-punch,
       // and judging then cuts the punch short.)
       const slowing = t - s.grewAt >= 60;
