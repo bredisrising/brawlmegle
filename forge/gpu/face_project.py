@@ -380,8 +380,8 @@ def tps_fit(src, dst, reg):
 
 def tps_apply(model, p):
     src, coef = model
-    d = np.linalg.norm(p[:, None] - src[None], axis=2)
-    U = np.where(d > 0, d * d * np.log(np.maximum(d, 1e-9)), 0)
+    d2 = (p[:, None, 0] - src[None, :, 0]) ** 2 + (p[:, None, 1] - src[None, :, 1]) ** 2
+    U = 0.5 * d2 * np.log(np.maximum(d2, 1e-18))  # r^2 log r
     n = len(src)
     return U @ coef[:n] + coef[n] + p[:, 0:1] * coef[n + 1] + p[:, 1:2] * coef[n + 2]
 
@@ -455,7 +455,8 @@ def run(glb: bytes, sheet: Image.Image, face=None, body=0.0, debug=None, max_tex
         img[mask] = sample(tex, uv[mask][:, 0] * TW, uv[mask][:, 1] * TH)[:, :3]
         return mask, zbuf, img
 
-    # 1. Which side faces the sheet (the colors decide), and the box match: model (s, t) -> sheet pixels.
+    # 1. Which side faces the sheet (the colors of the head and shoulders decide), and the box match:
+    # model (s, t) -> sheet pixels.
     top = np.zeros((hh, hw), bool)
     top[int(sbox[1] * HALF) : int((sbox[1] + 0.35 * height) * HALF)] = True
     low_sheet3 = cv2.GaussianBlur(rgb_h, (0, 0), 2)
@@ -468,31 +469,41 @@ def run(glb: bytes, sheet: Image.Image, face=None, body=0.0, debug=None, max_tex
         lo, hi = V.min(0), V.max(0)
         a = height / (hi[1] - lo[1])
         M = np.array([[a, 0, (sbox[0] + sbox[2]) / 2 - a * (lo[0] + hi[0]) / 2], [0, -a, sbox[3] + a * lo[1]]])
-        mask, zbuf, render = draw(V, M, facing, HALF, hw, hh)
-        both = mask & (fg_h > 0.5) & top
-        score = -float(np.abs(cv2.GaussianBlur(render, (0, 0), 2)[both] - low_sheet3[both]).mean()) if both.any() else -999
+        upper = facing[(V[facing, 1] > hi[1] - 0.4 * (hi[1] - lo[1])).any(1)]
+        m_up, _, r_up = draw(V, M, upper, HALF, hw, hh)
+        both = m_up & (fg_h > 0.5) & top
+        score = -float(np.abs(cv2.GaussianBlur(r_up, (0, 0), 2)[both] - low_sheet3[both]).mean()) if both.any() else -999
         info.setdefault("front_scores", {})[front] = round(score, 2)
         if best is None or score > best[0]:
-            best = (score, front, view, V, nd, facing, M, mask, zbuf, render)
-    _, front, view, V, nd, facing, M, mask, zbuf, render = best
+            best = (score, front, view, V, nd, facing, M)
+    _, front, view, V, nd, facing, M = best
     info["front"] = front
+    mask, zbuf, render = draw(V, M, facing, HALF, hw, hh)
     mark("front")
 
-    # 2. Silhouettes: an affine that lays the model's silhouette onto the sheet's (ECC on blurred masks).
+    # 2. Silhouettes: an affine that lays the model's silhouette onto the sheet's (ECC on blurred masks, quarter res).
     try:
-        tmpl = cv2.GaussianBlur(fg_h, (0, 0), 2)
-        inp = cv2.GaussianBlur(mask.astype(np.float32), (0, 0), 2)
+        q4 = (hw // 2, hh // 2)
+        tmpl = cv2.resize(cv2.GaussianBlur(fg_h, (0, 0), 2), q4, interpolation=cv2.INTER_AREA)
+        inp = cv2.resize(cv2.GaussianBlur(mask.astype(np.float32), (0, 0), 2), q4, interpolation=cv2.INTER_AREA)
         cc, warp = cv2.findTransformECC(tmpl, inp, np.eye(2, 3, dtype=np.float32), cv2.MOTION_AFFINE,
                                         (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 60, 1e-5), None, 5)
-        # warp: sheet -> drawing (half-res pixels); the model -> sheet map becomes inverse(warp) after M.
+        # warp: sheet -> drawing; the model -> sheet map becomes inverse(warp) after M.
         warp = warp.astype(np.float64)
-        warp[:, 2] /= HALF
+        warp_h = warp.copy()
+        warp_h[:, 2] *= 2  # in half-res pixels
+        warp[:, 2] *= 2 / HALF  # in sheet pixels
         Minv = np.linalg.inv(np.vstack([warp, [0, 0, 1]]))
         lin = Minv[:2, :2]
         if 0.9 < lin[0, 0] < 1.1 and 0.9 < lin[1, 1] < 1.1 and abs(lin[0, 1]) < 0.08 and abs(lin[1, 0]) < 0.08:
             M = (Minv @ np.vstack([M, [0, 0, 1]]))[:2]
             info["ecc"] = round(float(cc), 4)
-            mask, zbuf, render = draw(V, M, facing, HALF, hw, hh)
+            # The drawing moves with it (the warp is in the image plane, so depths stay valid).
+            inv = cv2.WARP_INVERSE_MAP
+            mask = cv2.warpAffine(mask.astype(np.uint8), warp_h, (hw, hh), flags=cv2.INTER_NEAREST | inv).astype(bool)
+            zbuf = cv2.warpAffine(np.where(np.isfinite(zbuf), zbuf, -1e3).astype(np.float32), warp_h, (hw, hh), flags=cv2.INTER_NEAREST | inv, borderValue=-1e3)
+            zbuf[~mask] = -np.inf
+            render = cv2.warpAffine(render, warp_h, (hw, hh), flags=cv2.INTER_LINEAR | inv)
         else:
             info["ecc"] = f"rejected {np.round(lin, 3).tolist()}"
     except cv2.error as err:
@@ -511,8 +522,8 @@ def run(glb: bytes, sheet: Image.Image, face=None, body=0.0, debug=None, max_tex
         face = FaceFinder(face) if os.path.exists(face) else None
     if face is not None:
         face_sheet = face(rgb, head_box)
-        k = 4
         x0, y0 = head_box[:2]
+        k = min(4.0, 640 / max(head_box[2] - x0, head_box[3] - y0))  # the landmarker looks at 512 px anyway
         Wc, Hc = int((head_box[2] - x0) * k), int((head_box[3] - y0) * k)
         Mk = np.array([[1, 0, -x0], [0, 1, -y0]]) @ np.vstack([M, [0, 0, 1]])
         xyk = apply_affine(Mk * k, V[:, :2])
@@ -562,6 +573,8 @@ def run(glb: bytes, sheet: Image.Image, face=None, body=0.0, debug=None, max_tex
 
     # 4. Texture budget: the face's texels vs the sheet's pixels for it. Upscale when the sheet has more.
     front_tris = np.flatnonzero((nd[F] > 0.15).any(1))
+    if body <= 0:  # only the head gets painted: only its triangles
+        front_tris = front_tris[(np.linalg.norm((xy[F[front_tris]] - fc) * [1, 0.85], axis=2) < 2.0 * face_r).any(1)]
     ft = front_tris[np.linalg.norm(xy[F[front_tris]].mean(1) - fc, axis=1) < face_r]
     up = 1
     if len(ft):
@@ -631,19 +644,24 @@ def run(glb: bytes, sheet: Image.Image, face=None, body=0.0, debug=None, max_tex
     info["texels"], info["painted"] = int(tm.sum()), int((w > 0.5).sum())
     mark("weights")
 
-    # Write back, and carry the change a few texels into the gutter (mipmaps and bilinear edges read it).
+    # Write back, and carry the change 3 texels into the gutter (mipmaps and bilinear edges read it): each gutter texel
+    # near a painted one takes the mean change of the covered texels around it.
     delta = np.zeros((TH, TW, 3), np.float32)
-    delta[tm] = out - old
-    covered = tm.astype(np.float32)
-    acc, wacc = delta, covered
-    for _ in range(3):
-        acc = cv2.blur(acc, (3, 3))
-        wacc = cv2.blur(wacc, (3, 3))
-    fill = (~tm) & (wacc > 1e-3)
+    flat = np.flatnonzero(tm)
+    sel = w > 1e-3
+    delta.reshape(-1, 3)[flat[sel]] = (out - old)[sel]
+    painted = np.zeros(TH * TW, np.uint8)
+    painted[flat[sel]] = 1
+    near = cv2.dilate(painted.reshape(TH, TW), np.ones((7, 7), np.uint8)).astype(bool)
+    fill = near & ~tm
+    acc = cv2.boxFilter(delta, -1, (7, 7), normalize=False)
+    wacc = cv2.boxFilter(tm.astype(np.float32), -1, (7, 7), normalize=False)
+    fill &= wacc > 0
     delta[fill] = acc[fill] / wacc[fill, None]
-    newtex = tex.astype(np.float32)
-    newtex[..., :3] += delta
-    newtex = np.clip(newtex + 0.5, 0, 255).astype(np.uint8)
+    changed = np.flatnonzero(painted.astype(bool) | fill.ravel())
+    newtex = tex.copy()
+    flat_tex = newtex.reshape(-1, newtex.shape[2])
+    flat_tex[changed, :3] = np.clip(flat_tex[changed, :3] + delta.reshape(-1, 3)[changed] + 0.5, 0, 255).astype(np.uint8)
     mark("paint")
 
     if debug:
@@ -653,8 +671,10 @@ def run(glb: bytes, sheet: Image.Image, face=None, body=0.0, debug=None, max_tex
 
     # Encode like the input (PNG, fast: the forge's optimizer re-encodes it as WebP) and splice it into the GLB.
     mime = img_meta.get("mimeType", "image/png")
-    keep_alpha = tex_mode in ("RGBA", "LA", "P")
-    pixels = newtex if keep_alpha else newtex[..., :3]
+    # An opaque material ignores alpha (the rigger makes every fighter opaque): drop it, it's only the gutter's zeros.
+    blended = any(m.get("alphaMode", "OPAQUE") != "OPAQUE" for m in gltf.get("materials", []))
+    keep_alpha = tex_mode in ("RGBA", "LA", "P") and blended
+    pixels = newtex if keep_alpha else np.ascontiguousarray(newtex[..., :3])
     if mime == "image/webp":
         buf = io.BytesIO()
         Image.fromarray(pixels).save(buf, "WEBP", quality=95, method=2)
@@ -663,7 +683,8 @@ def run(glb: bytes, sheet: Image.Image, face=None, body=0.0, debug=None, max_tex
         data = cv2.imencode(".jpg", cv2.cvtColor(newtex[..., :3], cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 95])[1].tobytes()
     else:
         bgr = cv2.cvtColor(pixels, cv2.COLOR_RGBA2BGRA if keep_alpha else cv2.COLOR_RGB2BGR)
-        data = cv2.imencode(".png", bgr, [cv2.IMWRITE_PNG_COMPRESSION, 1])[1].tobytes()
+        params = [cv2.IMWRITE_PNG_COMPRESSION, 1, cv2.IMWRITE_PNG_STRATEGY, cv2.IMWRITE_PNG_STRATEGY_HUFFMAN_ONLY]
+        data = cv2.imencode(".png", bgr, params)[1].tobytes()
         mime = "image/png"
     binary = replace_view(gltf, binary, view_ix, data)
     img_meta["mimeType"] = mime
