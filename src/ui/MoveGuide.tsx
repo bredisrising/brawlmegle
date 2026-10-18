@@ -11,6 +11,7 @@ const MOVES: [name: string, how: string][] = [
   ['Duck', 'Drop your head and shoulders quickly.'],
   ['Dodge', 'Lean your head quickly to one side.'],
   ['Kick / knee', 'Standing: lift a knee fast. Close in it is a knee.'],
+  ['Super', 'Meter full? Shove both hands out together: fireball.'],
 ];
 
 /**
