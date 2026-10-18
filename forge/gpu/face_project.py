@@ -23,7 +23,6 @@ alignment). Prints a FACE_RESULT JSON line: what it did, the alignment's numbers
 """
 import io
 import json
-import math
 import os
 import struct
 import sys
