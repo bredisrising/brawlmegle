@@ -132,7 +132,13 @@ export class ClientSession {
     }
   }
 
+  /** Going back to the title (or closing the tab): tell the host, so P2's slot opens for the next person right away. */
+  leave() {
+    this.send({ type: 'leave' });
+  }
+
   dispose() {
+    window.removeEventListener('pagehide', this.onPageHide);
     this.disposed = true;
     this.stopStream?.();
     this.source?.stop();
@@ -152,8 +158,12 @@ export class ClientSession {
     }
     peer.onClose(this.onDrop);
     peer.send({ type: 'hello', version: PROTOCOL_VERSION });
+    window.addEventListener('pagehide', this.onPageHide);
     return peer;
   }
+
+  /** Best effort on a closed tab or a reload: a dropped client is freed after a timeout anyway. */
+  private onPageHide = () => this.leave();
 
   private send(msg: ClientMessage) {
     this.peer?.send(msg);

@@ -245,6 +245,7 @@ export class Game {
       connected: () => this.sendMatch(),
       skip: () => this.skipForgeWait('p2'),
       watched: () => this.sendMatch(),
+      left: () => this.releaseRemote(),
       read: (intents, stance) => {
         this.remoteIntents.push(...intents);
         this.remoteStance = { stance: { ...stance, player: 'p2' }, at: performance.now() };
@@ -444,7 +445,7 @@ export class Game {
         // Don't make them turn around for 20 s just to hear the forge is full.
         const busy = scan ? null : await forgeBusy();
         if (busy) throw new Error(`the forge can't take a new scan right now (${busy}). Pick a saved fighter, go masked, or try again in a minute`);
-        const show = onChange((statusDetail) => updatePlayer(id, { statusDetail }));
+        const show = onChange((statusDetail) => gen === this.setupGen[id] && updatePlayer(id, { statusDetail }));
         show('Turn slowly');
         const { signal } = this.lifetime;
         const frames = await (scan ?? captureScan(source.video, source, (p) => show(scanStatus(p)), { signal }));
@@ -455,6 +456,7 @@ export class Game {
         // Show the design (card, else the sheet) as soon as it exists: the 3D model takes another minute or so.
         // ...and the live preview: the brief typing out, the sheet developing, the voxels and clay from the GPU box.
         const preview = (f: ForgedFighter) => {
+          if (gen !== this.setupGen[id]) return;
           const art = f.cardUrl ?? f.sheetUrl ?? null;
           const current = useGameStore.getState().players[id];
           if (art && art !== current.portraitUrl) updatePlayer(id, { portraitUrl: art });
@@ -484,8 +486,10 @@ export class Game {
       // A fresh forge shows itself off in the forging card (textured, then the rig flashes) while its model loads.
       const forge = useGameStore.getState().players[id].forge;
       const reveal = revealGlb && forge ? (updatePlayer(id, { forge: { ...forge, glbUrl: revealGlb } }), wait(REVEAL_MS)) : null;
+      if (gen !== this.setupGen[id]) return; // the player left (or chose again) while it forged
       await Promise.all([this.loadFighter(id, fighter), reveal]);
       this.lifetime.signal.throwIfAborted();
+      if (gen !== this.setupGen[id]) return;
 
       this.spawn(id);
       updatePlayer(id, { status: 'ready', statusDetail: '', portraitUrl: fighter.cardUrl ?? null, forge: null });
@@ -500,6 +504,7 @@ export class Game {
       const { players } = useGameStore.getState();
       if (PLAYER_IDS.every((p) => players[p].status === 'ready')) this.startCountdown();
     } catch (err) {
+      if (gen !== this.setupGen[id]) return; // superseded: the slot belongs to someone (or no one) else now
       this.input.unassign(id);
       source.stop();
       if (this.lifetime.signal.aborted) return; // disposed mid-setup: nothing left to show
@@ -694,6 +699,34 @@ export class Game {
    * Back to fighter select for this laptop's player (keeps the room, the other player and a CPU). The client
    * laptop can only go back to the title: the host owns the match.
    */
+  /** Back to the title screen (a fresh page). The client laptop tells the host first, so its slot opens up. */
+  toTitle() {
+    this.client?.leave();
+    // A moment for the message to go out before the page (and its connection) goes away.
+    window.setTimeout(() => window.location.reload(), this.client ? 150 : 0);
+  }
+
+  /** Host: P2's player left (went back to the title, or never came back). Free the slot so someone else can join. */
+  private releaseRemote() {
+    const id: PlayerId = 'p2';
+    if (this.cpu[id]) return; // the CPU took the slot meanwhile
+    ++this.setupGen[id]; // a setup still running for them (scan, forge) no longer applies
+    delete this.skipForge[id];
+    this.stopReplay();
+    this.fight.reset();
+    this.fightTicks = 0;
+    for (const p of PLAYER_IDS) {
+      this.views[p].reset();
+      updatePlayer(p, { hp: MAX_HP, meter: 0 });
+    }
+    this.input.unassign(id);
+    this.views[id].setVisible(false);
+    delete this.fighters[id];
+    updatePlayer(id, { name: PLAYER_NAMES[id], status: 'waiting', statusDetail: '', portraitUrl: null, forge: null });
+    useGameStore.setState({ phase: 'lobby', countdown: null, winner: null, ending: null, timeLeft: null, combo: null, callout: null, connection: null });
+    this.sendMatch();
+  }
+
   changeFighter() {
     if (this.client || this.spectator) return void window.location.reload();
     const id = localPlayerId(useGameStore.getState().role);

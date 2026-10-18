@@ -19,6 +19,7 @@ const STEP_LABEL: Record<Step, string> = { choose: 'Select', name: 'Username', r
 
 /** After Host / Connect: scan a new fighter (asks for a name first) or pick a saved one. */
 export function AvatarScreen() {
+  const game = useGame();
   const [step, setStep] = useState<Step>('choose');
   const role = useGameStore((s) => s.role);
   const roomCode = useGameStore((s) => s.roomCode);
@@ -47,7 +48,7 @@ export function AvatarScreen() {
           {step === 'choose' ? (
             <>
               {/* Back to the title: a fresh page is the cleanest way to drop the room and the camera. */}
-              <TextButton onClick={() => window.location.reload()} className="text-sm">
+              <TextButton onClick={() => game.toTitle()} className="text-sm">
                 ← Title
               </TextButton>
               <span className="font-cond text-sm font-bold uppercase tracking-[0.25em] text-paper/50">01 · {STEP_LABEL.choose}</span>

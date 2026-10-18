@@ -45,7 +45,7 @@ export function KOOverlay() {
         )}
         <div className="flex gap-6">
           {role === 'host' && <TextButton onClick={() => game.changeFighter()}>Change fighter</TextButton>}
-          <TextButton onClick={() => window.location.reload()}>Title</TextButton>
+          <TextButton onClick={() => game.toTitle()}>Title</TextButton>
         </div>
       </div>
     </div>

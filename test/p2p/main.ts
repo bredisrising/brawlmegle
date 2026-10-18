@@ -373,6 +373,20 @@ async function runGameHost() {
     await poll(() => ((g.input.latest('p2')?.t ?? Infinity) < 100 ? true : undefined), 'restarted pose clock on the host');
   });
 
+  await test('game host: the client leaves (back to the title): P2 frees up, the code shows again, a new player joins', async () => {
+    client.peer.send({ type: 'leave' });
+    await poll(() => (useGameStore.getState().players.p2.status === 'waiting' ? true : undefined), "P2's slot freed");
+    const { connection, phase, roomCode } = useGameStore.getState();
+    assert(connection === null, `connection ${connection} (the lobby shows the room code when it's null)`);
+    assert(phase === 'lobby', `phase ${phase}`);
+    client.peer.close();
+    const next = clientPeer();
+    await next.peer.join(roomCode!);
+    await poll(() => (useGameStore.getState().connection === 'open' ? true : undefined), 'the next player connected');
+    await poll(() => (next.inbox.some((m) => m.type === 'welcome') ? true : undefined), 'welcome for the next player');
+    client = next;
+  });
+
   client.peer.close();
   g.dispose();
 }

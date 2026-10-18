@@ -29,6 +29,8 @@ export type HostHooks = {
   read?: (intents: Intent[], stance: Stance) => void;
   /** A screen started watching the room (spectate): it needs the match state. */
   watched?: () => void;
+  /** P2's player left for good (said so, or never came back): free the slot for someone else. */
+  left?: () => void;
 };
 type Deferred<T> = { resolve: (value: T) => void; reject: (err: Error) => void };
 
@@ -59,6 +61,8 @@ export class HostSession {
   private lastPhase = '';
   /** Screens watching this room (spectate). */
   private watchers = 0;
+  /** A dropped client gets this long to come back before its slot is freed. */
+  private releaseTimer = 0;
   private readonly cleanup: (() => void)[] = [];
 
   constructor(input: InputHub, setup: SetupRemote, private readonly hooks: HostHooks = {}) {
@@ -115,6 +119,7 @@ export class HostSession {
   }
 
   dispose() {
+    window.clearTimeout(this.releaseTimer);
     this.cleanup.splice(0).forEach((off) => off());
     this.scan?.reject(new Error('Host closed'));
     this.peer.close();
@@ -123,6 +128,7 @@ export class HostSession {
   }
 
   private onConnected = () => {
+    window.clearTimeout(this.releaseTimer);
     useGameStore.setState({ connection: 'open' });
     this.peer.send({ type: 'welcome', player: REMOTE });
     this.sendPhase(true);
@@ -141,7 +147,24 @@ export class HostSession {
     useGameStore.setState({ connection: 'reconnecting' });
     this.remote.latestFrame = null;
     if (this.input.source(REMOTE) === this.remote) this.input.assign(REMOTE, this.remote);
+    // Not back in time: they've gone, not blipped. The lobby frees the slot quickly so the next person can join;
+    // mid-fight it waits longer for a Wi-Fi blip to recover.
+    window.clearTimeout(this.releaseTimer);
+    this.releaseTimer = window.setTimeout(() => this.release(), useGameStore.getState().phase === 'lobby' ? 10_000 : 45_000);
   };
+
+  /** P2's player is gone: forget their choice and setup, and let the game free the slot (the room code shows again). */
+  private release() {
+    window.clearTimeout(this.releaseTimer);
+    this.gen++;
+    this.choiceKey = '';
+    this.lastFighter = '';
+    this.scan?.reject(new Error('P2 left'));
+    this.scan = null;
+    this.remote.latestFrame = null;
+    useGameStore.setState({ connection: null });
+    this.hooks.left?.();
+  }
 
   private onMessage(msg: ClientMessage) {
     switch (msg.type) {
@@ -161,6 +184,9 @@ export class HostSession {
         break;
       case 'skip':
         this.hooks.skip?.();
+        break;
+      case 'leave':
+        this.release();
         break;
       case 'intents':
         this.hooks.read?.(msg.intents, msg.stance);

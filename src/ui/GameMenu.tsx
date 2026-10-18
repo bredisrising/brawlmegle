@@ -61,7 +61,7 @@ export function GameMenu() {
               Camera video: {video ? 'on' : 'off'}
             </TextButton>
           )}
-          <TextButton onClick={() => window.location.reload()}>Back to title</TextButton>
+          <TextButton onClick={() => game.toTitle()}>Back to title</TextButton>
         </div>
       )}
       <div className="flex items-stretch gap-1">

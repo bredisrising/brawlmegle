@@ -30,6 +30,7 @@ export type ClientMessage =
   | { type: 'scan'; frames: [front: string, left: string, right: string] } // base64 JPEGs
   | { type: 'rematch' } // from the K.O. screen on the client laptop
   | { type: 'skip' } // "fight now": don't wait for P2's forge, use a stand-in until it's done
+  | { type: 'leave' } // the player went back to the title (or closed the tab): free P2's slot for someone else
   // The client reads its own player's moves from its own full-rate camera (the network only carries the result):
   | { type: 'intents'; intents: Intent[]; stance: Stance } // reliable: every frame that produced intents
   | { type: 'stance'; stance: Stance }; // lossy: the continuous stance (guard, lean, tracked) on the other frames
