@@ -6,6 +6,8 @@
  *   GET  /api/forge/:id          ->  ForgedFighter (+ sheetUrl, timings, error)
  *   GET  /api/fighters           ->  ready fighters, newest first
  *   GET  /api/profiles/:username ->  { username, fighter: latest ready fighter | null, forging: id | null }
+ *   POST /api/highlights         video/webm body + x-highlight-meta  ->  the highlight (see "Highlights" below)
+ *   GET  /api/highlights         ->  { highlights: newest first }
  *
  * Usernames are a light "log in": type yours on any laptop and your fighter comes back. Fighters are saved
  * under FORGE_DATA (default data/) in <id>/. A dev page for testing likeness is at /.
@@ -191,7 +193,7 @@ async function handle(req, res) {
   }
   if (req.method === "OPTIONS") {
     res.setHeader("access-control-allow-methods", "GET, POST");
-    res.setHeader("access-control-allow-headers", "content-type, x-forge-key");
+    res.setHeader("access-control-allow-headers", "content-type, x-forge-key, x-highlight-meta");
     // Chrome/Edge ask before a public https page (the hosted scan page) talks to this machine's localhost.
     if (req.headers["access-control-request-private-network"] && origin && ALLOWED_ORIGINS.includes(origin)) {
       res.setHeader("access-control-allow-private-network", "true");
@@ -205,6 +207,7 @@ async function handle(req, res) {
     return res.end(devPage);
   }
   if (req.method === "GET" && url.pathname === "/health") return json(res, 200, { ok: true, models });
+  if (parts[0] === "api" && parts[1] === "highlights") return handleHighlights(req, res, parts, base);
 
   if (req.method === "GET" && parts[0] === "api" && parts[1] === "profiles" && parts.length === 3) {
     let raw = "";
@@ -378,6 +381,160 @@ async function handle(req, res) {
   }
 
   json(res, 404, { error: "not found" });
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Highlights: K.O. replays the game records on the laptop that ran the fight (src/game/HighlightRecorder.ts), shown
+// as the reel on the title screen. Kept in FORGE_DATA/highlights/ (<id>.webm + index.json), newest HIGHLIGHT_KEEP.
+//
+//   POST /api/highlights   body: the clip (video/webm or video/mp4, up to FORGE_HIGHLIGHT_MAX_BYTES)
+//                          x-forge-key, x-highlight-meta: URI-encoded JSON { p1, p2, winner, move, combo, roundTime,
+//                          duration }, each side { id?, name, cpu? }  ->  201 the highlight
+//   GET  /api/highlights   ->  { highlights: [{ id, url, createdAt, bytes, ...meta }] } newest first
+//   GET  /api/highlights/<id>.webm  ->  the clip (immutable, range requests for <video>)
+// ---------------------------------------------------------------------------------------------------------------
+const HIGHLIGHTS = new URL("highlights/", DATA);
+const HIGHLIGHTS_INDEX = new URL("index.json", HIGHLIGHTS);
+const HIGHLIGHT_MAX_BYTES = Number(process.env.FORGE_HIGHLIGHT_MAX_BYTES ?? 6 * 1024 * 1024);
+const HIGHLIGHT_KEEP = Number(process.env.FORGE_HIGHLIGHT_KEEP ?? 40);
+/** One laptop makes at most one every ~20 s (a round plus its replay); this leaves room for a few booths at once. */
+const highlightAllowed = limiter(Number(process.env.FORGE_MAX_HIGHLIGHTS ?? 20), 10 * 60_000);
+const HIGHLIGHT_TYPES = { "video/webm": "webm", "video/mp4": "mp4" };
+const HIGHLIGHT_FILE = /^([0-9a-f-]{36})\.(webm|mp4)$/;
+fs.mkdirSync(HIGHLIGHTS, { recursive: true });
+/** @type {object[]} newest first */
+let highlights = [];
+try {
+  highlights = JSON.parse(fs.readFileSync(HIGHLIGHTS_INDEX, "utf8")).filter((h) => fs.existsSync(new URL(h.file, HIGHLIGHTS)));
+} catch {}
+
+/** Plain one-line text: no control characters, trimmed, capped. */
+const cleanText = (v, max) => (typeof v === "string" ? v.replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, max) : "");
+const finite = (v, min, max) => typeof v === "number" && Number.isFinite(v) && v >= min && v <= max;
+
+/** The clip's metadata from the x-highlight-meta header, or a string saying what's wrong with it. */
+function highlightMeta(header) {
+  let m;
+  try {
+    m = JSON.parse(decodeURIComponent(String(header ?? "")));
+  } catch {
+    return "x-highlight-meta must be URI-encoded JSON";
+  }
+  if (!m || typeof m !== "object") return "x-highlight-meta must be an object";
+  const side = (s) => {
+    const name = cleanText(s?.name, 40);
+    if (!name) return null;
+    const id = typeof s.id === "string" && /^[\w-]{1,64}$/.test(s.id) ? s.id : undefined;
+    return { ...(id ? { id } : {}), name, cpu: s.cpu === true };
+  };
+  const p1 = side(m.p1);
+  const p2 = side(m.p2);
+  if (!p1 || !p2) return "p1 and p2 need a name";
+  if (m.winner !== "p1" && m.winner !== "p2") return "winner is p1 or p2";
+  const move = typeof m.move === "string" ? m.move.trim().toLowerCase() : "";
+  if (!/^[a-z][a-z _-]{0,23}$/.test(move)) return "move is a move name";
+  if (!Number.isInteger(m.combo) || m.combo < 1 || m.combo > 99) return "combo is 1-99";
+  if (!finite(m.roundTime, 0, 600)) return "roundTime is seconds";
+  if (!finite(m.duration, 0.5, 30)) return "duration is 0.5-30 seconds";
+  return { p1, p2, winner: m.winner, move, combo: m.combo, roundTime: Math.round(m.roundTime * 10) / 10, duration: Math.round(m.duration * 10) / 10 };
+}
+
+/** The request body as bytes, refused past `max` (by content-length up front, or while it streams). */
+function readBytes(req, max) {
+  return new Promise((resolve, reject) => {
+    const tooBig = () => Object.assign(new Error(`too large (max ${max} bytes)`), { status: 413 });
+    if (Number(req.headers["content-length"] ?? 0) > max) {
+      req.resume();
+      return reject(tooBig());
+    }
+    let size = 0;
+    const chunks = [];
+    req.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > max) {
+        reject(tooBig());
+        req.destroy();
+      } else chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+    req.on("close", () => reject(Object.assign(new Error("upload aborted"), { status: 400 })));
+  });
+}
+
+function saveHighlights() {
+  fs.writeFile(HIGHLIGHTS_INDEX, JSON.stringify(highlights), (err) => err && console.warn("highlights save failed:", err.message));
+}
+
+const highlightView = ({ file, ...h }, base) => ({ ...h, url: `${base}/api/highlights/${file}` });
+
+async function handleHighlights(req, res, parts, base) {
+  if (req.method === "GET" && parts.length === 2) {
+    res.setHeader("cache-control", "no-cache");
+    return json(res, 200, { highlights: highlights.map((h) => highlightView(h, base)) });
+  }
+
+  if (req.method === "GET" && parts.length === 3) {
+    const m = HIGHLIGHT_FILE.exec(parts[2]);
+    const h = m && highlights.find((x) => x.file === parts[2]);
+    if (!h) return json(res, 404, { error: "no such highlight" });
+    const file = new URL(h.file, HIGHLIGHTS);
+    let size;
+    try {
+      size = fs.statSync(file).size;
+    } catch {
+      return json(res, 404, { error: "no such highlight" });
+    }
+    // A clip never changes (a new one is a new id). <video> asks for byte ranges, Safari insists on them.
+    const headers = {
+      "content-type": m[2] === "mp4" ? "video/mp4" : "video/webm",
+      "accept-ranges": "bytes",
+      "cache-control": "public, max-age=604800, immutable",
+    };
+    const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? "");
+    if (range && (range[1] || range[2])) {
+      const start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2]));
+      const end = range[1] && range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+      if (start > end || start >= size) {
+        res.writeHead(416, { "content-range": `bytes */${size}` });
+        return res.end();
+      }
+      res.writeHead(206, { ...headers, "content-range": `bytes ${start}-${end}/${size}`, "content-length": end - start + 1 });
+      return pipeline(fs.createReadStream(file, { start, end }), res, () => {});
+    }
+    res.writeHead(200, { ...headers, "content-length": size });
+    return pipeline(fs.createReadStream(file), res, () => {});
+  }
+
+  if (req.method === "POST" && parts.length === 2) {
+    if (ACCESS_KEY && req.headers["x-forge-key"] !== ACCESS_KEY) return json(res, 403, { error: "bad forge key" });
+    const type = String(req.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
+    const ext = HIGHLIGHT_TYPES[type];
+    if (!ext) return json(res, 415, { error: "send video/webm or video/mp4" });
+    const meta = highlightMeta(req.headers["x-highlight-meta"]);
+    if (typeof meta === "string") return json(res, 400, { error: meta });
+    if (!highlightAllowed()) return json(res, 429, { error: "slow down" });
+    let video;
+    try {
+      video = await readBytes(req, HIGHLIGHT_MAX_BYTES);
+    } catch (err) {
+      return json(res, err.status ?? 400, { error: err.message });
+    }
+    // The bytes must be the video they claim: WebM's EBML header, or an MP4 'ftyp' box.
+    const webm = video.length > 4 && video.readUInt32BE(0) === 0x1a45dfa3;
+    const mp4 = video.length > 12 && video.toString("latin1", 4, 8) === "ftyp";
+    if ((ext === "webm" && !webm) || (ext === "mp4" && !mp4) || video.length < 1024) return json(res, 400, { error: "not a video" });
+    const id = crypto.randomUUID();
+    const h = { id, file: `${id}.${ext}`, createdAt: Date.now(), bytes: video.length, ...meta };
+    fs.writeFileSync(new URL(h.file, HIGHLIGHTS), video);
+    highlights.unshift(h);
+    for (const old of highlights.splice(HIGHLIGHT_KEEP)) fs.rm(new URL(old.file, HIGHLIGHTS), { force: true }, () => {});
+    saveHighlights();
+    console.log(`highlight ${id.slice(0, 8)}: ${meta[meta.winner].name} ${meta.move} (${(video.length / 1e6).toFixed(2)} MB)`);
+    return json(res, 201, highlightView(h, base));
+  }
+
+  return json(res, 404, { error: "not found" });
 }
 
 http
