@@ -124,6 +124,8 @@ export class IntentReader {
   /** Usual head and shoulder-center positions, relative to the slow-moving home (so a whole-torso lean shows). */
   private headRest: { x: number; y: number } | null = null;
   private shoulderRest: { x: number; y: number } | null = null;
+  /** Usual position of the feet (full-body framing): a moving camera moves them too, a duck or a slip doesn't. */
+  private feetRest: { x: number; y: number } | null = null;
   private lastCore: Record<'jump' | 'duck' | 'dodge', number> = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
   /** A head move must hold for two frames in a row: one-frame tracking glitches throw the whole skeleton around. */
   private pendingCore: Record<'jump' | 'duck' | 'dodge', number> = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
@@ -171,6 +173,7 @@ export class IntentReader {
     this.lastArmStrike = { armL: -Infinity, armR: -Infinity };
     this.headRest = null;
     this.shoulderRest = null;
+    this.feetRest = null;
     this.guardSince = null;
     this.guardUp = false;
   }
@@ -413,13 +416,22 @@ export class IntentReader {
     const quiet = Math.hypot(headV.x, headV.y) < 0.6 && Math.abs(body.root.vy) < 0.4;
     if (!this.headRest) this.headRest = { ...head };
     if (!this.shoulderRest) this.shoulderRest = { ...shoulders };
+    // Feet, when the whole body is in view: a handheld or bumped camera shifts them along with everything else.
+    const la = body.points[LM.lAnkle];
+    const ra = body.points[LM.rAnkle];
+    const feetSeen = body.fullBodyFor > 1000 && la.visibility > 0.5 && ra.visibility > 0.5;
+    const feet = feetSeen ? { x: (la.p.x + ra.p.x) / 2 + body.root.x, y: (la.p.y + ra.p.y) / 2 + body.root.y } : null;
+    if (!feet) this.feetRest = null;
+    else if (!this.feetRest) this.feetRest = { ...feet };
     if (quiet) {
       const k = 1 - Math.exp(-body.dt / cfg.restSeconds);
       this.headRest.x += k * (head.x - this.headRest.x);
       this.headRest.y += k * (head.y - this.headRest.y);
       this.shoulderRest.x += k * (shoulders.x - this.shoulderRest.x);
       this.shoulderRest.y += k * (shoulders.y - this.shoulderRest.y);
+      if (feet && this.feetRest) (this.feetRest.x += k * (feet.x - this.feetRest.x)), (this.feetRest.y += k * (feet.y - this.feetRest.y));
     }
+    const feetShift = feet && this.feetRest ? { x: feet.x - this.feetRest.x, y: feet.y - this.feetRest.y } : { x: 0, y: 0 };
     // Throwing a punch twists the torso and dips the head: a right punch swings the head to the player's left,
     // a left punch to the right. Around a punch, a head move has to be much bigger to count.
     for (const n of ['armL', 'armR'] as const) if (this.limbs[n].phase === 'onset') this.lastArmStrike[n] = t;
@@ -433,7 +445,7 @@ export class IntentReader {
     };
 
     // Duck: the head drops, by bending the knees (hips drop) or the waist (head drops toward the hips).
-    const headDrop = this.headRest.y - head.y;
+    const headDrop = this.headRest.y - head.y + feetShift.y;
     const dropSpeed = -headV.y;
     const duckK = punching ? 1.6 : 1;
     const dropping = headDrop > cfg.duck.drop * duckK;
@@ -444,20 +456,24 @@ export class IntentReader {
 
     // Jump: the hips rise above their usual height, and the head with them (a real hop, not a bounce on the toes).
     // Needs visible hips: when sitting, "hips" are estimated from the shoulders and every bob would count.
-    const up = body.fullBodyFor > 1000 && body.root.y > cfg.jump.rise && -headDrop > cfg.jump.rise * 0.7;
+    // (Judged against the room, not the feet: in a jump the feet leave the floor too.)
+    const up = body.fullBodyFor > 1000 && body.root.y > cfg.jump.rise && head.y - this.headRest.y > cfg.jump.rise * 0.7;
     if (held('jump', up && body.root.vy > cfg.jump.speed, up) && t - this.lastCore.jump > cfg.coreCooldownMs) {
       this.lastCore.jump = t;
       out.push({ kind: 'jump', t, power: clamp(body.root.y / (cfg.jump.rise * 3), 0.3, 1) });
     }
 
     // Dodge: the head leans sideways, and the shoulders go with it (turning or tilting just the head isn't a slip).
-    const lean = head.x - this.headRest.x;
-    const shoulderLean = shoulders.x - this.shoulderRest.x;
+    const lean = head.x - this.headRest.x - feetShift.x;
+    const shoulderLean = shoulders.x - this.shoulderRest.x - feetShift.x;
     // The side a punch throws the head to needs the most, as long as that arm is still out.
     const thrower = lean > 0 ? 'armR' : 'armL';
     const dodgeK = this.limbs[thrower].phase !== 'idle' ? 3 : since(thrower) < 500 ? 2.5 : punching ? 1.6 : 1;
     // Not while ducking: a duck usually tilts the head too.
-    const leaning = Math.abs(lean) > cfg.dodge.shift * dodgeK && shoulderLean * Math.sign(lean) > 0.2 * Math.abs(lean) && headDrop < cfg.duck.drop * 0.6;
+    // The head leads: in a slip or a seated lean the head travels further than the shoulders. When everything
+    // shifts the same amount, it's the camera moving (or a step), not a slip.
+    const leaning = Math.abs(lean) > cfg.dodge.shift * dodgeK && shoulderLean * Math.sign(lean) > 0.2 * Math.abs(lean)
+      && (lean - shoulderLean) * Math.sign(lean) > 0.15 * Math.abs(lean) && headDrop < cfg.duck.drop * 0.6;
     const leaningFast = leaning && Math.sign(headV.x) === Math.sign(lean) && Math.abs(headV.x) > cfg.dodge.speed;
     if (held('dodge', leaningFast, leaning && headV.x * Math.sign(lean) > -cfg.dodge.speed) && t - this.lastCore.dodge > cfg.coreCooldownMs) {
       this.lastCore.dodge = t;
