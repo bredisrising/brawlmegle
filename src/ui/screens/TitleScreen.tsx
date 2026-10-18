@@ -51,26 +51,26 @@ export function TitleScreen() {
         <div className="tex-dots absolute inset-0 bg-ink-2" style={{ clipPath: 'polygon(calc(76% + 10px) 0, 100% 0, 100% 100%, calc(36% + 10px) 100%)' }} />
       </div>
 
-      <div className="relative flex h-full flex-col justify-between gap-10 p-6 sm:p-12">
+      <div className="relative flex h-full flex-col justify-between gap-[clamp(1rem,3.5vh,2.5rem)] overflow-y-auto p-6 sm:px-12 sm:py-[clamp(1.25rem,4.5vh,3rem)]">
         <div className="animate-in-l">
-          <h1 className="font-display text-[clamp(3.5rem,10.5vw,10rem)] uppercase leading-[0.82] tracking-tighter">
+          <h1 className="font-display text-[clamp(3rem,min(10.5vw,16vh),10rem)] uppercase leading-[0.82] tracking-tighter">
             Brawl<span className="text-hp">megle</span>
           </h1>
-          <p className="mt-5 inline-block bg-paper px-3 py-1.5 font-cond text-base font-extrabold uppercase tracking-[0.3em] text-ink sm:text-lg">
+          <p className="mt-[clamp(0.6rem,2.2vh,1.25rem)] inline-block bg-paper px-3 py-1.5 font-cond text-base font-extrabold uppercase tracking-[0.3em] text-ink sm:text-lg">
             Get scanned. Get forged. Throw hands.
           </p>
         </div>
 
         <div className="flex flex-col items-start gap-5 md:items-end">
           {mode === 'pick' ? (
-            <nav className="flex w-full max-w-md flex-col gap-2">
+            <nav className="flex w-full max-w-md flex-col gap-[clamp(0.3rem,1vh,0.5rem)]">
               <MenuItem index="01" label="Host" hint="Run the fight on this screen" color="hover:bg-p1" bar="bg-p1" disabled={busy} onClick={() => run(() => game.host())} delay={100} />
               <MenuItem index="02" label="Connect" hint="Join with a room code" color="hover:bg-p2" bar="bg-p2" disabled={busy} onClick={() => setMode('connect')} delay={180} />
               <MenuItem index="03" label="Practice" hint="Fight the CPU on this screen" color="hover:bg-hp" bar="bg-hp" disabled={busy} onClick={() => run(() => game.practice())} delay={260} />
-              <MenuItem index="04" label="Training" hint="Try your moves on a dummy that doesn't fight back" color="hover:bg-hp" bar="bg-hp" disabled={busy} onClick={() => run(() => game.practice('dummy'))} delay={340} />
+              <MenuItem index="04" label="Training" hint="Practice moves on a dummy" color="hover:bg-hp" bar="bg-hp" disabled={busy} onClick={() => run(() => game.practice('dummy'))} delay={340} />
               <MenuItem index="05" label="Leaderboard" hint="See every fighter's record" color="hover:bg-paper" bar="bg-paper" disabled={busy} onClick={() => setMode('leaderboard')} delay={420} />
               {/* Dev tools live on the same site (local dev serves them from /test/). */}
-              <p className="mt-3 flex gap-5 font-cond text-sm font-bold uppercase tracking-[0.25em] text-paper/45">
+              <p className="mt-[clamp(0.25rem,1.2vh,0.75rem)] flex gap-5 font-cond text-sm font-bold uppercase tracking-[0.25em] text-paper/45">
                 <span>Tools</span>
                 <a className="underline-offset-4 hover:text-paper hover:underline" href={import.meta.env.DEV ? '/test/tuner/' : '/tuner/'}>Move tester</a>
                 <a className="underline-offset-4 hover:text-paper hover:underline" href={import.meta.env.DEV ? '/test/scan/' : '/scan/'}>Scan test</a>
@@ -153,13 +153,13 @@ function MenuItem(props: { index: string; label: string; hint: string; color: st
       disabled={disabled}
       onClick={onClick}
       style={{ animationDelay: `${delay}ms` }}
-      className={`animate-in-r group relative flex w-full items-center gap-5 bg-ink-3 py-4 pr-6 pl-8 text-left transition-[background-color,padding,gap,width] duration-150 hover:w-[calc(100vw-1.5rem)] hover:gap-0 hover:py-6 hover:pr-6 hover:pl-6 hover:text-ink sm:hover:w-[calc(100%+2rem)] disabled:pointer-events-none disabled:opacity-40 ${color}`}
+      className={`animate-in-r group relative flex w-full items-center gap-5 bg-ink-3 py-[clamp(0.45rem,1.7vh,1rem)] pr-6 pl-8 text-left transition-[background-color,padding,gap,width] duration-150 hover:w-[calc(100vw-1.5rem)] hover:gap-0 hover:py-[clamp(0.7rem,2.6vh,1.5rem)] hover:pr-6 hover:pl-6 hover:text-ink sm:hover:w-[calc(100%+2rem)] disabled:pointer-events-none disabled:opacity-40 ${color}`}
     >
       <span className={`absolute inset-y-0 left-0 w-2 ${bar} group-hover:bg-ink`} />
       <span className="font-cond text-sm font-bold tracking-[0.3em] text-paper/45 group-hover:hidden">{index}</span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate font-display text-3xl uppercase leading-none tracking-tight sm:text-5xl">{label}</span>
-        <span className="mt-1 block font-cond text-sm font-semibold uppercase tracking-[0.15em] text-paper/50 group-hover:text-ink/70">{hint}</span>
+        <span className="block truncate font-display text-[clamp(1.6rem,5vh,3rem)] uppercase leading-none tracking-tight">{label}</span>
+        <span className="mt-1 block truncate font-cond text-sm font-semibold uppercase tracking-[0.15em] text-paper/50 group-hover:text-ink/70 [@media(max-height:640px)]:hidden">{hint}</span>
       </span>
       <Arrow className="text-3xl group-hover:hidden" />
     </button>
