@@ -17,13 +17,23 @@ textured Mixamo-rigged GLB out, the same file the game already loads from Tripo.
    it fails, the box re-rigs with the rigger's next attempt plan (`--attempt 2`: envelope weights, `3`: a finer solid)
    and sends the best one. The job's `report` says which path made the rig (`rig`), its own check (`rig_ok`, `check`),
    the game's check (`game_check`) and every try (`tries`).
+5. **The face** (`face_project.py`, with `FORGE3D_FACE_PROJECT=1`; off by default): TRELLIS.2's face is soft, the
+   sheet's is crisp and straight-on. The model is drawn from the front into the sheet's frame (bounding boxes, then an
+   ECC fit of the silhouettes), MediaPipe's face landmarks on the sheet and on that drawing give a warp that puts the
+   sheet's eyes and mouth on the model's, and every front-facing texel of the head takes the sheet's color, feathered
+   by how squarely it faces the camera, a depth test and the sheet's silhouette (around the face only the sheet's
+   detail is kept, on TRELLIS's tone, so hair and neck blend in). It writes into the base-color image (upscaled to
+   2048 when the face has fewer texels than the sheet has pixels), so mesh, UVs and rig are untouched. A sheet whose
+   head is turned (its features miss the model's by over 6% of the face width) keeps TRELLIS's face. ~1.5 s of CPU
+   after the rig, plus ~0.5 s in the optimizer for the bigger texture; the job's `face` says what it did.
+   `forge/gpu/face-rescue.mjs` paints fighters forged before it (a face-only job: no new model, no re-rig).
 
 ## API (`server.py`, port 8790)
 
 | Call | Returns |
 |---|---|
-| `POST /jobs` `{image, model?, settings?}` (base64 sheet; `model`: a GLB to rig only; `settings`: pipeline, steps, faces, texture, remesh for one job) | `202 {id}` (`503` while warming up, `429` if 6 are queued) |
-| `GET /jobs/:id` | `{status: queued, model, rig, done or failed, timings, error, rigged, optimized, previews}` |
+| `POST /jobs` `{image, model?, settings?, face?, faceOnly?}` (base64 sheet; `model`: a GLB to rig only; `settings`: pipeline, steps, faces, texture, remesh for one job; `face`: true/false overrides `FORGE3D_FACE_PROJECT` for this job; `faceOnly`: `model` is already rigged, only paint its face) | `202 {id}` (`503` while warming up, `429` if 6 are queued) |
+| `GET /jobs/:id` | `{status: queued, model, rig, done or failed, timings, error, rigged, optimized, previews, face}` (`face`: `{painted, seconds, skipped?, face: the landmark match}` when the face step ran; `timings.face` too) |
 | `GET /jobs/:id/voxels.bin`, `/shape.glb` | the previews, as soon as `previews` lists them: stage 1's sparse voxels (uint16 resolution, then x, y, z bytes, z up) and the untextured shape (12k faces, y up) |
 | `GET /jobs/:id/rigged.glb`, `/rigged.orig.glb`, `/model.glb` | the GLBs: rigged (optimized by `optimize.js` when `optimized`), its unoptimized original, unrigged (jobs are kept 15 min) |
 | `GET /health` | `{ok, ready, queued, settings}` (no key needed) |
@@ -61,6 +71,8 @@ Blender 5.2, the app) and a systemd unit (`forge3d`, restarts on failure, starts
 | `FORGE3D_STEPS` | `8` sampling steps per stage (12 is TRELLIS's default: ~3 s more, same fighter) |
 | `FORGE3D_FACES` / `FORGE3D_TEXTURE` | `40000` / `1024` (60000 / 2048: ~6 s more bake and export, same fighter at fight distance) |
 | `FORGE3D_YAW` | `0`: extra turn (degrees) before the rigger's own facing check |
+| `FORGE3D_FACE_PROJECT` | `0`: `1` paints the sheet's face onto every model (`face_project.py`) |
+| `FORGE3D_FACE_MODEL` | `face_landmarker.task` next to the pose model (`weights.py` downloads it) |
 
 After changing it: `sudo systemctl restart forge3d`.
 
