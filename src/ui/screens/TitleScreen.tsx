@@ -8,7 +8,7 @@ import { HighlightReel } from '../HighlightReel';
 
 /**
  * The main menu, written so a first-time player needs no explanation: Find a fight (matchmaking) first, then Play a
- * friend (create a room, join with a code, or watch one), Practice, Training and the Leaderboard.
+ * friend (create a room, join with a code, or watch one), Practice, Training and Leaders.
  */
 export function TitleScreen() {
   const game = useGame();

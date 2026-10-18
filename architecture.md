@@ -12,8 +12,21 @@ Full details live in SPEC.md. This is the short version.
 No one around? The P2 panel has "Fight the CPU" (easy / normal / hard, fight/Cpu.ts): the CPU borrows a
 forged fighter from the server and plays through the same engine commands a player's reader produces.
 
-Connecting: Host taps "Host" -> gets a room code. Client taps "Connect" -> types the code.
+Connecting: "Play a friend" -> "Create a room" gets a room code; the friend taps "Join with a code" and types it.
 Then the two laptops talk directly over WebRTC (P2P).
+
+"Find a fight" (matchmaking, Game.findFight): pick or scan a fighter once (set up as P1 on this laptop), then
+`{type: "quick", player}` to the matchmaker: wait as a host whose code isn't shown, or get `quick-join CODE` and join
+it like Connect (the role flips; the camera and fighter come along: as client the fighter is re-sent as a pick by id,
+masked stays masked). A stranger leaving (or closing the tab) sends the other straight back to searching; there's no
+rejoin. Protocol in matchmaker/README.md.
+
+After a K.O. a rematch needs both players' votes (the host counts them; a CPU votes yes at once). Matchmade fights
+show "Next opponent in 4…" once the replay has played; without both votes, both go find someone new.
+
+Opponent camera (game/CameraShare.ts, ui/OpponentCam.tsx): every connection has a sendrecv video transceiver from the
+start; a copy of the camera shrunk to 320x240 at 15 fps (VP8, 250 kbps) is swapped in with replaceTrack. "Hide my
+camera" stops both ways (if either hides, neither sees the other), synced as `cam` messages, saved in localStorage.
 
 
 ## Flow (on the host)
