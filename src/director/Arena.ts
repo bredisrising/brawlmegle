@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import islandUrl from '../../models/floating_island.glb?url';
 import { disposeObject } from './dispose';
+import { loadHills, type Hills } from './Hills';
 
 const SKY_TOP = new THREE.Color('#1f5fc8');
 const SKY_HORIZON = new THREE.Color('#a9cdee');
@@ -17,6 +18,8 @@ export interface Arena {
   /** Current island shift along the camera axis (+ = toward the camera). */
   readonly islandOffset: number;
   setIslandOffset(z: number): void;
+  /** Background hill rows (null until loaded); tune with hills.update({...}). */
+  readonly hills: Hills | null;
   dispose(): void;
 }
 
@@ -66,9 +69,11 @@ function createSky(radius: number) {
   return new THREE.Mesh(new THREE.SphereGeometry(radius, 32, 16), material);
 }
 
-/** Static outdoor stage: sky dome, sky-lit environment, one sun over the floating island. */
-export function createArena(scene: THREE.Scene, renderer: THREE.WebGLRenderer): Arena {
+/** Static outdoor stage: sky dome, sky-lit environment, one sun over the floating island, hills behind. */
+export function createArena(scene: THREE.Scene, renderer: THREE.WebGLRenderer, camera: THREE.PerspectiveCamera): Arena {
   const sky = createSky(60);
+  // Drawn first: it doesn't write depth, so anything past its radius (far hills) still shows over it.
+  sky.renderOrder = -1;
   scene.add(sky);
 
   // Image-based fill from the sky itself; dim the sun disk so it doesn't double up on the directional light.
@@ -109,6 +114,13 @@ export function createArena(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     scene.add(model);
   }, (err) => console.error('Failed to load arena island', err));
 
+  let hills: Hills | null = null;
+  loadHills(camera).then((loaded) => {
+    if (disposed) return loaded.dispose();
+    hills = loaded;
+    scene.add(loaded.object);
+  }, (err) => console.error('Failed to load background hills', err));
+
   return {
     get islandOffset() {
       return islandOffset;
@@ -117,11 +129,15 @@ export function createArena(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
       islandOffset = z;
       if (island) placeIsland(island, z);
     },
+    get hills() {
+      return hills;
+    },
     dispose() {
       disposed = true;
       envMap.dispose();
       sky.geometry.dispose();
       sky.material.dispose();
+      hills?.dispose();
       if (island) {
         island.removeFromParent();
         disposeObject(island);

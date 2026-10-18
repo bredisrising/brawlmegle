@@ -65,7 +65,7 @@ export class Renderer {
     this.composer.addPass(new OutputPass());
     this.composer.addPass(this.impactPass);
 
-    this.arena = createArena(this.scene, this.renderer);
+    this.arena = createArena(this.scene, this.renderer, this.camera);
     this.camera.position.copy(this.cameraHome);
     this.camera.lookAt(this.lookTarget);
 
