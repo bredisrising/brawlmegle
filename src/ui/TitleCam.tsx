@@ -42,7 +42,7 @@ export function TitleCam() {
           {hidden ? 'Hidden from opponents' : 'Shown to opponents'}
         </span>
       </div>
-      <CamToggle className="whitespace-nowrap" />
+      <CamToggle />
     </div>
   );
 }

@@ -16,7 +16,7 @@ const OTHERS = [
 ];
 const tipAt = (i: number) => (i % 2 === 0 ? MAIN : OTHERS[(i >> 1) % OTHERS.length]);
 
-export function Tips({ className = '', align = 'center' }: { className?: string; align?: 'start' | 'center' | 'end' }) {
+export function Tips({ className = '', align = 'center', width = 'max-w-xl' }: { className?: string; align?: 'start' | 'center' | 'end'; width?: string }) {
   const [i, setI] = useState(0);
   useEffect(() => {
     const t = setInterval(() => setI((n) => n + 1), 7000);
@@ -24,9 +24,9 @@ export function Tips({ className = '', align = 'center' }: { className?: string;
   }, []);
   const justify = align === 'start' ? 'justify-start text-left' : align === 'end' ? 'justify-end text-right' : 'justify-center text-center';
   return (
-    <p className={`flex max-w-md items-start gap-2 ${justify} ${className}`}>
-      <span className="shrink-0 bg-hp px-1.5 py-0.5 font-cond text-xs font-extrabold uppercase tracking-[0.2em] text-ink">Tip</span>
-      <span key={i} className="animate-rise font-cond text-sm font-semibold uppercase leading-snug tracking-[0.1em] text-paper/80">
+    <p className={`flex ${width} items-start gap-3 ${justify} ${className}`}>
+      <span className="shrink-0 bg-hp px-2 py-0.5 font-display text-base uppercase tracking-tight text-ink sm:text-lg">Tip</span>
+      <span key={i} className="animate-rise font-cond text-base font-bold uppercase leading-snug tracking-[0.08em] text-paper sm:text-lg">
         {tipAt(i)}
       </span>
     </p>

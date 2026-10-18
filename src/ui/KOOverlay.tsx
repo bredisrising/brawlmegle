@@ -72,7 +72,7 @@ export function KOOverlay() {
           {role === 'host' && !quick && <TextButton onClick={() => game.changeFighter()}>Change fighter</TextButton>}
           <TextButton onClick={() => game.toTitle()}>Title</TextButton>
         </div>
-        {role !== 'spectator' && <Tips className="mt-1 bg-ink/70 px-3 py-2" />}
+        {role !== 'spectator' && <Tips width="max-w-3xl" className="bg-ink/70 px-3 py-2" />}
       </div>
     </div>
   );
