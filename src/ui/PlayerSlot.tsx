@@ -94,7 +94,9 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
           </div>
 
           <h2
-            className={`max-w-full break-words font-display text-3xl uppercase leading-[0.9] tracking-tighter sm:text-7xl lg:text-8xl ${
+            className={`max-w-full break-words font-display text-3xl uppercase leading-[0.9] tracking-tighter ${
+              player.status === 'forging' && player.forge ? 'sm:text-5xl lg:text-6xl' : 'sm:text-7xl lg:text-8xl'
+            } ${
               right ? 'animate-in-r' : 'animate-in-l'
             } [animation-delay:80ms]`}
           >

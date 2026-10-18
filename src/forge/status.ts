@@ -37,11 +37,21 @@ export function onChange(set: (text: string) => void): (text: string) => void {
 export function forgePreview(f: ForgedFighter): ForgePreview {
   const brief = f.brief ?? {};
   const text = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
+  const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x !== '') : []);
+  const dossier = [
+    text(brief.build) && `Build: ${brief.build}`,
+    list(brief.signature).length ? `Signature: ${list(brief.signature).join(', ')}` : undefined,
+    text(brief.prop) && `Prop: ${brief.prop}`,
+    text(brief.scout_report),
+  ].filter((x): x is string => Boolean(x));
+  const palette = list(brief.palette).filter((c) => /^#[0-9a-f]{6}$/i.test(c));
   const preview: ForgePreview = {
     name: text(brief.name),
     archetype: text(brief.archetype),
+    dossier: dossier.length ? dossier : undefined,
+    palette: palette.length ? palette : undefined,
     sheetUrl: f.sheetUrl ?? f.sheetPartialUrl,
-    sheetFinal: Boolean(f.sheetUrl),
+    sheetFinal: f.sheetUrl ? true : undefined,
     voxelsUrl: f.previewVoxelsUrl,
     meshUrl: f.previewMeshUrl,
   };

@@ -203,6 +203,20 @@ def warm_sheet() -> Image.Image:
     return im
 
 
+def fake_previews(glb_path):
+    """Fake mode's voxels and shape, made from the fake GLB (faces +x, y up) in TRELLIS's frame (z up, facing -y)."""
+    import numpy as np
+    import trimesh
+
+    mesh = trimesh.load(glb_path, force="mesh")
+    v = np.asarray(mesh.vertices, dtype=np.float32)
+    v = (v - (v.min(0) + v.max(0)) / 2) / (v.max(0) - v.min(0)).max()  # into the [-0.5, 0.5] cube
+    yup = np.stack([v[:, 2], v[:, 1], -v[:, 0]], axis=1)  # turned to face -z, like TRELLIS's output here
+    trellis = np.stack([yup[:, 0], -yup[:, 2], yup[:, 1]], axis=1)  # y up -> z up (inverse of gen3d._to_y_up)
+    coords = np.unique(np.clip(((trellis + 0.5) * 32).astype(int), 0, 31), axis=0).astype(np.uint8)
+    return {"voxels": {"coords": coords, "resolution": 32}, "shape": {"vertices": yup, "faces": np.asarray(mesh.faces)}}
+
+
 def load():
     global generator, landmarker
     try:
@@ -215,8 +229,16 @@ def load():
         landmarker = Landmarker(POSE_MODEL)
         if os.environ.get("FORGE3D_FAKE_GLB"):
             # Dev mode without a GPU: every "generated" model is this GLB (the HTTP, landmark and rig steps are real).
+            fake = fake_previews(os.environ["FORGE3D_FAKE_GLB"])
+
             def generator(_sheet, out_path, on_preview=None, **_settings):
-                time.sleep(float(os.environ.get("FORGE3D_FAKE_SECONDS", 1)))
+                # The real thing's rhythm: voxels after ~1/4 of the time, the shape after ~1/2, then the model.
+                pause = float(os.environ.get("FORGE3D_FAKE_SECONDS", 1)) / 4
+                for kind in ("voxels", "shape"):
+                    time.sleep(pause)
+                    if on_preview:
+                        on_preview(kind, fake[kind])
+                time.sleep(pause * 2)
                 shutil.copy(os.environ["FORGE3D_FAKE_GLB"], out_path)
                 return {"generate": 0.0, "export": 0.0}
         else:

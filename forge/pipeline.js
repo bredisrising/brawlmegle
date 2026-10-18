@@ -27,7 +27,7 @@ const CARD_SIZE = "1024x1536";
  */
 const MULTIVIEW = flag("FORGE_MULTIVIEW", false);
 /** Partial sheet images streamed for the forging screen's preview (0 turns streaming off). */
-const SHEET_PARTIALS = Number(process.env.FORGE_SHEET_PARTIALS ?? 2);
+const SHEET_PARTIALS = Number(process.env.FORGE_SHEET_PARTIALS ?? 3);
 
 // --- Tripo (model sheet -> textured 3D model -> Mixamo-rigged GLB) ---------------------------------------
 // https://developers.tripo3d.ai/llms.txt. Output URLs expire after 5 minutes, so models are downloaded at once.

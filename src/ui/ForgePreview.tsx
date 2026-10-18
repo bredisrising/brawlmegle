@@ -69,6 +69,8 @@ export function ForgePreview({
   const stage = stageOf(preview, revealed);
   const name = useTyped(preview?.name);
   const archetype = useTyped(preview?.archetype ? `${preview.archetype}` : undefined, 40);
+  // While the sheet draws (~20 s): a scouting dossier from the brief, typed out.
+  const dossier = useTyped(preview?.dossier?.join('\n'), 45);
 
   // One preview view per card while it has 3D stages; each stage is handed over as its URL appears.
   useEffect(() => {
@@ -112,13 +114,26 @@ export function ForgePreview({
           {sheet && !three && !preview?.sheetFinal && <span className="forge-develop absolute inset-0" />}
           {/* Stages 3-6: the 3D preview. */}
           {three && <canvas ref={canvasRef} className="absolute inset-0 h-full w-full [image-rendering:pixelated]" />}
-          {/* Stage 1: the brief, typed out (and kept as a caption). */}
+          {/* Stage 1: the brief, typed out as a dossier while the sheet draws, then kept as a caption. */}
           {(name || archetype) && (
-            <div className={`absolute inset-x-3 flex flex-col ${sheet || three ? 'bottom-3' : 'top-1/3'}`}>
+            <div className={`absolute inset-x-3 flex flex-col gap-1 ${sheet || three ? 'bottom-3' : 'top-9'}`}>
               <span className="font-display text-2xl uppercase leading-none tracking-tight text-paper drop-shadow-[0_2px_0_rgba(0,0,0,0.8)] sm:text-3xl">
                 {name}
               </span>
               <span className="font-cond text-xs font-bold uppercase tracking-[0.25em] text-paper/80">{archetype}</span>
+              {!sheet && !three && preview?.palette && (
+                <span className="mt-2 flex gap-1">
+                  {preview.palette.map((c) => (
+                    <span key={c} className="h-4 w-7 border border-paper/30" style={{ background: c }} />
+                  ))}
+                </span>
+              )}
+              {!sheet && !three && dossier && (
+                <p className="mt-2 whitespace-pre-line font-cond text-[13px] font-semibold uppercase leading-snug tracking-[0.08em] text-paper/75">
+                  {dossier}
+                  <span className="animate-blink">_</span>
+                </p>
+              )}
             </div>
           )}
           {!sheet && !three && !name && <span className="forge-develop absolute inset-0 opacity-60" />}

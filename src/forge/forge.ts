@@ -113,7 +113,7 @@ export function toForgedFighter(raw: Record<string, unknown>, fallbackName = '')
   const step = STEPS.includes(raw.step as ForgedFighter['step'] & string) ? (raw.step as ForgedFighter['step']) : undefined;
   const fighter: ForgedFighter = { id: String(raw.id ?? ''), name: str(raw.name) ?? fallbackName, status };
   if (step) fighter.step = step;
-  for (const key of ['glbUrl', 'cardUrl', 'sheetUrl', 'error'] as const) {
+  for (const key of ['glbUrl', 'cardUrl', 'sheetUrl', 'error', 'sheetPartialUrl', 'previewVoxelsUrl', 'previewMeshUrl'] as const) {
     const value = str(raw[key]);
     if (value) fighter[key] = value;
   }

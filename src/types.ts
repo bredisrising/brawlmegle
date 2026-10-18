@@ -121,6 +121,8 @@ export type ForgedFighter = {
 export type ForgePreview = {
   name?: string; // the brief's fighter name and archetype, typed out
   archetype?: string;
+  dossier?: string[]; // more of the brief (build, signature details, scout report), typed out while the sheet draws
+  palette?: string[]; // the brief's colors (hex)
   sheetUrl?: string; // the sheet developing: the partial, then the final one
   sheetFinal?: boolean;
   voxelsUrl?: string; // a voxel hologram
