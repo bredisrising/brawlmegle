@@ -14,6 +14,7 @@ import { MockSource } from '../input/sources/MockSource';
 import { captureScan, forgeBusy, forgeFighter, type ScanFrames } from '../forge/forge';
 import { forgeStatus, onChange, scanStatus } from '../forge/status';
 import { fetchServerFighters, maskedFighter, saveFighter } from '../forge/roster';
+import { recordMatch } from '../forge/leaderboard';
 import { config } from '../config';
 import {
   PLAYER_IDS, opponentOf,
@@ -131,7 +132,10 @@ export class Game {
     this.unsubscribe = useGameStore.subscribe((s, prev) => {
       if (s.phase === 'ko' && prev.phase !== 'ko') {
         void this.recorder.stop({ winner: s.winner, ending: s.ending });
-        if (!this.client) this.callFinish(s.winner, s.ending);
+        if (!this.client) {
+          recordMatch(this.fighters, s.winner);
+          this.callFinish(s.winner, s.ending);
+        }
       }
       if (s.countdown === prev.countdown || s.countdown === null) return;
       this.sfx.play(s.countdown === 0 ? 'go' : 'beep');

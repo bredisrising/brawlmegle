@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { findProfile, normalizeUsername } from '../../forge/forge';
 import { listFighters } from '../../forge/roster';
+import { fighterRecord, totalMatches, winRate } from '../../forge/leaderboard';
 import { localPlayerId, useGameStore } from '../../game/store';
 import type { ForgedFighter, PlayerId } from '../../types';
 import { ACCENT } from '../accent';
@@ -300,6 +301,7 @@ function RosterStep({ player }: { player: PlayerId }) {
               <span className="max-w-full break-words bg-ink px-4 py-2 font-display text-4xl uppercase leading-[0.95] tracking-tight lg:text-6xl">
                 {preview.name}
               </span>
+              <Leaderboard fighter={preview} expanded />
             </div>
           </div>
         )}
@@ -334,6 +336,7 @@ function RosterStep({ player }: { player: PlayerId }) {
 
 function RosterTile(props: { fighter: ForgedFighter; selected: boolean; accent: string; delay: number; onFocus: () => void; onPick: () => void }) {
   const { fighter, selected, accent, delay, onFocus, onPick } = props;
+  const record = fighterRecord(fighter.id);
   return (
     <button
       data-fighter={fighter.id}
@@ -355,12 +358,33 @@ function RosterTile(props: { fighter: ForgedFighter; selected: boolean; accent: 
       <span className={`truncate px-3 py-2 font-display text-base uppercase tracking-tight sm:text-lg ${selected ? `${accent} text-ink` : 'bg-ink'}`}>
         {fighter.name}
       </span>
+      <span className="bg-ink-2 px-3 py-1 font-cond text-xs font-bold uppercase tracking-[0.14em] text-paper/65">
+        {record.wins}W · {record.losses}L · {winRate(record)}% WR
+      </span>
       {selected && (
         <span className={`absolute right-0 top-0 ${accent} px-2 py-1 font-cond text-xs font-extrabold uppercase tracking-[0.2em] text-ink`}>
           Pick
         </span>
       )}
     </button>
+  );
+}
+
+function Leaderboard({ fighter, expanded = false }: { fighter: ForgedFighter; expanded?: boolean }) {
+  const record = fighterRecord(fighter.id);
+  const matches = totalMatches(record);
+  return (
+    <div className={`border-l-4 border-hp bg-ink/90 px-4 py-3 text-paper ${expanded ? 'animate-rise [animation-delay:180ms]' : ''}`}>
+      <p className="font-cond text-xs font-extrabold uppercase tracking-[0.25em] text-hp">Career leaderboard</p>
+      <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 font-cond font-bold uppercase tracking-[0.13em]">
+        <span><b className="text-hp">{winRate(record)}%</b> win rate</span>
+        <span><b>{record.wins}</b> wins</span>
+        <span><b>{record.losses}</b> losses</span>
+        <span><b>{record.draws}</b> draws</span>
+        <span><b>{matches}</b> fights</span>
+        <span><b>{record.bestStreak}</b> best streak</span>
+      </div>
+    </div>
   );
 }
 
