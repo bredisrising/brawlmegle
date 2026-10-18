@@ -166,11 +166,20 @@ systemctl enable -q --now certbot.timer   # renewals; install skipped starting i
 echo "== nginx (port 443)"
 cat > /etc/nginx/sites-available/brawlegle-https.conf <<EOF
 server {
-  listen 127.0.0.1:8443 ssl;
+  # HTTP/2: one connection for the page's ~30 parallel requests (bundles, announcer clips, cards, fighters).
+  listen 127.0.0.1:8443 ssl http2;
   server_name $DOMAIN;
   ssl_certificate $CERT/fullchain.pem;
   ssl_certificate_key $CERT/privkey.pem;
   client_max_body_size 12m;
+  # Compress text, JSON and models on the fly (the game's JS 1.2 MB -> 0.34 MB), proxied forge answers too. Ubuntu's
+  # nginx.conf only gzips text/html. GLBs are served as octet-stream (static) or model/gltf-binary (forge).
+  gzip on;
+  gzip_comp_level 5;
+  gzip_min_length 1024;
+  gzip_proxied any;
+  gzip_vary on;
+  gzip_types text/css text/plain text/javascript application/javascript application/json image/svg+xml application/wasm model/gltf-binary application/octet-stream;
   location /ws {
     proxy_pass http://127.0.0.1:3000;
     proxy_http_version 1.1;
