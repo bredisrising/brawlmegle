@@ -66,7 +66,7 @@ export class MatchRecorder {
   private lastT: Record<PlayerId, number> = { p1: -1, p2: -1 };
   private startedAt = 0;
   private names: Record<PlayerId, string> = { p1: '', p2: '' };
-  private video: { recorder: MediaRecorder; chunks: Blob[] } | null = null;
+  private video: { recorder: MediaRecorder; chunks: Blob[]; track: MediaStreamTrack | null } | null = null;
   active = false;
 
   /** A round starts: `who` names each player (and says if one is a CPU, which has no camera to record). */
@@ -130,11 +130,11 @@ export class MatchRecorder {
 
   private startVideo(stream: MediaStream) {
     try {
-      const recorder = new MediaRecorder(stream, { mimeType: 'video/webm', videoBitsPerSecond: 400_000 });
+      const { recorder, track } = cameraRecorder(stream);
       const chunks: Blob[] = [];
       recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
       recorder.start(1000);
-      this.video = { recorder, chunks };
+      this.video = { recorder, chunks, track };
       useGameStore.setState({ recordingVideo: true });
     } catch (err) {
       console.warn('[record] video recording unavailable', err);
@@ -147,7 +147,10 @@ export class MatchRecorder {
     this.video = null;
     useGameStore.setState({ recordingVideo: false });
     const stamp = new Date(this.startedAt).toISOString().replace(/[:.]/g, '-');
-    v.recorder.onstop = () => void uploadVideo(new Blob(v.chunks, { type: 'video/webm' }), `brawlmegle-match-${stamp}-p1.webm`);
+    v.recorder.onstop = () => {
+      v.track?.stop();
+      void uploadVideo(new Blob(v.chunks, { type: 'video/webm' }), `brawlmegle-match-${stamp}-p1.webm`);
+    };
     v.recorder.stop();
   }
 }
@@ -157,16 +160,16 @@ export class MatchRecorder {
  * so both players' rounds can be checked against what the game read.
  */
 export class VideoClip {
-  private rec: { recorder: MediaRecorder; chunks: Blob[]; started: number } | null = null;
+  private rec: { recorder: MediaRecorder; chunks: Blob[]; started: number; track: MediaStreamTrack | null } | null = null;
 
   start(stream: MediaStream | null) {
     if (!stream || this.rec || !videoEnabled()) return;
     try {
-      const recorder = new MediaRecorder(stream, { mimeType: 'video/webm', videoBitsPerSecond: 400_000 });
+      const { recorder, track } = cameraRecorder(stream);
       const chunks: Blob[] = [];
       recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
       recorder.start(1000);
-      this.rec = { recorder, chunks, started: Date.now() };
+      this.rec = { recorder, chunks, started: Date.now(), track };
       useGameStore.setState({ recordingVideo: true });
     } catch (err) {
       console.warn('[record] video recording unavailable', err);
@@ -179,8 +182,35 @@ export class VideoClip {
     this.rec = null;
     useGameStore.setState({ recordingVideo: false });
     const stamp = new Date(r.started).toISOString().replace(/[:.]/g, '-');
-    r.recorder.onstop = () => void uploadVideo(new Blob(r.chunks, { type: 'video/webm' }), `brawlmegle-match-${stamp}-${tag}.webm`);
+    r.recorder.onstop = () => {
+      r.track?.stop();
+      void uploadVideo(new Blob(r.chunks, { type: 'video/webm' }), `brawlmegle-match-${stamp}-${tag}.webm`);
+    };
     r.recorder.stop();
+  }
+}
+
+/**
+ * A light recorder for the camera: a copy of its track scaled to at most 360 px tall at 15 fps (the browser scales
+ * and drops frames in its capture pipeline; the game's own track is untouched), VP8 at 250 kbps. Recording the camera
+ * as it is (up to 960x720 at 30 fps) cost an integrated GPU laptop ~4 of its ~24 poses a second; this is still
+ * plenty to label strikes by eye.
+ */
+function cameraRecorder(stream: MediaStream): { recorder: MediaRecorder; track: MediaStreamTrack | null } {
+  const source = stream.getVideoTracks()[0];
+  const track = source ? source.clone() : null;
+  if (track) {
+    track
+      .applyConstraints({ height: { max: 360 }, frameRate: { max: 15 }, resizeMode: 'crop-and-scale' } as MediaTrackConstraints)
+      .catch((err) => console.warn('[record] could not shrink the video track, recording it as is', err));
+  }
+  const mimeType = ['video/webm;codecs=vp8', 'video/webm'].find((t) => MediaRecorder.isTypeSupported(t));
+  try {
+    const recorder = new MediaRecorder(track ? new MediaStream([track]) : stream, { mimeType, videoBitsPerSecond: 250_000 });
+    return { recorder, track };
+  } catch (err) {
+    track?.stop();
+    throw err;
   }
 }
 

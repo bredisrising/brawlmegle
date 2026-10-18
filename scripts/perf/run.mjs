@@ -13,7 +13,8 @@ const arg = (name, fallback) => {
   const i = argv.indexOf(`--${name}`);
   return i < 0 ? fallback : argv[i + 1] === undefined || argv[i + 1].startsWith("--") ? true : argv[i + 1];
 };
-const URL_ = arg("url", "http://localhost:4173/?perf=1&input=mock");
+// Never record perf runs into the team's training samples (recording is on by default) unless asked to.
+const URL_ = ((u) => (/[?&]record=/.test(u) ? u : `${u}${u.includes("?") ? "&" : "?"}record=0`))(arg("url", "http://localhost:4173/?perf=1&input=mock"));
 const LABEL = arg("label", "run");
 const OUT = arg("out", null);
 const FIGHTER = arg("fighter", "a6535b14-7e5d-4b33-9685-765e2df703da"); // rico, a forged (Tripo) fighter
@@ -121,7 +122,7 @@ try {
   });
   log("gpu:", result.gpu);
 
-  await page.getByRole("button", { name: /Practice/ }).click();
+  await page.getByRole("button", { name: /Practice/ }).first().click();
   await page.getByRole("button", { name: /Load fighter/ }).click();
   await page.locator(`[data-fighter="${FIGHTER}"]`).click();
   const t0 = Date.now();

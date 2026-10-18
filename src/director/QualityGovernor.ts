@@ -9,6 +9,8 @@ const PINNED = PARAMS.has('qlevel') ? Math.max(0, Math.min(QUALITY_LEVELS.length
 
 /** Seconds of trouble before a step down, and of ease before trying a step back up (doubles after each failed try). */
 const DOWN_AFTER = 2;
+/** After a step, the pose rates (2 s windows) still describe the old level: wait this long before judging again. */
+const SETTLE_MS = 3000;
 const UP_AFTER = 8;
 const UP_AFTER_MAX = 64;
 
@@ -33,6 +35,7 @@ export class QualityGovernor {
   private good = 0;
   private upAfter = UP_AFTER;
   private lastUp = -Infinity;
+  private settleUntil = 0;
   /** Last window's numbers, for the perf overlay. */
   readonly last = { renderFps: 0, poseFps: 0, cameraFps: 0, detectMs: 0 };
 
@@ -76,7 +79,7 @@ export class QualityGovernor {
     const expected = Math.min(level.maxFps, 1000 / this.vsync);
     const pose = this.pose();
     Object.assign(this.last, { renderFps, poseFps: pose?.detectFps ?? 0, cameraFps: pose?.cameraFps ?? 0, detectMs: pose?.detectMs ?? 0 });
-    if (PINNED !== null) return;
+    if (PINNED !== null || now < this.settleUntil) return;
 
     // A window with a 100+ ms stall is a load or a one-off, not the steady cost of drawing: don't judge it.
     const steady = this.maxGap < 100;
@@ -87,8 +90,9 @@ export class QualityGovernor {
     if (pose && pose.cameraFps > 5) {
       const target = Math.min(24, pose.cameraFps * 0.8);
       poseOk = pose.detectFps >= target;
-      // Room to spare: detections finish well inside a camera frame.
-      poseRoom = poseOk && pose.detectMs < 0.6 * (1000 / pose.cameraFps);
+      // Room to try a level up: poses at (nearly) the camera's rate. Detections are pipelined, so how long each takes
+      // says little; a step up that starves them again is undone, and the next try waits twice as long.
+      poseRoom = pose.detectFps >= Math.min(26, pose.cameraFps * 0.92);
     }
 
     if (!renderOk || !poseOk) {
@@ -114,6 +118,7 @@ export class QualityGovernor {
 
   private step(level: number, why: string) {
     this.level = level;
+    this.settleUntil = performance.now() + SETTLE_MS;
     this.bad = this.good = 0;
     quality.level = level;
     quality.current = QUALITY_LEVELS[level];
