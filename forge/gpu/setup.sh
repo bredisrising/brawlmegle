@@ -15,7 +15,6 @@ ENV=$CONDA/envs/trellis2
 PY=$ENV/bin/python
 TRELLIS_COMMIT=75fbf0183001ed9876c8dbb35de6b68552ee08bd
 BLENDER_URL=https://download.blender.org/release/Blender5.2/blender-5.2.1-linux-x64.tar.xz
-POSE_URL=https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task
 mkdir -p $ROOT/models /var/lib/forge3d/jobs
 export DEBIAN_FRONTEND=noninteractive
 
@@ -62,40 +61,31 @@ if ! $PY -c "import flash_attn" 2>/dev/null; then
     || $PIP xformers==0.0.29.post3 --index-url https://download.pytorch.org/whl/cu124
 fi
 
-build() {  # name, import name, repo url or local dir, [branch]
+build() {  # name, import name, repo url or local dir, [commit, tag or branch]
   if ! $PY -c "import $2" 2>/dev/null; then
     echo "== build $1"
     rm -rf /tmp/ext/$1 && mkdir -p /tmp/ext
-    if [ -d "$3" ]; then cp -r "$3" /tmp/ext/$1; else git clone -q --recursive ${4:+-b $4} "$3" /tmp/ext/$1; fi
+    if [ -d "$3" ]; then
+      cp -r "$3" /tmp/ext/$1
+    else
+      git clone -q --recursive "$3" /tmp/ext/$1
+      if [ -n "${4:-}" ]; then
+        git -C /tmp/ext/$1 checkout -q "$4"
+        git -C /tmp/ext/$1 submodule update -q --init --recursive
+      fi
+    fi
     (cd /tmp/ext && $PY -m pip install -q /tmp/ext/$1 --no-build-isolation)
   fi
 }
+# Pinned to the commits that built and ran on 2026-10-17.
 build nvdiffrast nvdiffrast https://github.com/NVlabs/nvdiffrast.git v0.4.0
-build nvdiffrec nvdiffrec_render https://github.com/JeffreyXiang/nvdiffrec.git renderutils
-build CuMesh cumesh https://github.com/JeffreyXiang/CuMesh.git
-build FlexGEMM flex_gemm https://github.com/JeffreyXiang/FlexGEMM.git
+build nvdiffrec nvdiffrec_render https://github.com/JeffreyXiang/nvdiffrec.git b296927cc7fd01c2ac1087c8065c4d7248f72da4
+build CuMesh cumesh https://github.com/JeffreyXiang/CuMesh.git 12289e1062f0603f2f0d0771b02e1395d247f26f
+build FlexGEMM flex_gemm https://github.com/JeffreyXiang/FlexGEMM.git 6dd94a859c26ee8246888502eada3dd8ad85532e
 build o-voxel o_voxel $ROOT/TRELLIS.2/o-voxel
 
 echo "== weights"
-export HF_HUB_ENABLE_HF_TRANSFER=1 HF_HOME=$ROOT/hf
-$PY - <<'EOF'
-import json, os
-from huggingface_hub import hf_hub_download, snapshot_download
-root = "/opt/forge3d/models/TRELLIS.2-4B"
-snapshot_download("microsoft/TRELLIS.2-4B", local_dir=root)
-for ext in ("json", "safetensors"):
-    hf_hub_download("microsoft/TRELLIS-image-large", f"ckpts/ss_dec_conv3d_16l8_fp16.{ext}")
-snapshot_download("timm/vit_large_patch16_dinov3.lvd1689m")
-snapshot_download("ZhengPeng7/BiRefNet")
-# DINOv3 from timm's ungated copy, background removal with MIT BiRefNet (see gen3d.py).
-p = f"{root}/pipeline.json"
-cfg = json.load(open(p))
-cfg["args"]["image_cond_model"] = {"name": "TimmDinoV3FeatureExtractor", "args": {"model_name": "timm/vit_large_patch16_dinov3.lvd1689m"}}
-cfg["args"]["rembg_model"] = {"name": "BiRefNet", "args": {"model_name": "ZhengPeng7/BiRefNet"}}
-json.dump(cfg, open(p, "w"), indent=4)
-print("pipeline.json patched")
-EOF
-[ -f $ROOT/models/pose_landmarker_heavy.task ] || curl -sSfL -o $ROOT/models/pose_landmarker_heavy.task $POSE_URL
+HF_HOME=$ROOT/hf $PY "$SRC/weights.py" $ROOT/models/TRELLIS.2-4B $ROOT/models/pose_landmarker_heavy.task
 
 if [ ! -x $ROOT/blender/blender ]; then
   echo "== Blender"
@@ -105,7 +95,7 @@ fi
 
 echo "== service"
 mkdir -p $ROOT/app
-cp "$SRC"/server.py "$SRC"/gen3d.py "$SRC"/landmarks.py "$SRC"/rig_blender.py $ROOT/app/
+cp "$SRC"/server.py "$SRC"/gen3d.py "$SRC"/landmarks.py "$SRC"/rig_blender.py "$SRC"/weights.py $ROOT/app/
 if [ ! -f /etc/forge3d.env ]; then
   umask 077
   cat > /etc/forge3d.env <<EOF

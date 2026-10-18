@@ -158,6 +158,11 @@ def load():
     global generator, landmarker
     try:
         start = time.time()
+        if os.environ.get("FORGE3D_DOWNLOAD") == "1":  # the HF Space fetches its weights on the first start
+            from weights import ensure
+
+            ensure(MODEL_DIR, POSE_MODEL)
+            log(f"weights ready in {time.time() - start:.0f}s")
         landmarker = Landmarker(POSE_MODEL)
         if os.environ.get("FORGE3D_FAKE_GLB"):
             # Dev mode without a GPU: every "generated" model is this GLB (the HTTP, landmark and rig steps are real).
