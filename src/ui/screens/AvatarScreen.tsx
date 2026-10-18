@@ -6,6 +6,8 @@ import { fighterRecord, totalMatches, winRate } from '../../forge/leaderboard';
 import { localPlayerId, useGameStore } from '../../game/store';
 import type { ForgedFighter, PlayerId } from '../../types';
 import { ACCENT } from '../accent';
+import { FighterShowcase } from '../FighterShowcase';
+import { PLAYER_COLORS } from '../../game/constants';
 import { Arrow, ArcadeButton, TextButton } from '../ArcadeButton';
 import { useGame } from '../GameContext';
 
@@ -83,7 +85,7 @@ function Heading({ step, top, bottom, accent }: { step: string; top: string; bot
   return (
     <div className="animate-in-l">
       <p className="font-cond text-sm font-bold uppercase tracking-[0.3em] text-paper/50">{step}</p>
-      <h2 className="mt-2 font-display text-[clamp(3rem,8.5vw,8.5rem)] uppercase leading-[0.86] tracking-tighter">
+      <h2 className="mt-2 font-display text-[clamp(3rem,min(8.5vw,15vh),8.5rem)] uppercase leading-[0.86] tracking-tighter">
         {top}
         <br />
         <span className={accent}>{bottom}</span>
@@ -94,27 +96,33 @@ function Heading({ step, top, bottom, accent }: { step: string; top: string; bot
 
 function ChooseStep({ player, onScan, onExisting }: { player: PlayerId; onScan: () => void; onExisting: () => void }) {
   return (
-    <div className="flex flex-1 flex-col justify-center gap-10 lg:gap-14">
-      <Heading step={`${ACCENT[player].tag} · Step 01`} top="Choose" bottom="your fighter" accent="text-hp" />
-      <div className="grid w-full max-w-5xl grid-cols-1 gap-4 sm:grid-cols-[1.3fr_1fr] sm:gap-5">
-        <ChoiceCard
-          index="01"
-          title="Enter"
-          body="Type your username. Your fighter comes back, or you get scanned and forged into one."
-          fill="hover:bg-hp focus-visible:bg-hp"
-          bar="bg-hp"
-          onClick={onScan}
-          className="animate-rise [animation-delay:120ms]"
-        />
-        <ChoiceCard
-          index="02"
-          title="Load fighter"
-          body="Pick a fighter saved to the memory card, or a house fighter."
-          fill="hover:bg-paper focus-visible:bg-paper"
-          bar={ACCENT[player].bg}
-          onClick={onExisting}
-          className="animate-rise sm:mt-12 [animation-delay:200ms]"
-        />
+    <div className="flex flex-1 items-center gap-12">
+      {/* Left: the two ways in. Right (wide screens): the memory card's fighters on a turntable. */}
+      <div className="flex min-w-0 flex-1 flex-col justify-center gap-[min(2.5rem,5vh)] lg:gap-[min(3.5rem,6vh)]">
+        <Heading step={`${ACCENT[player].tag} · Step 01`} top="Choose" bottom="your fighter" accent="text-hp" />
+        <div className="grid w-full max-w-5xl grid-cols-1 gap-4 sm:grid-cols-[1.3fr_1fr] sm:gap-5">
+          <ChoiceCard
+            index="01"
+            title="Enter"
+            body="Type your username. Your fighter comes back, or you get scanned and forged into one."
+            fill="hover:bg-hp focus-visible:bg-hp"
+            bar="bg-hp"
+            onClick={onScan}
+            className="animate-rise [animation-delay:120ms]"
+          />
+          <ChoiceCard
+            index="02"
+            title="Load fighter"
+            body="Pick a fighter saved to the memory card, or a house fighter."
+            fill="hover:bg-paper focus-visible:bg-paper"
+            bar={ACCENT[player].bg}
+            onClick={onExisting}
+            className="animate-rise sm:mt-[min(3rem,6vh)] [animation-delay:200ms]"
+          />
+        </div>
+      </div>
+      <div className="hidden shrink-0 lg:block">
+        <FighterShowcase color={ACCENT[player].bg} hex={PLAYER_COLORS[player]} other={PLAYER_COLORS[player === 'p1' ? 'p2' : 'p1']} />
       </div>
     </div>
   );
@@ -125,7 +133,7 @@ function ChoiceCard(props: { index: string; title: string; body: string; fill: s
   return (
     <button
       onClick={onClick}
-      className={`group cut relative flex min-h-56 flex-col justify-between gap-6 bg-ink-3 p-6 text-left outline-none transition-colors duration-150 [--cut:24px] sm:p-8 ${fill} ${className}`}
+      className={`group cut relative flex min-h-[min(14rem,30vh)] flex-col justify-between gap-6 bg-ink-3 p-6 text-left outline-none transition-colors duration-150 [--cut:24px] sm:p-8 ${fill} ${className}`}
     >
       <div className="flex w-full items-center justify-between font-cond text-sm font-bold tracking-[0.3em] text-paper/50 group-hover:text-ink/60 group-focus-visible:text-ink/60">
         {index}
