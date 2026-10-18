@@ -20,17 +20,23 @@ const flag = (name, fallback) => (process.env[name] ?? (fallback ? "1" : "0")) !
  */
 const SHEET_SIZE = process.env.FORGE_SHEET_SIZE ?? (GOLDSRC ? "1024x1536" : "1536x2304");
 const CARD_SIZE = "1024x1536";
-/** Draw the back of the sheet too and build the model from front + back (multiview): a real back and hair from behind. */
-const MULTIVIEW = flag("FORGE_MULTIVIEW", !GOLDSRC);
+/**
+ * Draw the back of the sheet too and build the model from front + back (multiview): a real back and hair from
+ * behind. Off by default for speed (+20 s on the player's wait); FORGE_MULTIVIEW=1 turns it on.
+ */
+const MULTIVIEW = flag("FORGE_MULTIVIEW", false);
 
 // --- Tripo (model sheet -> textured 3D model -> Mixamo-rigged GLB) ---------------------------------------
 // https://developers.tripo3d.ai/llms.txt. Output URLs expire after 5 minutes, so models are downloaded at once.
 const TRIPO = "https://openapi.tripo3d.ai/v3";
 const TRIPO_MODEL = process.env.FORGE_TRIPO_MODEL ?? "v3.1-20260211";
-/** Enough for the Ultra geometry's folds and faces; the rigger and the browser handle it fine. */
-const FACE_LIMIT = Number(process.env.FORGE_FACE_LIMIT ?? (GOLDSRC ? 30000 : 60000));
-/** "detailed" is Tripo's Ultra geometry (+20 credits, about +12 s): crisper faces, ears, folds. "standard" saves both. */
-const GEOMETRY_QUALITY = process.env.FORGE_GEOMETRY_QUALITY ?? (GOLDSRC ? "standard" : "detailed");
+/** 60000 suits Ultra geometry (FORGE_GEOMETRY_QUALITY=detailed); standard geometry doesn't use more than this. */
+const FACE_LIMIT = Number(process.env.FORGE_FACE_LIMIT ?? (GOLDSRC ? 30000 : 40000));
+/**
+ * "detailed" is Tripo's Ultra geometry (+20 credits, about +12 s): crisper faces, ears, folds. Standard by default:
+ * the new sheet and delight off carry most of the look, and players are waiting (research/forge-quality.md).
+ */
+const GEOMETRY_QUALITY = process.env.FORGE_GEOMETRY_QUALITY ?? "standard";
 /**
  * Delight strips the lighting out of the sheet before texturing. Off keeps the sheet's painted shading (folds,
  * brows, cheekbones), which is most of what made the textures look flat. On is Tripo's default.

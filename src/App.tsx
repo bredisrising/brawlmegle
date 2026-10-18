@@ -17,6 +17,7 @@ import { PoseDebugOverlay } from './ui/PoseDebugOverlay';
 import { CameraPip } from './ui/CameraPip';
 import { MoveGuide } from './ui/MoveGuide';
 import { Callout, ComboCounter } from './ui/ComboCounter';
+import { VsIntro } from './ui/VsIntro';
 
 export default function App() {
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -55,6 +56,7 @@ export default function App() {
                 <KOOverlay />
                 <HUD />
                 <MoveGuide />
+                <VsIntro />
                 <DebugHint />
               </>
             )}

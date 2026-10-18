@@ -1,8 +1,10 @@
+import { COUNTDOWN_FROM } from '../game/constants';
 import { useGameStore } from '../game/store';
 
 export function Countdown() {
   const countdown = useGameStore((s) => s.countdown);
-  if (countdown === null) return null;
+  // The first beat of the countdown is the VS screen (VsIntro).
+  if (countdown === null || countdown === COUNTDOWN_FROM) return null;
   const fight = countdown === 0;
 
   return (

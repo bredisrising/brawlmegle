@@ -24,6 +24,8 @@ import type { MatchPlayer, MirrorEvent, MirrorFrame } from '../net/protocol';
 import { HostSession } from './HostSession';
 import { localPlayerId, pushPopup, updatePlayer, useGameStore } from './store';
 
+/** How long the VS screen shows before 2, 1, FIGHT. */
+const VS_SECONDS = 2.4;
 /** Roughly head height between the two fighters. */
 const ARENA_CENTER = new THREE.Vector3(0, 0.5, 0);
 const ARENA_FLOOR = new THREE.Vector3(0, 0.01, 0);
@@ -324,7 +326,8 @@ export class Game {
     const { phase, countdown } = useGameStore.getState();
     this.phaseTimer += SIM_DT;
 
-    if (phase === 'countdown' && this.phaseTimer >= 1) {
+    // The first beat is the VS screen, so it holds longer.
+    if (phase === 'countdown' && this.phaseTimer >= (countdown === COUNTDOWN_FROM ? VS_SECONDS : 1)) {
       this.phaseTimer = 0;
       const next = (countdown ?? 1) - 1;
       useGameStore.setState(next <= 0 ? { phase: 'fighting', countdown: 0 } : { countdown: next });
