@@ -97,8 +97,24 @@ async function local(path, init = {}, timeoutMs = 20_000) {
 }
 
 /**
+ * The GPU box's own account of its rig (forge/gpu/rig_blender.py): which weighting path made it ("bone-heat",
+ * "bone-heat-retry" or "envelope"), whether its weight check passed, and the paths it tried. Null from an older box.
+ */
+export function boxRig(report) {
+  if (!report?.rig) return null;
+  return {
+    path: report.rig,
+    ok: Boolean(report.rig_ok),
+    attempt: report.attempt ?? 1,
+    tried: (report.attempts ?? []).map((a) => `${a.path}${a.ok ? "" : " (failed)"}`),
+    ...(report.rig_ok ? {} : { fails: report.check?.fails ?? [] }),
+    minCoverage: report.check?.min_coverage,
+  };
+}
+
+/**
  * Model sheet -> rigged GLB on our GPU box. Same result as makeModel ({ model, rigged }), plus the box's own
- * timings. Throws on any failure, or if it isn't done within FORGE_3D_TIMEOUT, so the caller can fall back to Tripo.
+ * timings and its rig report (`rig`, see boxRig). Throws on any failure, or if it isn't done within FORGE_3D_TIMEOUT, so the caller can fall back to Tripo.
  * With `model` (a GLB), the box only rigs that model (forge/gpu/rescue.mjs).
  */
 export async function makeModelLocal(sheet, onStep, model = null, { onPreview, settings, rigAttempt } = {}) {
@@ -142,9 +158,11 @@ export async function makeModelLocal(sheet, onStep, model = null, { onPreview, s
       const rigged = await get("rigged.glb");
       // The same model without its skeleton, for a re-rig if the rig check turns this one down.
       const unrigged = () => get("model.glb");
-      if (job.optimized) return { model: null, rigged, optimized: true, timings: job.timings, original: () => get("rigged.orig.glb"), unrigged };
+      const rig = boxRig(job.report);
+      if (rig && (rig.path !== "bone-heat" || !rig.ok)) console.warn(`GPU rig ${id.slice(0, 8)}: ${JSON.stringify(rig)}`);
+      if (job.optimized) return { model: null, rigged, optimized: true, timings: job.timings, original: () => get("rigged.orig.glb"), unrigged, rig };
       const plain = await get("model.glb");
-      return { model: plain, rigged, timings: job.timings, unrigged: async () => plain };
+      return { model: plain, rigged, timings: job.timings, unrigged: async () => plain, rig };
     }
   }
 }
@@ -324,7 +342,8 @@ export async function gateRig(job, first, rescues, store) {
       problems: [{ level: "fail", message: `checker crashed: ${err.message}` }],
       stats: { ms: 0 },
     }));
-    attempts.push(rigSummary(candidate.engine, report));
+    // The GPU box's weighting path, next to the check's verdict on it.
+    attempts.push({ ...rigSummary(candidate.engine, report), ...(candidate.rig ? { rig: candidate.rig.path } : {}) });
     if (report.ok) {
       job.rigCheck = { ...attempts.at(-1), ...(attempts.length > 1 ? { attempts } : {}) };
       if (attempts.length > 1) console.warn(`forge ${id}: rig check passed on attempt ${attempts.length} (${candidate.engine}, score ${report.score})`);
@@ -633,6 +652,7 @@ export async function runForge(job, frames, store) {
         .then((out) => {
           job.engine3d = ENGINE_3D;
           job.gpuTimings = out.timings;
+          if (out.rig) job.gpuRig = out.rig;
           job.glbOptimized = Boolean(out.optimized);
           original = out.original ?? null;
           return out;
@@ -696,6 +716,7 @@ export async function runForge(job, frames, store) {
                 }
                 if (passed !== first) {
                   job.rigEngine = passed.engine;
+                  if (passed.rig) job.gpuRig = passed.rig;
                   job.glbOptimized = Boolean(passed.optimized);
                   original = passed.original ?? null;
                 }

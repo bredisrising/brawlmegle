@@ -1,7 +1,8 @@
 """
 Forge 3D service: model sheet in, Mixamo-rigged GLB out, on one GPU box (see README.md).
 
-    POST /jobs                 {"image": base64 PNG/JPEG model sheet, "model"?: base64 GLB to rig only}  ->  202 {"id"}
+    POST /jobs                 {"image": base64 PNG/JPEG model sheet, "model"?: base64 GLB to rig only,
+                                "rigAttempt"?: 2 for a re-rig the forge's rig check asked for}  ->  202 {"id"}
     GET  /jobs/<id>            ->  {"status": queued|model|rig|done|failed, "timings", "error", "rigged", "queued"}
     GET  /jobs/<id>/rigged.glb ->  the rigged model (model.glb: the same model without a skeleton)
     GET  /health               ->  {"ok", "ready", "queued", "settings"}
@@ -126,11 +127,12 @@ def gpu_worker():
             job.update(status="failed", error=f"model: {err}")
 
 
-def rig(job_dir, out_name="rigged.glb"):
-    """Blender rig step. Returns the rigger's report, raises on failure."""
+def rig(job_dir, out_name="rigged.glb", attempt=1):
+    """Blender rig step. Returns the rigger's report ("rig": which weighting path made it, "rig_ok": whether its
+    weight check passed), raises on failure. attempt 2+: the forge's re-rig after its own rig check failed."""
     cmd = [BLENDER, "-b", "--factory-startup", "--python-exit-code", "1", "-P", os.path.join(HERE, "rig_blender.py"), "--",
            os.path.join(job_dir, "raw.glb"), os.path.join(job_dir, "landmarks.json"), os.path.join(job_dir, out_name),
-           "--static", os.path.join(job_dir, "model.glb"), "--yaw", str(SETTINGS["yaw"])]
+           "--static", os.path.join(job_dir, "model.glb"), "--yaw", str(SETTINGS["yaw"]), "--attempt", str(int(attempt))]
     # Without a display: Blender stalls ~30 s at startup when it can see one (WSLg), even in background mode.
     env = {k: v for k, v in os.environ.items() if k not in ("DISPLAY", "WAYLAND_DISPLAY")}
     out = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
@@ -164,8 +166,13 @@ def rig_worker():
             job["status"] = "rig"
             start = time.time()
             job["lm_thread"].join()
-            job["report"] = rig(job["dir"])
+            job["report"] = report = rig(job["dir"], attempt=job.get("rig_attempt", 1))
             job["timings"]["rig"] = round(time.time() - start, 2)
+            tried = " > ".join(a["path"] + ("" if a["ok"] else " (failed)") for a in report.get("attempts", []))
+            if not report.get("rig_ok", True):
+                log(job["id"][:8], "RIG CHECK FAILED on every path:", tried, report["check"].get("fails"))
+            elif report.get("rig") != "bone-heat":
+                log(job["id"][:8], f"rig: {report.get('rig')} (attempt {job.get('rig_attempt', 1)}: {tried})")
             job["rigged"] = True
             optimize(job)
             job["status"] = "done"
@@ -341,6 +348,9 @@ class Handler(BaseHTTPRequestHandler):
         sheet.save(os.path.join(job_dir, "sheet.png"))
         job = {"id": job_id, "dir": job_dir, "sheet": sheet, "status": "queued", "created": time.time(), "timings": {}, "rigged": False,
                "previews": {}, "optimized": False}
+        # rigAttempt 2+: the forge's rig check turned down this model's first rig, so weight it another way.
+        if isinstance(body.get("rigAttempt"), int) and body["rigAttempt"] > 1:
+            job["rig_attempt"] = min(body["rigAttempt"], 9)
         # Per-job generator settings (A/B tests without a restart): pipeline, steps, faces, texture, remesh.
         if isinstance(body.get("settings"), dict):
             job["settings"] = {k: v for k, v in body["settings"].items() if k in ("pipeline", "steps", "faces", "texture", "remesh")}
