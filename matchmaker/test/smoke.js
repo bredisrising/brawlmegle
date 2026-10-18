@@ -2,22 +2,28 @@
 // Usage: npm test, or MATCHMAKER_URL=wss://host/ws npm test to check a deployed server.
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { spawn } from "node:child_process";
 import { WebSocket } from "ws";
 
 const SECRET = "test-secret";
 let url = process.env.MATCHMAKER_URL;
 let child;
+let httpBase;
 
 if (!url) {
   const port = 30000 + Math.floor(Math.random() * 10000);
+  const samples = fs.mkdtempSync(path.join(os.tmpdir(), "mm-samples-"));
   child = spawn(process.execPath, ["server.js"], {
     cwd: new URL("..", import.meta.url),
-    env: { ...process.env, PORT: String(port), TURN_HOST: "turn.test", TURN_SECRET: SECRET },
+    env: { ...process.env, PORT: String(port), TURN_HOST: "turn.test", TURN_SECRET: SECRET, SAMPLES_DIR: samples },
     stdio: ["ignore", "pipe", "inherit"],
   });
   await new Promise((resolve) => child.stdout.once("data", resolve));
   url = `ws://127.0.0.1:${port}/ws`;
+  httpBase = `http://127.0.0.1:${port}`;
 }
 
 /** Opens a client that records every message and can wait for the next one of a type. */
@@ -128,7 +134,34 @@ try {
   await host.next("peer-joined");
   console.log("ok  rejoin after drop");
 
-  for (const x of [a, b, c, host, third]) x.close();
+  // A host whose socket dropped takes its code back with the token, so the client can still rejoin.
+  host.send({ type: "host" });
+  const again = await host.next("room");
+  assert.equal(again.code, code);
+  assert.ok(again.token);
+  const host2 = await client();
+  host2.send({ type: "host", code: code.toLowerCase(), token: again.token });
+  assert.equal((await host2.next("room")).code, code, "reclaimed while the old socket is still open");
+  const guest2 = await client();
+  guest2.send({ type: "join", code });
+  await guest2.next("joined");
+  await host2.next("peer-joined");
+  const host3 = await client();
+  host3.send({ type: "host", code, token: "forged" });
+  assert.notEqual((await host3.next("room")).code, code, "a wrong token gets a new code");
+  console.log("ok  host reclaims its code");
+
+  if (httpBase) {
+    // Training-sample uploads: a `null` header used to crash the whole server.
+    const bad = await fetch(`${httpBase}/samples`, { method: "POST", body: "null\n" });
+    assert.equal(bad.status, 400);
+    const good = await fetch(`${httpBase}/samples`, { method: "POST", body: '{"labels":["jab"]}\n{"t":0}\n' });
+    assert.equal(good.status, 201);
+    assert.equal((await fetch(`${httpBase}/health`)).status, 200);
+    console.log("ok  sample uploads");
+  }
+
+  for (const x of [a, b, c, host, third, host2, guest2, host3]) x.close();
   console.log("all passed");
 } finally {
   child?.kill("SIGTERM");
