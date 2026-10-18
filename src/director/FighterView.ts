@@ -11,6 +11,8 @@ import { quality } from './quality';
 import { HIP_HEIGHT, applyAction, stance, type HitInfo, type Motion } from './fightPose';
 import { Ragdoll } from './ragdoll';
 
+const DEFAULT_MODEL = `${import.meta.env.BASE_URL}models/default.glb`;
+
 /** What the view needs each sim tick. */
 export type ViewInput = {
   state: Readonly<FighterState>;
@@ -141,7 +143,15 @@ export class FighterView {
   /** Load a selected avatar; fighters without a model keep the joint placeholder. */
   async setFighter(fighter: ForgedFighter) {
     const version = ++this.loadVersion;
-    const model = fighter.glbUrl ? (await loadModel(fighter.glbUrl)).scene : null;
+    let url = fighter.glbUrl;
+    let model = url ? (await loadModel(url)).scene : null;
+    // A forge whose rig failed (e.g. Tripo out of credits) is a statue with no bones: fight as the default fighter.
+    if (model && url?.includes('/api/forge/') && !model.getObjectByProperty('isSkinnedMesh', true)) {
+      console.warn(`[fighter] ${fighter.name}'s model has no rig; using the default fighter's body`);
+      disposeObject(model);
+      url = DEFAULT_MODEL;
+      model = (await loadModel(url)).scene;
+    }
     if (version !== this.loadVersion) {
       if (model) disposeObject(model);
       return;
@@ -168,7 +178,7 @@ export class FighterView {
         }
       });
       // Forged fighters (Tripo) are exported facing +x; this fighter space faces +z toward the opponent.
-      if (fighter.glbUrl?.includes('/api/forge/')) model.rotation.y = -Math.PI / 2;
+      if (url?.includes('/api/forge/')) model.rotation.y = -Math.PI / 2;
       if (config.outline) this.addOutlines(model);
       // Rest data is captured with the body upright and unshifted.
       this.body.position.set(0, 0, 0);

@@ -1,7 +1,7 @@
 // K.O. visual check: a Practice fight in a browser with --remote-debugging-port, the CPU finishes P1, and
 // screenshots every ~120 ms through the fall and the replay.  node ko-shot.mjs <port> <out prefix>
 import { chromium } from "playwright-core";
-const [port, out] = process.argv.slice(2);
+const [port, out, fighter = "a6535b14-7e5d-4b33-9685-765e2df703da"] = process.argv.slice(2);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
 const context = await browser.newContext({ viewport: { width: 1100, height: 620 } });
@@ -11,7 +11,7 @@ await page.goto("http://localhost:5173/?perf=1&input=mock&quality=high", { waitU
 await page.waitForFunction(() => window.__brawl, null, { timeout: 60000 });
 await page.getByRole("button", { name: /Practice/ }).click();
 await page.getByRole("button", { name: /Load fighter/ }).click();
-await page.locator(`[data-fighter="a6535b14-7e5d-4b33-9685-765e2df703da"]`).click();
+await page.locator(`[data-fighter="${fighter}"]`).click();
 await page.waitForFunction(() => { const s = window.__brawl.store.getState(); return s.phase === "fighting" && s.countdown === null; }, null, { timeout: 120000, polling: 250 });
 await sleep(1500);
 await page.evaluate(() => {
