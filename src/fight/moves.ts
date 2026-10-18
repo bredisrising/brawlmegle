@@ -52,6 +52,13 @@ export const FIGHT = {
   staminaRegenDelay: 0.6, // seconds after the last attack
   counterMultiplier: 1.5,
   blockstun: 8,
+  /**
+   * Hitting a guard costs the attacker: no chaining off a blocked punch, this many extra recovery frames (so the
+   * blocker is free first and can punish), extra stamina, and it counts as a miss for mashing. Spamming a blocker
+   * gets slower and weaker, and letting go of the guard to swing back is the right answer, not a trap.
+   */
+  blockRecovery: 7,
+  blockCost: 4,
   /** Slip and duck stay effective this many frames. */
   evadeFrames: 15,
   /** Attacks thrown while busy wait this long for the fighter to be free (or to chain), so none get lost. */

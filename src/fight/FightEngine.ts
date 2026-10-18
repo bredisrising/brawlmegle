@@ -15,8 +15,10 @@ type Attack = {
   move: AttackMove; hand: Hand; spec: MoveSpec; startup: number; scale: number; height: 'head' | 'body'; lunge: number;
   /** Resolved against the defender (hit, blocked or evaded). */
   done: boolean;
-  /** Connected: hit or blocked. A punch that connected chains into the next one straight away. */
+  /** Hit: a punch that landed chains into the next one straight away. */
   landed: boolean;
+  /** Blocked: no chaining, a longer recovery (see FIGHT.blockRecovery). */
+  blocked: boolean;
 };
 type Fighter = {
   x: number;
@@ -77,7 +79,7 @@ export class FightEngine {
     const a = f.attack;
     const length = f.phase === 'startup' ? a?.startup
       : f.phase === 'active' ? a?.spec.active
-      : f.phase === 'recovery' ? a?.spec.recovery
+      : f.phase === 'recovery' && a ? recoveryOf(a)
       : f.phase === 'hitstun' || f.phase === 'blockstun' ? f.frame + f.stun
       : undefined;
     return {
@@ -173,6 +175,7 @@ export class FightEngine {
       lunge: this.lungeFor(c, spec),
       done: false,
       landed: false,
+      blocked: false,
     };
     f.phase = 'startup';
     f.frame = 0;
@@ -226,7 +229,7 @@ export class FightEngine {
         }
         break;
       case 'recovery':
-        if (f.frame >= f.attack!.spec.recovery) this.idle(f);
+        if (f.frame >= recoveryOf(f.attack!)) this.idle(f);
         break;
     }
   }
@@ -253,7 +256,7 @@ export class FightEngine {
   private chainable(f: Fighter, next: AttackCommand) {
     const a = f.attack;
     if (f.phase !== 'recovery' || !a || f.chain >= FIGHT.maxChain) return false;
-    if (!PUNCHES.has(a.move) || !PUNCHES.has(next.move)) return false;
+    if (!PUNCHES.has(a.move) || !PUNCHES.has(next.move) || a.blocked) return false;
     return a.landed || f.frame >= a.spec.recovery * 0.5;
   }
 
@@ -285,9 +288,9 @@ export class FightEngine {
     if (stances[defenderId]?.guard && canBlock) {
       const chip = Math.max(1, Math.round(a.spec.chip * a.scale));
       g.hp = Math.max(0, g.hp - chip);
-      a.landed = true;
-      f.lastLanded = true;
-      f.mash = 0;
+      // Into a guard: the attacker is left open (longer recovery, no chain) and pays for it (FIGHT.blockRecovery).
+      a.blocked = true;
+      f.stamina = Math.max(0, f.stamina - FIGHT.blockCost);
       this.gainMeter(id, FIGHT.meterOnBlock);
       this.gainMeter(defenderId, FIGHT.meterOnBlock);
       g.phase = 'blockstun';
@@ -443,3 +446,8 @@ function fresh(x: number): Fighter {
 
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 const finiteOr = (v: number, fallback: number) => (Number.isFinite(v) ? v : fallback);
+
+/** Recovery frames for an attack: longer after hitting a guard. */
+function recoveryOf(a: Attack) {
+  return a.spec.recovery + (a.blocked ? FIGHT.blockRecovery : 0);
+}

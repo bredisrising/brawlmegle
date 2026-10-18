@@ -140,11 +140,12 @@ describe('combos: fast punches all come out', () => {
     const events: { tick: number; ev: FightEvent }[] = [];
     for (let i = 0; i < 80; i++) {
       const cmds = i === 0 ? [attack('p1', 'jab', { hand: 'L' })] : i === 5 ? [attack('p1', 'cross')] : [];
-      for (const ev of e.step(cmds, { p1: stance('p1'), p2: stance('p2', { guard: true }) })) events.push({ tick: i, ev });
+      for (const ev of e.step(cmds, { p1: stance('p1'), p2: stance('p2') })) events.push({ tick: i, ev });
     }
+    const hit = events.find((x) => x.ev.type === 'hit');
     const cross = events.find((x) => x.ev.type === 'startup' && x.ev.move === 'cross');
-    // The cross starts as the jab's recovery begins (+ block hit-stop), not after its recovery frames.
-    expect(cross!.tick).toBeLessThan(MOVES.jab.startup + MOVES.jab.active + 3 + 4);
+    // The cross starts as the jab's recovery begins (+ the hit's hit-stop), not after its recovery frames.
+    expect(cross!.tick).toBeLessThan(MOVES.jab.startup + MOVES.jab.active + (hit!.ev.hitstopFrames ?? 0) + 4);
   });
 
   test('a whiffed punch can only chain from halfway through its recovery', () => {
@@ -259,11 +260,11 @@ describe('mashing: flailing gets slower and weaker; a clean hit resets it', () =
   /** Ticks from a jab's command to its active frame, after `whiffs` jabs thrown into the air in a row. */
   function jabAfterWhiffs(whiffs: number, land = false) {
     const e = engineAt(land ? 0.7 : 1.4);
-    // Landing: the dummy blocks (it connects, and the small blockstun push keeps it in range).
-    const p2 = stance('p2', { guard: land });
+    // Landing: the dummy takes the hits (healed between swings so it never goes down).
+    const p2 = stance('p2');
     const startOf = () => {
       for (let i = 0; i < 60; i++) {
-        e.step(i === 0 ? [attack('p1', 'jab', { hand: 'L' })] : [], { p1: stance('p1'), p2 });
+        e.step(i === 0 ? [attack('p1', 'jab', { hand: 'L', autoLunge: land })] : [], { p1: stance('p1'), p2 });
         if (e.state('p1').phase === 'active') return i;
       }
       return -1;
@@ -288,5 +289,62 @@ describe('mashing: flailing gets slower and weaker; a clean hit resets it', () =
 
   test('punches that connect never build it up', () => {
     expect(jabAfterWhiffs(4, true)).toBe(jabAfterWhiffs(0, true));
+  });
+});
+
+describe('blocking: hitting a guard costs the attacker', () => {
+  test("a blocked punch doesn't chain: the next one waits out a longer recovery", () => {
+    const e = engineAt(0.7);
+    const events: { tick: number; ev: FightEvent }[] = [];
+    for (let i = 0; i < 90; i++) {
+      const cmds = i === 0 ? [attack('p1', 'jab', { hand: 'L' })] : i === 5 ? [attack('p1', 'cross')] : [];
+      for (const ev of e.step(cmds, { p1: stance('p1'), p2: stance('p2', { guard: true }) })) events.push({ tick: i, ev });
+    }
+    const blocked = events.find((x) => x.ev.type === 'blocked')!;
+    const cross = events.find((x) => x.ev.type === 'startup' && x.ev.move === 'cross')!;
+    expect(cross.tick - blocked.tick).toBeGreaterThanOrEqual(MOVES.jab.recovery + FIGHT.blockRecovery);
+  });
+
+  test('after a blocked punch the blocker is free first: letting go to swing back beats the follow-up', () => {
+    const e = engineAt(0.7);
+    const events: { tick: number; ev: FightEvent }[] = [];
+    let guard = true;
+    let swung = false;
+    for (let i = 0; i < 90; i++) {
+      // P1 spams: a jab, then another queued right behind it. P2 blocks the first, then drops the guard and jabs
+      // the moment blockstun ends.
+      const cmds = i === 0 ? [attack('p1', 'jab', { hand: 'L' })] : i === 4 ? [attack('p1', 'jab', { hand: 'L' })] : [];
+      if (!swung && !guard && e.state('p2').phase === 'idle') {
+        cmds.push(attack('p2', 'jab', { hand: 'L' }));
+        swung = true;
+      }
+      for (const ev of e.step(cmds, { p1: stance('p1'), p2: stance('p2', { guard }) })) {
+        events.push({ tick: i, ev });
+        if (ev.type === 'blocked') guard = false;
+      }
+    }
+    const p2Hit = events.find((x) => (x.ev.type === 'hit' || x.ev.type === 'counter') && x.ev.attacker === 'p2');
+    const p1Hit = events.find((x) => (x.ev.type === 'hit' || x.ev.type === 'counter') && x.ev.attacker === 'p1');
+    expect(p2Hit).toBeDefined();
+    // Caught in the attacker's longer recovery: a counter hit, and the spammer's follow-up never lands first.
+    expect(p2Hit!.ev.type).toBe('counter');
+    if (p1Hit) expect(p1Hit.tick).toBeGreaterThan(p2Hit!.tick);
+  });
+
+  test('swinging into a guard over and over builds the mash penalty and drains stamina', () => {
+    const e = engineAt(0.7);
+    const startups: number[] = [];
+    const stamina0 = e.state('p1').stamina;
+    for (let n = 0; n < 4; n++) {
+      let started = -1;
+      for (let i = 0; i < 80; i++) {
+        e.step(i === 0 ? [attack('p1', 'jab', { hand: 'L', autoLunge: true })] : [], { p1: stance('p1'), p2: stance('p2', { guard: true }) });
+        if (started < 0 && e.state('p1').phase === 'active') started = i;
+        if (started >= 0 && e.state('p1').phase === 'idle') break;
+      }
+      startups.push(started);
+    }
+    expect(startups[3]).toBeGreaterThan(startups[0]);
+    expect(e.state('p1').stamina).toBeLessThan(stamina0 - 4 * (MOVES.jab.stamina + FIGHT.blockCost) + 10);
   });
 });
