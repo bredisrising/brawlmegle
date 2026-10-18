@@ -4,11 +4,17 @@ _2026-10-17. Measured offline on this branch's code (`research/models/`, `test/r
 
 ## Bottom line
 
-1. **A learned classifier doesn't beat the rules today, and the data is the reason.** Trained on synthetic clips, a gradient-boosted model or a tiny CNN is near-perfect on held-out synthetic data (fake rejection AUC 0.96, 98–99 % style). On real clips it falls to chance: fake AUC 0.50–0.66, and its style accuracy is at best equal to the rules (25/38 vs the rules' 25/38). The synthetic fakes are 85 % waves and head scratches. Real fakes are mostly something else: 38 % are the *other arm* moving during a punch (3 % of synthetic fakes), and the rest are slow form, ducks and blocks.
-2. **More real labeled data is what moves the needle.** With one real guided session plus two stock clips in training, the CNN's fake AUC on the held-out session rose to 0.75. On that session it rejected 12 of 15 fakes while keeping 11 of 15 real strikes. That test set is small (30 events), so it's a trend, not a result. The guided test is the right tool for collecting this data; it needs about 20 more sessions before a learned gate is worth shipping.
+1. **A learned classifier doesn't beat the rules today, and the data is the reason.** Trained on synthetic clips, a gradient-boosted model or a tiny CNN is near-perfect on held-out synthetic data (fake rejection AUC 0.96, 98–99 % style). On real clips it falls to chance: fake AUC 0.48–0.66, and its style accuracy is at best equal to the rules (25/38 vs the rules' 25/38). The synthetic fakes are 85 % waves and head scratches. Real fakes are mostly something else: 38 % are the *other arm* moving during a punch (3 % of synthetic fakes), and the rest are slow form, ducks and blocks.
+2. **More real labeled data is what moves the needle.** With one real guided session plus two stock clips in training, the CNN's fake AUC on the held-out session rose to 0.75. On that session it rejected 12 of 15 fakes while keeping 11 of 15 real strikes. That test set is small (30 events), so it's a trend, not a result. The guided test is the right tool for collecting this data. My estimate is about 20 more sessions before a learned gate is worth shipping.
 3. **Depth on demand doesn't work at the reader's onsets.** On the boxer-at-camera clip, the depth "toward" rise in the 2 frames after an onset does not pick out straights. Same-arm AUC is 0.36 (95 % CI 0–0.76), and either arm gives 0.60–0.69 with CIs across 0.5. Hooks come at the camera too, MediaPipe gives the onset to the wrong arm, and at onset + 2 frames the fist isn't out yet. The answer would also arrive about 110–130 ms after onset, against the reader's median confirm at 80 ms. **Don't integrate it.**
-4. **Pose models: TBD**
+4. **No pose model is meaningfully better than MediaPipe full on fast punches; they are only steadier at rest.** By eye, on 14 blurred strike frames of the boxer clip, MediaPipe full put the punching wrist on or near the fist 12 times. RTMPose-m did 13, RTMO-s 12, MediaPipe heavy 11 and YOLO26s 11. At rest, RTMPose-m, YOLO26s and RTMO-s jitter 4–8× less (median second difference 0.6–1.1 % of shoulder width, against 4.5 % for MediaPipe, and p90 1.7–2.5 % against 16 %). But our fakes come from real body motion, not jitter. Swapping would also lose the 33-landmark hands, the 3D world landmarks the reader's elbow angle needs, and a known browser runtime. **Don't swap.**
 5. **The cheapest wins are in the rules, and the data shows which ones.** The single most common real fake is the other arm firing during a real punch (38 % of real fakes). Of the 53 strike features tested, the two best on real data are "the other hand moved the same way" (AUC 0.70) and the head's vertical motion relative to the shoulder (0.71). These are best-of-53 picks on 75 events, so treat them as hints for the rules agent, not results. Shipped hobby systems use the same tricks: a cross-hand lockout and a hook/straight split by elbow angle at peak (see Q4).
+
+## What to do next, in priority order
+
+1. **Rules (the reader-robust work):** suppress the other arm's "strike" during and just after a real punch, which is 38 % of real fakes. Q1 lists every guided-session fake with its timestamp, for replay in the tuner. Reach alone won't separate them from real combos (see Q4). Then handle blocks and ducks with the hands up, another 22 % of real fakes.
+2. **Data:** keep running the guided test with more people, and add prompts for the real fake patterns: counter-arm, block, duck with hands up, fix hair, reach for the mouse. At the same time, add those negatives to `test/intent/synth.ts`. Re-run `research/models/*.py`, and promote the learned gate (below) only when it passes leave-one-session-out.
+3. **Don't build:** depth on demand, a pose-model swap, or MediaPipe heavy. The numbers are below.
 
 ## The data
 
@@ -41,7 +47,7 @@ Two model families, both trained with `python -I` on the CPU in seconds:
   - Three ways to use the output: **full** (pick the style and reject), **style** (pick the style only), **gate** (keep the rules' style, reject only).
 - **(b) A tiny causal temporal CNN**, run per frame on the last 0.5 s of one arm, resampled to 30 Hz:
   - Input: 15 steps × 26 channels. The channels are shoulder-relative and mirrored wrist, elbow and hand positions, elbow angle, visibilities, the other wrist, head, shoulder width and tilt, plus positions relative to the window start.
-  - Network: 3 dilated conv layers (32 channels), then last-step and max pooling, then 4 classes. **8,996 parameters, 63k multiply-adds per arm per frame** (about 0.1 ms in plain TypeScript; 0.27–0.42 ms per call in PyTorch, which is all overhead).
+  - Network: 3 dilated conv layers (32 channels), then last-step and max pooling, then 4 classes. **8,996 parameters, 63k multiply-adds per arm per frame** (estimated at about 0.1 ms in plain TypeScript, not measured; 0.27–0.42 ms per call in PyTorch, which is all overhead).
   - Trained per frame, with augmentation for scale, offset and jitter. Used two ways: re-judging the reader's strikes, and as a stand-alone detector.
 
 Training and test splits never share a session. "LOSO" means each of the 5 real sessions is held out in turn, training on all synthetic data plus the other 4.
@@ -97,6 +103,31 @@ The learned model throws away real strikes about as often as fakes.
 | Block (raising the guard) | 0 % | 11 % |
 | Lean / idle / same arm twice | 1 % | 9 % |
 
+Every fake in the two guided sessions, by time into the session. These are the moments to replay in the tuner:
+
+- **233104 (friend):**
+  - 15.2 s right hook: armL straight, reach 0.30. The real armR came 240 ms earlier, reach 0.40.
+  - 17.3 s left hook: armR hook, reach 1.11. The real armL came 80 ms later, reach 0.46.
+  - 37.1 s duck: armL straight and armR straight.
+  - 53.9 s wave: armR hook.
+  - 67.9 s block: armR upper, reach 0.75.
+- **233624 (user):**
+  - 16.7 s right hook: armL straight, 336 ms after the real armR.
+  - 19.4 s left hook: armR hook, 369 ms after the real armL.
+  - 22.5 s and 24.2 s block: armL straight, then armL upper (reach 0.87–0.88).
+  - 27.8 s left uppercut: armR hook (no real strike nearby).
+  - 30.6 s left uppercut: armR straight, 528 ms after the real armL.
+  - 32.8 s scratch: armR upper.
+  - 36.8 s and 37.6 s duck: armR straight, reach 0.38 and 0.65.
+  - 40.1 s lean left: armL hook.
+  - 50.3 s left punch: armR hook, 432 ms after the real armL.
+  - 55.1 s wave: armR hook.
+  - 62.2 s left hook: armR hook, 832 ms after the real armL.
+  - 67.7 s block: armR straight.
+  - 72.1 s left punch: armR hook, 192 ms after the real armL.
+
+The 8 other-arm fakes came between 80 ms before and 832 ms after the real punch. Their reach was 0.08–2.4× the real punch's (median about 0.7), so a "reach ≥ 0.6× the real punch" rule would catch only 1 of 8.
+
 Single features show the same thing. On real events the best separators of fakes from strikes are the head's vertical motion relative to the shoulder over the strike (AUC 0.71) and the other hand moving the same way (`cosOther`, AUC 0.70). On synthetic events they score only 0.56 and 0.55, so a model trained on synthetic data learns to ignore them. Synthetic data rewards wrist height at the end (AUC 0.77–0.78: waves and scratches end high), which is the wrong lesson for real play.
 
 ### Verdict and plan
@@ -117,7 +148,7 @@ What would change this:
 3. **Re-run these scripts** (`research/models/style_events.py`, `gate_auc.py`, `temporal.py`) on the new data. Ship only if LOSO shows the gate rejecting ≥50 % of fakes at ≥95 % of strikes kept, and style ≥ the rules.
 
 **If it turns positive, integration is cheap:**
-- **What:** the CNN as `src/intent/strikeGate.ts`. It has 9k parameters, about 36 KB as float32 or about 200 KB as JSON. Run a plain-TS forward pass per arm per frame (63k MACs, about 0.1 ms).
+- **What:** the CNN as `src/intent/strikeGate.ts`. It has 9k parameters, about 36 KB as float32 or about 200 KB as JSON. Run a plain-TS forward pass per arm per frame (63k MACs, an estimated 0.1 ms).
 - **Where:** `IntentReader.updateLimb` keeps a 15-step ring buffer of the 26 channels (computed from `Body`, as in `moves.arm_channels`). At confirm time it asks the gate for `P(none)` and the style.
 - **Behaviour:** reject when `P(none) > threshold`, and otherwise keep the rules' style unless the model is confident. It adds no latency, because it runs on frames already in hand at confirm.
 - **Flag:** `DEFAULT_INTENT.gate = { enabled: false, reject: 0.7 }`, a tuner slider, and `?gate=1`. With it off, the reader stays byte-identical.
@@ -179,15 +210,62 @@ Waiting longer doesn't fix it. Either-arm AUC is 0.60 / 0.63 / 0.63 / 0.69 with 
 
 ## Q3. Other pose models
 
-TBD
+### Setup
+
+- **Clips** (`research/models/pose_compare.py`), each model run over every frame of the same three stock clips:
+  - **40256:** the boxer at the camera, heavy motion blur.
+  - **36564:** side/back view, full body.
+  - **49576:** slow form facing the camera, used for jitter.
+- **Models:**
+  - MediaPipe full: the browser JSONL the game's own extractor made, plus the same `.task` run through MediaPipe Python.
+  - MediaPipe heavy, through Python.
+  - RTMPose-s and RTMPose-m (body7, top-down with a YOLOX person box every frame) and RTMO-s (one-stage), all through rtmlib with ONNX Runtime.
+  - YOLO26n-pose and YOLO26s-pose (Ultralytics, 640 px).
+  - MoveNet Thunder and Lightning (LiteRT, with the official demo's crop-from-last-frame).
+- Every model gives COCO-17 points for the person nearest the MediaPipe track. MediaPipe runs `numPoses: 2`, VIDEO mode, so its built-in smoothing is off, as in the game; no other model smooths either.
+- **Metrics:**
+  - **Jitter at rest:** on 49576, the per-frame second difference |p[t] − (p[t−1] + p[t+1]) / 2| of wrists and elbows, in % of shoulder width. Taken over the 642 of 892 frames where the other models agree the wrists move slower than 0.5 shoulder widths/s.
+  - **Fast punches, by eye:** the frame 45 % into each of the 14 labeled punches on 40256. Contact sheets mark each model's wrists. For the punching arm I judged **on** the fist, **near** it (within about one fist) or **off**.
+  - **One-frame teleports:** inside the 88 strike frames, a wrist jumps more than 0.75 shoulder widths and comes back the next frame.
+
+### Results
+
+| Model | Jitter at rest, median / p90 | 40256 punching wrist by eye: on / near / off (of 14) | Teleports (40256) | Cost measured here | Browser |
+|---|---|---|---|---|---|
+| **MediaPipe full** (game, browser JSONL) | 4.5 % / 15.9 % | **9 / 3 / 2** | 5 | 36 ms (Python CPU); 22–34 ms in the browser (depth spike) | In use: 33 landmarks + world 3D, WebGL |
+| MediaPipe full (Python) | 4.6 % / 15.7 % | – | 3 | 36 ms CPU | – |
+| MediaPipe heavy | 2.8 % / 7.9 % | 7 / 4 / 3 | 1 | 86 ms CPU (2.4× full) | Drop-in `.task` (31 MB), about half full's fps ([TF blog 2021](https://blog.tensorflow.org/2021/05/high-fidelity-pose-tracking-with-mediapipe-blazepose-and-tfjs.html)) |
+| RTMPose-s (+ YOLOX-tiny box) | 2.3 % / 6.5 % | – | 1 | pose 8–9 ms + box 41 ms (ORT CPU, 4 threads) | ORT-web, 22 MB fp32; no published browser fps |
+| RTMPose-m (+ YOLOX-m box) | 1.1 % / 2.5 % | **9 / 4 / 1** | 2 | pose 22 ms CPU | 54 MB fp32; [rtmlib-ts](https://github.com/GOH23/rtmlib-ts) reports about 60 ms box + pose on an M1 with WebGPU |
+| RTMO-s | 0.6 % / 1.7 % | 4 / 8 / 2 | 0 | 122 ms CPU (640 × 640) | 40 MB; one-stage, slow on CPU |
+| YOLO26n-pose | 1.4 % / 3.9 % | – | 1 | 21 ms GPU (PyTorch, overhead-bound) | AGPL-3.0; 7.9 MB; no TF.js export |
+| YOLO26s-pose | 0.8 % / 1.9 % | 7 / 4 / 3 | 1 | 29 ms GPU | AGPL-3.0 |
+| MoveNet Thunder | 2.8 % / 8.3 % | – | 1 | 14 ms CPU (LiteRT) | TF.js, in maintenance |
+| MoveNet Lightning | 4.0 % / 10.8 % | – | 1 | 5.5 ms CPU | TF.js |
+
+- **Side view** (36564, slower punches): every model except MoveNet Lightning (88 %) keeps the wrists within half a shoulder width of the other models' consensus 93–100 % of the time. MediaPipe reports low visibility for 40 % of those wrists (seen from behind), while the others report high confidence.
+- **ONNX Runtime fell back to CPU** for every ONNX model: the CUDA provider didn't load in this venv. That's why the RTMPose rows are CPU numbers. The browser would use WASM (slower than native CPU) or WebGPU (no published pose numbers; see Q4 research).
+- **Consensus distance is not a fair score here.** The automatic "> 0.5 shoulder widths from the other models" metric put YOLO26 best on 40256 (3–4 % off, against 32 % for MediaPipe). By eye that isn't true: the models simply agree with each other more than with MediaPipe. The by-eye column is the one to trust, though 14 frames is small.
+
+### Verdict
+
+**Not worth a swap.**
+- On the motion that matters (fast, blurred punches) the best alternative, RTMPose-m, is at most one frame in 14 better than MediaPipe full, and MediaPipe heavy is worse.
+- The real advantage of RTMPose, YOLO and RTMO is 4–8× less raw jitter at rest. That would let the reader filter less, which means slightly earlier onsets. But it doesn't address the fakes and wrong types, which Q1 traced to real body motion.
+- A swap costs:
+  - the MediaPipe hand points (index and pinky),
+  - the world landmarks behind the reader's elbow angle (`preprocess.ts` reads them),
+  - a WebGL runtime we know works on every laptop,
+  - and a person-box step (a detector or a tracked crop) that has no browser numbers.
+- If someone wants to try anyway, the cheapest A/B is RTMPose-s on onnxruntime-web: 22 MB, 8–9 ms native CPU per crop, with the crop taken from MediaPipe's previous frame so no detector runs. Run it behind `?pose=rtm`, keep MediaPipe for hands and world z, and compare on recorded clips with `test/research/dump.test.ts`.
 
 ## Q4. Other things that would reduce fake moves and wrong types
 
 From a separate web pass; anything not verified is marked. Nothing here repeats `research/body-input-best-practices.md`.
 
 - **Cross-hand lockout.** One open-source MediaPipe boxing spike cut double fires from torso rotation from 8 to 2 with a 250 ms lockout across both hands ([galkatzh/tools#106](https://github.com/galkatzh/tools/pull/106)). In our data the other arm is 38 % of real fakes.
-  - The catch: real jab-cross combos are 150–250 ms apart, so a blanket lockout kills combos.
-  - **Suggested rule for the reader:** within 400 ms of a confirmed strike, a strike by the other arm needs a reach at least 0.6× the first one's and must not start with a retraction (the hand moving back toward the face). Tune it on the guided sessions.
+  - The catch: real jab-cross combos are 150–250 ms apart, and our other-arm fakes came 192–832 ms after the real punch, so a blanket lockout kills combos.
+  - Reach doesn't separate them either (Q1). Better candidates are the direction of the other hand's motion (`cosOther`, AUC 0.70 on real events) and whether the "strike" starts as the hand returns from a retraction or chamber. Check them against the listed moments in the tuner.
 - **Hook vs straight by elbow angle at peak, and an uppercut must start low.** The two are mutually exclusive by start height. Shadowbox Coach (MediaPipe in a worker, rules) found lateral displacement misread crosses thrown across the midline, so it switched to elbow angle at peak extension. It random-searched thresholds (24k–40k configs) over synthetic plus labeled recordings, with negative scenarios required to fire zero, and went from F1 0.946 to 1.0 on its holdout (mostly synthetic) ([ChaiWithJai/hybrid-ai-blueprints#5](https://github.com/ChaiWithJai/hybrid-ai-blueprints/pull/5)).
   - Our tuner, replay and `test/intent/matrix` can already do this kind of search. **Weight phantoms above misses.**
 - **Trigger, then confirm with an explicit "not a punch" class.** On SHREC'21/'22 online gestures, a GRU localizer gating a recognizer that has a non-gesture class cut false positives from 15.3 % to 9.2 % at the same detection rate ([SciTePress 2023](https://www.scitepress.org/publishedPapers/2023/116632/pdf/index.html)). Periodic motions such as waves were the worst offenders ([SHREC 2022](https://ar5iv.labs.arxiv.org/html/2207.06706)). That is the structure Q1's gate would take, once there's real data.

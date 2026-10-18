@@ -202,9 +202,12 @@ def analyze(clips_dir, out_dir, labels_dir, sheets_dir):
     print('models:', have)
     data = {m: {c: load(out_dir, clips_dir, m, c) for c in ('40256', '36564', '49576')} for m in have}
 
-    # Consensus wrist (median over models) per frame, for agreement.
-    def consensus(clip, j):
-        stack = np.stack([px(data[m][clip][0][:, j]) for m in have])
+    # Consensus wrist per frame, for agreement: the median of the other model families (one MediaPipe vote at most,
+    # never the model being judged).
+    def consensus(clip, j, exclude=None):
+        voters = [m for m in have if m != exclude and not (m.startswith('mp_') and m != 'mp_full_browser')]
+        voters = [m for m in voters if not (exclude or '').startswith('mp_') or not m.startswith('mp_')]
+        stack = np.stack([px(data[m][clip][0][:, j]) for m in voters])
         return np.nanmedian(stack, axis=0)
 
     print('\n== jitter at rest: 49576 (slow form facing the camera, 36 s). Second difference |p[t] - (p[t-1]+p[t+1])/2|, '
@@ -235,9 +238,9 @@ def analyze(clips_dir, out_dir, labels_dir, sheets_dir):
         idx = sorted({int(round(k)) for l in lab['labels'] if l['kind'] == 'strike' and l['limb'].startswith('arm')
                       for k in np.arange(l['start'] * fps / 1000, l['end'] * fps / 1000 + 1)})
         idx = [k for k in idx if k < len(data[have[0]][clip][0])]
-        cw = {j: consensus(clip, j) for j in (LWR, RWR)}
         print(f'  {clip}: {len(idx)} frames inside arm strikes')
         for m in have:
+            cw = {j: consensus(clip, j, exclude=m) for j in (LWR, RWR)}
             kp, sc, ms = data[m][clip]
             P = px(kp)
             sw = np.nanmedian(np.hypot(*(P[:, LSH] - P[:, RSH]).T))
@@ -267,48 +270,39 @@ def analyze(clips_dir, out_dir, labels_dir, sheets_dir):
 
 
 def sheets(clips_dir, data, have, labels_dir, out):
-    """One contact sheet per model: the frame in the middle of each labeled arm strike, both wrists marked
-    (L = cyan circle, R = magenta square), for judging by eye whether the wrist is on the fist."""
+    """One contact sheet per model: the frame 45 % into each labeled arm strike of 40256 (the boxer at the camera),
+    both wrists marked (L = cyan circle, R = magenta square), for judging by eye whether the wrist is on the fist."""
     import cv2
     os.makedirs(out, exist_ok=True)
-    picks = []
-    for clip in ('40256', '36564'):
-        lab = json.load(open(os.path.join(labels_dir, f'{clip}.json')))
-        for l in lab['labels']:
-            if l['kind'] == 'strike' and l['limb'].startswith('arm'):
-                picks.append((clip, int(round((l['start'] + 0.45 * (l['end'] - l['start'])) * lab['fps'] / 1000)), l['name']))
-    vids = {c: list(frames(clips_dir, c)) for c in ('40256', '36564')}
+    lab = json.load(open(os.path.join(labels_dir, '40256.json')))
+    picks = [(int(round((l['start'] + 0.45 * (l['end'] - l['start'])) * lab['fps'] / 1000)), l['name'])
+             for l in lab['labels'] if l['kind'] == 'strike' and l['limb'].startswith('arm')]
+    vids = list(frames(clips_dir, '40256'))
+    TW, TH = 480, 270
     for m in have:
         tiles = []
-        for n, (clip, k, name) in enumerate(picks):
-            f = vids[clip][k].copy()
-            h, w = f.shape[:2]
-            kp = data[m][clip][0][k]
-            ref = data['mp_full_browser'][clip][0][k]
+        for n, (k, name) in enumerate(picks):
+            tile = cv2.resize(vids[k], (TW, TH), interpolation=cv2.INTER_AREA)
+            kp = data[m]['40256'][0][k]
             for j, color, shape in ((LWR, (255, 255, 0), 'c'), (RWR, (255, 0, 255), 's')):
                 if np.isnan(kp[j]).any():
                     continue
-                x, y = int(kp[j, 0] * w), int(kp[j, 1] * h)
+                x, y = int(kp[j, 0] * TW), int(kp[j, 1] * TH)
                 if shape == 'c':
-                    cv2.circle(f, (x, y), 14, color, 4)
+                    cv2.circle(tile, (x, y), 10, color, 2)
                 else:
-                    cv2.rectangle(f, (x - 13, y - 13), (x + 13, y + 13), color, 4)
-            # Crop: the whole frame for the close-up, around the person for the full-body clip.
-            if clip == '36564':
-                c = np.nanmean(ref[[LSH, RSH]], axis=0) * [w, h]
-                half = 260
-                x0, y0 = int(np.clip(c[0] - half, 0, w - 2 * half)), int(np.clip(c[1] - half * 0.7, 0, h - 2 * half))
-                f = f[y0:y0 + 2 * half, x0:x0 + 2 * half]
-            tile = cv2.resize(f, (320, 180) if clip == '40256' else (240, 240))
-            tile = cv2.copyMakeBorder(tile, 0, 240 - tile.shape[0], 0, 320 - tile.shape[1], cv2.BORDER_CONSTANT)
-            cv2.putText(tile, f'{n}:{clip[-3:]} {name}', (4, 232), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                    cv2.rectangle(tile, (x - 9, y - 9), (x + 9, y + 9), color, 2)
+                cv2.circle(tile, (x, y), 2, color, -1)
+            cv2.rectangle(tile, (0, 0), (150, 22), (0, 0, 0), -1)
+            cv2.putText(tile, f'{n} {name} f{k}', (4, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             tiles.append(tile)
-        cols = 6
+        cols = 4
         while len(tiles) % cols:
             tiles.append(np.zeros_like(tiles[0]))
         grid = np.vstack([np.hstack(tiles[r * cols:(r + 1) * cols]) for r in range(len(tiles) // cols)])
-        cv2.putText(grid, m, (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-        cv2.imwrite(os.path.join(out, f'{m}.jpg'), grid, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        cv2.rectangle(grid, (TW * 2, TH * 3 + 40), (TW * 4, TH * 4), (0, 0, 0), -1)
+        cv2.putText(grid, m, (TW * 2 + 20, TH * 3 + 120), cv2.FONT_HERSHEY_SIMPLEX, 1.6, (0, 255, 255), 3)
+        cv2.imwrite(os.path.join(out, f'{m}.jpg'), grid, [cv2.IMWRITE_JPEG_QUALITY, 85])
     print(f'sheets in {out}: {len(picks)} strike frames per model')
 
 
