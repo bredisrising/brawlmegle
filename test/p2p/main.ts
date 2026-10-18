@@ -311,6 +311,23 @@ async function runGameHost() {
     await poll(() => client.inbox.find((m) => m.type === 'phase' && m.phase === 'countdown'), 'countdown phase');
   });
 
+  await test("game host: a strike the client read itself comes out as P2's attack", async () => {
+    // A hidden test page barely runs requestAnimationFrame: start the round and step the host by hand.
+    useGameStore.setState({ phase: 'fighting', countdown: null });
+    const host = g as unknown as { tick(): void; fight: { state(id: 'p2'): { move?: string } } };
+    const stance = { player: 'p2' as const, guard: false, advance: 0, lean: { x: 0, y: 0 }, tracked: true };
+    const strike = {
+      kind: 'strike' as const, limb: 'armR' as const, t: 9000, onsetT: 8900, style: 'straight' as const, height: 'high' as const,
+      dir: { out: 0, up: 0, fwd: 1 }, speed: 1, windup: 1, reach: 1, rawSpeed: 3,
+    };
+    client.peer.send({ type: 'stance', stance });
+    client.peer.send({ type: 'intents', intents: [strike], stance });
+    await poll(() => {
+      host.tick();
+      return host.fight.state('p2').move === 'cross' ? true : undefined;
+    }, "P2's cross on the host");
+  });
+
   await test('game host: drop shows reconnecting; a rejoin keeps P2 and takes a fresh pose clock', async () => {
     client.peer.close();
     await poll(() => useGameStore.getState().connection === 'reconnecting' || undefined, 'connection reconnecting');

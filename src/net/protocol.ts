@@ -1,4 +1,5 @@
-import type { FightEvent, FighterState, ForgedFighter, Hand, Phase, PlayerId, PoseFrame, Projectile } from '../types';
+import type { FightEvent, FighterState, ForgedFighter, Hand, Phase, PlayerId, PoseFrame, Projectile, Stance } from '../types';
+import type { Intent } from '../intent/intents';
 
 /**
  * Messages to/from the AWS signaling server (WebSocket). It only brokers the handshake.
@@ -23,7 +24,10 @@ export type ClientMessage =
   | { type: 'pick'; fighterId: string } // after 'Choose existing'
   | { type: 'scan'; frames: [front: string, left: string, right: string] } // base64 JPEGs
   | { type: 'rematch' } // from the K.O. screen on the client laptop
-  | { type: 'skip' }; // "fight now": don't wait for P2's forge, use a stand-in until it's done
+  | { type: 'skip' } // "fight now": don't wait for P2's forge, use a stand-in until it's done
+  // The client reads its own player's moves from its own full-rate camera (the network only carries the result):
+  | { type: 'intents'; intents: Intent[]; stance: Stance } // reliable: every frame that produced intents
+  | { type: 'stance'; stance: Stance }; // lossy: the continuous stance (guard, lean, tracked) on the other frames
 
 /** Host -> client, so the client UI knows what to show its player. */
 export type HostMessage =

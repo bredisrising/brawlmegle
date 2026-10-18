@@ -93,6 +93,9 @@ export class Game {
   private clock = ROUND_SECONDS;
   private hostSession: HostSession | null = null;
   private client: ClientSession | null = null;
+  /** Host: P2's moves as read on the client laptop (newer clients read their own camera), waiting for the tick. */
+  private remoteIntents: Intent[] = [];
+  private remoteStance: { stance: Stance; at: number } | null = null;
   /** Host: each slot's fighter, for the client laptop's copy of the fight; and what to tell it this tick. */
   private readonly fighters: Partial<Record<PlayerId, ForgedFighter>> = {};
   private outbox: MirrorEvent[] = [];
@@ -197,6 +200,10 @@ export class Game {
       rematch: () => this.rematch(),
       connected: () => this.sendMatch(),
       skip: () => this.skipForgeWait('p2'),
+      read: (intents, stance) => {
+        this.remoteIntents.push(...intents);
+        this.remoteStance = { stance: { ...stance, player: 'p2' }, at: performance.now() };
+      },
     });
     this.hostSession = session;
     const code = await session.open();
@@ -217,6 +224,7 @@ export class Game {
         match: (players) => this.mirrorMatch(players),
         frame: (frame) => (this.mirrored = frame),
         events: (events) => this.mirrorEvents(events),
+        local: (intents) => this.localRead(intents),
       });
       await client.connect();
       this.client = client;
@@ -480,8 +488,11 @@ export class Game {
         stances[id] = out?.stance ?? { player: id, guard: true, advance: 0, lean: { x: 0, y: 0 }, tracked: true };
         continue;
       }
-      const frame = this.input.latest(id);
-      const out = frame ? this.intent[id].update(frame) : null;
+      // P2 on a client laptop that reads its own moves: use what it sent (a full-rate local read, no network
+      // jitter on the poses). Otherwise read the streamed poses here.
+      const remote = id === 'p2' ? this.takeRemoteRead() : null;
+      const frame = remote ? null : this.input.latest(id);
+      const out = remote ?? (frame ? this.intent[id].update(frame) : null);
       if (out) {
         commands.push(...this.resolver.resolve(id, out.intents, this.fight));
         for (const i of out.intents) {
@@ -604,6 +615,31 @@ export class Game {
     else this.announcer.bark('ko', true);
     const perfect = winner && useGameStore.getState().players[winner].hp >= MAX_HP;
     if (perfect) setTimeout(() => this.announcer.bark('perfect', true), 1400);
+  }
+
+  /** The client's latest read of P2, if it's been sending them (stale after a second: back to reading poses here). */
+  private takeRemoteRead(): { intents: Intent[]; stance: Stance } | null {
+    const r = this.remoteStance;
+    if (!r || performance.now() - r.at > 1000) return null;
+    const intents = this.remoteIntents;
+    this.remoteIntents = [];
+    // A stance that stopped arriving means the client lost its player: hold guard, untracked.
+    const stale = performance.now() - r.at > 400;
+    return { intents, stance: stale ? { ...r.stance, guard: true, advance: 0, tracked: false } : r.stance };
+  }
+
+  /** Client laptop: its own player's moves, read here, show on its own screen at once (the host's echo comes later). */
+  private localRead(intents: Intent[]) {
+    const id = localPlayerId('client');
+    for (const i of intents) {
+      if ((i.kind === 'anticipate' || i.kind === 'cancel') && (i.limb === 'armL' || i.limb === 'armR')) {
+        const hand = i.limb === 'armL' ? 'L' : 'R';
+        if (i.kind === 'anticipate') this.views[id].anticipate(hand);
+        else this.views[id].cancelTell(hand);
+      }
+    }
+    const text = moveText(intents);
+    if (text) useGameStore.setState({ lastMove: { text, at: performance.now() } });
   }
 
   /** Round clock: when it runs out, more HP left wins (equal is a draw). Training has no clock. */

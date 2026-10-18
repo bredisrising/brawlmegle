@@ -6,6 +6,8 @@ import { Signaling } from '../net/Signaling';
 import { PROTOCOL_VERSION, type ClientMessage, type HostMessage, type MatchPlayer, type MirrorEvent, type MirrorFrame } from '../net/protocol';
 import { config } from '../config';
 import type { ForgedFighter, PlayerId, PoseFrame } from '../types';
+import { IntentReader } from '../intent/IntentReader';
+import type { Intent } from '../intent/intents';
 import type { FighterChoice } from './Game';
 import { VideoClip } from './MatchRecorder';
 import { localPlayerId, updatePlayer, useGameStore } from './store';
@@ -19,6 +21,8 @@ export type ClientMirror = {
   match(players: Record<PlayerId, MatchPlayer>): void;
   frame(frame: MirrorFrame): void;
   events(events: MirrorEvent[]): void;
+  /** This laptop's own read of its player, for instant feedback on its own screen. */
+  local?(intents: Intent[]): void;
 };
 
 /**
@@ -37,6 +41,12 @@ export class ClientSession {
   private setup: ClientMessage[] = [];
   private confirmed = false;
   private disposed = false;
+  /**
+   * P2's moves are read here, from this laptop's own camera at full rate, and only the result crosses the network
+   * (the poses still stream for the host's live layer and recordings). Reading streamed poses on the host suffered
+   * every dropped or late packet: real 1v1 rounds delivered P2 at 2.5–7 fps.
+   */
+  private readonly reader = new IntentReader(PLAYER);
   /** `?video=1`: this laptop's camera during each round, saved locally (see MatchRecorder). */
   private readonly clip = new VideoClip();
   /** This laptop's latest camera frame (P2's own pose, blended into its fighter on this screen). */
@@ -154,6 +164,13 @@ export class ClientSession {
     this.stopStream = source.onFrame((frame) => {
       this.lastFrame = frame;
       this.send({ type: 'pose', frame });
+      const out = this.reader.update(frame, frame.t);
+      if (out.intents.length) {
+        this.send({ type: 'intents', intents: out.intents, stance: out.stance });
+        this.mirror?.local?.(out.intents);
+      } else {
+        this.send({ type: 'stance', stance: out.stance });
+      }
     });
   }
 

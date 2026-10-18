@@ -5,7 +5,8 @@ import { Peer } from '../net/Peer';
 import { Signaling } from '../net/Signaling';
 import { PROTOCOL_VERSION, type ClientMessage, type HostMessage } from '../net/protocol';
 import { config } from '../config';
-import type { ForgedFighter } from '../types';
+import type { ForgedFighter, Stance } from '../types';
+import type { Intent } from '../intent/intents';
 import { PLAYER_NAMES } from './constants';
 import type { FighterChoice } from './Game';
 import { localPlayerId, useGameStore } from './store';
@@ -20,7 +21,13 @@ export type SetupRemote = (choice: FighterChoice, source: InputSource, scan?: Pr
 
 type Choice = Extract<ClientMessage, { type: 'profile' | 'pick' }>;
 /** Game hooks: the client asked for a rematch; a client (re)connected and needs the match state. */
-export type HostHooks = { rematch?: () => void; connected?: () => void; skip?: () => void };
+export type HostHooks = {
+  rematch?: () => void;
+  connected?: () => void;
+  skip?: () => void;
+  /** P2's moves as read on the client laptop (intents and/or the latest stance). */
+  read?: (intents: Intent[], stance: Stance) => void;
+};
 type Deferred<T> = { resolve: (value: T) => void; reject: (err: Error) => void };
 
 /**
@@ -132,6 +139,12 @@ export class HostSession {
         break;
       case 'skip':
         this.hooks.skip?.();
+        break;
+      case 'intents':
+        this.hooks.read?.(msg.intents, msg.stance);
+        break;
+      case 'stance':
+        this.hooks.read?.([], msg.stance);
         break;
       // 'pose' goes to the RemoteSource.
     }
