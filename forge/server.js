@@ -15,6 +15,7 @@ import "./env.js";
 import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { pipeline } from "node:stream";
 import { runForge, models } from "./pipeline.js";
 
 if (!process.env.OPENAI_API_KEY) {
@@ -147,7 +148,11 @@ async function handle(req, res) {
   if (req.method === "GET" && url.pathname === "/health") return json(res, 200, { ok: true, models });
 
   if (req.method === "GET" && parts[0] === "api" && parts[1] === "profiles" && parts.length === 3) {
-    const username = normalizeUsername(decodeURIComponent(parts[2]));
+    let raw = "";
+    try {
+      raw = decodeURIComponent(parts[2]);
+    } catch {}
+    const username = normalizeUsername(raw);
     if (!username) return json(res, 400, { error: "usernames are 1-24 letters, digits, _ . -" });
     const mine = [...fighters.values()].filter((f) => f.username === username).sort((a, b) => b.createdAt - a.createdAt);
     const ready = mine.find((f) => f.status === "ready");
@@ -198,9 +203,9 @@ async function handle(req, res) {
     const names = ["front", "left", "right"];
     frames.forEach((f, i) => store.write(`${names[i]}.${f.type === "image/png" ? "png" : "jpg"}`, f.data));
     store.save();
-    runForge(fighter, frames, store).then(() =>
-      console.log(`forge ${fighter.id.slice(0, 8)} ${fighter.status}`, fighter.timings, fighter.error ?? ""),
-    );
+    runForge(fighter, frames, store)
+      .then(() => console.log(`forge ${fighter.id.slice(0, 8)} ${fighter.status}`, fighter.timings, fighter.error ?? ""))
+      .catch((err) => console.error(`forge ${fighter.id.slice(0, 8)} crashed:`, err));
     return json(res, 202, { id: fighter.id });
   }
 
@@ -213,7 +218,8 @@ async function handle(req, res) {
       if (!fs.existsSync(file)) return json(res, 404, { error: "not ready" });
       const type = parts[3].endsWith(".png") ? "image/png" : parts[3].endsWith(".glb") ? "model/gltf-binary" : "image/jpeg";
       res.writeHead(200, { "content-type": type });
-      return fs.createReadStream(file).pipe(res);
+      // pipeline() closes the file when a download is cut off, and a read error can't crash the server.
+      return pipeline(fs.createReadStream(file), res, () => {});
     }
   }
 
