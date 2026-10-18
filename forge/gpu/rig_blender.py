@@ -70,6 +70,19 @@ if len(meshes) > 1:
     bpy.ops.object.join()
 body = bpy.context.view_layer.objects.active
 body.name = "Body"
+# Fighters are opaque: a generator's opacity channel would make the game sort them as glass (and break the outline).
+for mat in body.data.materials:
+    if not mat or not mat.node_tree:
+        continue
+    for node in mat.node_tree.nodes:
+        if node.type == "BSDF_PRINCIPLED":
+            for link in list(node.inputs["Alpha"].links):
+                mat.node_tree.links.remove(link)
+            node.inputs["Alpha"].default_value = 1.0
+    if hasattr(mat, "surface_render_method"):
+        mat.surface_render_method = "DITHERED"
+    if hasattr(mat, "blend_method"):
+        mat.blend_method = "OPAQUE"
 
 # --- face +x ----------------------------------------------------------------------------------------------------
 # Blender axes after the glTF import: +x should be the character's front, +y its left, +z up. YAW turns a generator's
