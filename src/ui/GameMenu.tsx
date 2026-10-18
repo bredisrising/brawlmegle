@@ -37,9 +37,10 @@ export function GameMenu() {
   const rtt = link?.rttMs;
   const tone = rtt === null || rtt === undefined ? 'text-paper/60' : rtt < 60 ? 'text-hp' : rtt < 120 ? 'text-paper' : 'text-dmg';
   return (
-    <div className="pointer-events-auto absolute bottom-14 right-4 flex flex-col items-end gap-2">
+    // Above the opponent's camera (bottom right too): the open menu covers it.
+    <div className="pointer-events-auto absolute bottom-14 right-4 z-40 flex flex-col items-end gap-2">
       {open && (
-        <div className="animate-rise flex flex-col items-end gap-3 bg-ink/90 px-4 py-3">
+        <div className="animate-rise flex flex-col items-end gap-3 bg-ink px-4 py-3">
           {quick && role !== 'spectator' && <TextButton onClick={() => (setOpen(false), game.nextOpponent())}>Next opponent</TextButton>}
           {role === 'host' && !quick && <TextButton onClick={() => (setOpen(false), game.changeFighter())}>Change fighter</TextButton>}
           {role !== 'spectator' && (
@@ -47,7 +48,7 @@ export function GameMenu() {
               title="Hidden: your opponent doesn't see your camera, and you don't see theirs"
               onClick={() => setCamHidden(!camHidden)}
             >
-              Hide my camera: {camHidden ? 'on' : 'off'}
+              My camera: {camHidden ? 'off' : 'on'}
             </TextButton>
           )}
           {role === 'host' && (

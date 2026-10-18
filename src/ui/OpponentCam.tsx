@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react';
 import { camView } from '../game/CameraShare';
-import { setCamHidden, useGameStore } from '../game/store';
+import { useGameStore } from '../game/store';
 import { ACCENT } from './accent';
+import { CamToggle } from './CamToggle';
 
 /**
  * The opponent's camera, Omegle style: a framed picture in the bottom-right corner, in their
@@ -64,15 +65,7 @@ export function OpponentCam() {
             Opponent sees your camera
           </span>
         )}
-        {toggle && (
-          <button
-            type="button"
-            onClick={() => setCamHidden(!camHidden)}
-            className="pointer-events-auto bg-ink/85 px-2 py-1 font-cond text-[10px] font-bold uppercase tracking-[0.15em] text-paper/80 underline-offset-2 hover:text-paper hover:underline"
-          >
-            {camHidden ? 'Show my camera' : 'Hide my camera'}
-          </button>
-        )}
+        {toggle && <CamToggle />}
       </div>
     </div>
   );

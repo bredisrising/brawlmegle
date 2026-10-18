@@ -98,7 +98,9 @@ try {
   await shot(b, "11-repaired-other");
   // Hide my camera, from the Esc menu mid-fight: both sides say so.
   await a.keyboard.press("Escape");
-  await a.getByRole("button", { name: /Hide my camera/ }).click();
+  await a.getByRole("button", { name: /My camera/ }).click();
+  await sleep(300);
+  await shot(a, "12-esc-menu-open");
   await a.keyboard.press("Escape");
   await store(b, (s) => s.opponentCamHidden);
   await sleep(400);

@@ -2,6 +2,7 @@ import { localPlayerId, useGameStore } from '../game/store';
 import type { PlayerId } from '../types';
 import { ACCENT } from './accent';
 import { ArcadeButton, TextButton } from './ArcadeButton';
+import { CamToggle } from './CamToggle';
 import { ForgePreview } from './ForgePreview';
 import { ForgeSteps } from './ForgeSteps';
 import { PLAYER_COLORS } from '../game/constants';
@@ -203,17 +204,34 @@ function QuickSearch({ right, found, searching }: { right: boolean; found: boole
             Looking for an opponent<span className="animate-blink">…</span>
           </p>
           <p className="max-w-sm font-cond text-base font-semibold uppercase tracking-[0.12em] text-paper/60">
-            Stay on this screen: the fight starts as soon as someone's found. You'll see each other's camera.
+            Stay on this screen: the fight starts as soon as someone's found.
           </p>
+          <CamChoice right={right} />
         </>
       ) : (
-        <p className="max-w-sm font-cond text-lg font-semibold uppercase tracking-[0.12em] text-paper/60">
-          We'll find you an opponent as soon as your fighter is ready
-        </p>
+        <>
+          <p className="max-w-sm font-cond text-lg font-semibold uppercase tracking-[0.12em] text-paper/60">
+            We'll find you an opponent as soon as your fighter is ready
+          </p>
+          <CamChoice right={right} />
+        </>
       )}
       <TextButton className="text-sm" onClick={() => game.toTitle()}>
         Cancel
       </TextButton>
+    </div>
+  );
+}
+
+/** Before a stranger is found: whether they'll see this camera (and this player theirs), switchable right there. */
+function CamChoice({ right }: { right: boolean }) {
+  const hidden = useGameStore((s) => s.camHidden);
+  return (
+    <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 ${right ? 'justify-end' : ''}`}>
+      <CamToggle />
+      <span className="font-cond text-sm font-semibold uppercase tracking-[0.12em] text-paper/50">
+        {hidden ? 'Cameras stay off both ways' : "You'll see each other's camera"}
+      </span>
     </div>
   );
 }
