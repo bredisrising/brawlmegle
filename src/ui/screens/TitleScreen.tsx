@@ -1,14 +1,29 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
+import { fetchRecords, fighterRecords, totalMatches, winRate, type FighterRecord } from '../../forge/leaderboard';
+import { listFighters } from '../../forge/roster';
+import type { ForgedFighter } from '../../types';
 import { Arrow, ArcadeButton, TextButton } from '../ArcadeButton';
 import { useGame } from '../GameContext';
 
 /** Host / Connect. The host laptop runs the game; the client laptop joins with a room code. */
 export function TitleScreen() {
   const game = useGame();
-  const [mode, setMode] = useState<'pick' | 'connect'>('pick');
+  const [mode, setMode] = useState<'pick' | 'connect' | 'leaderboard'>('pick');
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [fighters, setFighters] = useState<ForgedFighter[] | null>(null);
+  const [records, setRecords] = useState<Readonly<Record<string, FighterRecord>>>({});
+
+  useEffect(() => {
+    if (mode !== 'leaderboard') return;
+    let alive = true;
+    setFighters(null);
+    setRecords(fighterRecords());
+    void fetchRecords().then((shared) => alive && setRecords(shared));
+    listFighters().then((list) => alive && setFighters(list));
+    return () => { alive = false; };
+  }, [mode]);
 
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -52,6 +67,7 @@ export function TitleScreen() {
               <MenuItem index="01" label="Host" hint="Run the fight on this screen" color="hover:bg-p1" bar="bg-p1" disabled={busy} onClick={() => run(() => game.host())} delay={100} />
               <MenuItem index="02" label="Connect" hint="Join with a room code" color="hover:bg-p2" bar="bg-p2" disabled={busy} onClick={() => setMode('connect')} delay={180} />
               <MenuItem index="03" label="Practice" hint="Fight the CPU on this screen" color="hover:bg-hp" bar="bg-hp" disabled={busy} onClick={() => run(() => game.practice())} delay={260} />
+              <MenuItem index="04" label="Leaderboard" hint="See every fighter's record" color="hover:bg-paper" bar="bg-paper" disabled={busy} onClick={() => setMode('leaderboard')} delay={340} />
               {/* Dev tools live on the same site (local dev serves them from /test/). */}
               <p className="mt-3 flex gap-5 font-cond text-sm font-bold uppercase tracking-[0.25em] text-paper/45">
                 <span>Tools</span>
@@ -59,7 +75,7 @@ export function TitleScreen() {
                 <a className="underline-offset-4 hover:text-paper hover:underline" href={import.meta.env.DEV ? '/test/scan/' : '/scan/'}>Scan test</a>
               </p>
             </nav>
-          ) : (
+          ) : mode === 'connect' ? (
             <form onSubmit={submitCode} className="animate-rise flex w-full max-w-md flex-col gap-4 border-2 border-paper/15 bg-ink p-6">
               <label htmlFor="room-code" className="font-cond text-sm font-bold uppercase tracking-[0.3em] text-paper/60">
                 Room code from the host screen
@@ -80,10 +96,51 @@ export function TitleScreen() {
                 </ArcadeButton>
               </div>
             </form>
-          )}
+          ) : null}
           {error && <p className="border-l-4 border-dmg bg-ink-2 px-3 py-2 font-semibold">{error}</p>}
         </div>
       </div>
+      {mode === 'leaderboard' && <Leaderboard fighters={fighters} records={records} onBack={() => setMode('pick')} />}
+    </div>
+  );
+}
+
+function Leaderboard({ fighters, records, onBack }: { fighters: ForgedFighter[] | null; records: Readonly<Record<string, FighterRecord>>; onBack: () => void }) {
+  const ranked = (fighters ?? []).map((fighter) => ({ fighter, record: records[fighter.id] ?? { wins: 0, losses: 0, draws: 0, streak: 0, bestStreak: 0 } }))
+    .sort((a, b) => totalMatches(b.record) - totalMatches(a.record) || winRate(b.record) - winRate(a.record) || b.record.wins - a.record.wins || a.fighter.name.localeCompare(b.fighter.name));
+
+  return (
+    <div className="absolute inset-0 z-20 grid place-items-center bg-ink/85 p-3 backdrop-blur-sm sm:p-6">
+      <section role="dialog" aria-modal="true" aria-label="Leaderboard" className="animate-rise flex h-[min(760px,calc(100svh-1.5rem))] w-full max-w-4xl flex-col overflow-hidden border-2 border-paper/20 bg-ink shadow-2xl sm:h-[min(760px,calc(100svh-3rem))]">
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b-2 border-hp bg-ink-2 p-5 sm:p-7">
+          <div className="min-w-0">
+            <p className="font-cond text-xs font-bold uppercase tracking-[0.3em] text-hp sm:text-sm">Hall of fame</p>
+            <h2 className="mt-1 font-display text-4xl uppercase leading-none tracking-tighter sm:text-7xl">Leader<span className="text-hp">board</span></h2>
+          </div>
+          <TextButton className="shrink-0 text-base sm:text-lg" onClick={onBack}>← Back</TextButton>
+        </div>
+        <div className="shrink-0 px-5 pt-4 sm:px-7">
+          <p className="font-cond text-xs font-bold uppercase tracking-[0.14em] text-paper/55 sm:text-sm">Ranked by fights played, then win rate.</p>
+        </div>
+        {!fighters ? (
+          <p className="grid flex-1 place-items-center px-5 text-center font-cond text-xl font-bold uppercase tracking-[0.2em] text-paper/55">Loading records…</p>
+        ) : (
+          <div className="mx-5 mt-4 min-h-0 flex-1 overflow-y-auto border-t border-paper/15 sm:mx-7">
+            {ranked.map(({ fighter, record }, index) => (
+              <div key={fighter.id} className="grid grid-cols-[2.25rem_minmax(0,1fr)] items-center gap-2 border-b border-paper/15 py-3 sm:grid-cols-[3.5rem_minmax(0,1fr)_auto_auto] sm:gap-5 sm:px-2">
+                <span className={`font-display text-2xl ${index < 3 ? 'text-hp' : 'text-paper/45'} sm:text-3xl`}>#{index + 1}</span>
+                <span className="min-w-0">
+                  <span className="block truncate font-display text-xl uppercase leading-none tracking-tight sm:text-3xl">{fighter.name}</span>
+                  <span className="mt-1 block font-cond text-[0.68rem] font-bold uppercase tracking-[0.1em] text-paper/55 sm:text-xs sm:tracking-[0.15em]">{totalMatches(record)} fights · {record.bestStreak} best streak <span className="sm:hidden">· {record.wins}W / {record.losses}L / {record.draws}D · {winRate(record)}% WR</span></span>
+                </span>
+                <span className="hidden text-right font-cond text-sm font-bold uppercase tracking-[0.12em] text-paper/70 sm:block"><b className="text-hp">{record.wins}W</b> · {record.losses}L · {record.draws}D</span>
+                <span className="hidden font-display text-2xl text-paper sm:block sm:text-3xl">{winRate(record)}%</span>
+              </div>
+            ))}
+            {ranked.length === 0 && <p className="grid h-full place-items-center px-5 text-center font-cond text-xl font-bold uppercase tracking-[0.2em] text-paper/55">No fighters saved yet</p>}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
@@ -95,15 +152,15 @@ function MenuItem(props: { index: string; label: string; hint: string; color: st
       disabled={disabled}
       onClick={onClick}
       style={{ animationDelay: `${delay}ms` }}
-      className={`animate-in-r group relative flex items-center gap-5 bg-ink-3 py-4 pr-6 pl-8 text-left transition-colors duration-150 ${color} hover:text-ink disabled:pointer-events-none disabled:opacity-40`}
+      className={`animate-in-r group relative flex w-full items-center gap-5 bg-ink-3 py-4 pr-6 pl-8 text-left transition-[background-color,padding,gap,width] duration-150 hover:w-[calc(100vw-1.5rem)] hover:gap-0 hover:py-6 hover:pr-6 hover:pl-6 hover:text-ink sm:hover:w-[calc(100%+2rem)] disabled:pointer-events-none disabled:opacity-40 ${color}`}
     >
       <span className={`absolute inset-y-0 left-0 w-2 ${bar} group-hover:bg-ink`} />
-      <span className="font-cond text-sm font-bold tracking-[0.3em] text-paper/45 group-hover:text-ink/60">{index}</span>
-      <span className="flex-1">
-        <span className="block font-display text-4xl uppercase leading-none tracking-tight sm:text-5xl">{label}</span>
+      <span className="font-cond text-sm font-bold tracking-[0.3em] text-paper/45 group-hover:hidden">{index}</span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-display text-3xl uppercase leading-none tracking-tight sm:text-5xl">{label}</span>
         <span className="mt-1 block font-cond text-sm font-semibold uppercase tracking-[0.15em] text-paper/50 group-hover:text-ink/70">{hint}</span>
       </span>
-      <Arrow className="text-3xl" />
+      <Arrow className="text-3xl group-hover:hidden" />
     </button>
   );
 }

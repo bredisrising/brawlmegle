@@ -15,6 +15,7 @@ import { MockSource } from '../input/sources/MockSource';
 import { captureScan, forgeBusy, forgeFighter, type ScanFrames } from '../forge/forge';
 import { forgeStatus, onChange, scanStatus } from '../forge/status';
 import { fetchServerFighters, maskedFighter, saveFighter } from '../forge/roster';
+import { recordMatch } from '../forge/leaderboard';
 import { config } from '../config';
 import {
   PLAYER_IDS, opponentOf,
@@ -135,7 +136,11 @@ export class Game {
       if (s.phase === 'ko' && prev.phase !== 'ko') {
         void this.recorder.stop({ winner: s.winner, ending: s.ending });
         this.announceFinish(s.winner, s.ending);
-        if (!this.client) this.callFinish(s.winner, s.ending);
+        if (!this.client) {
+          // The CPU wears someone else's fighter: only human sides get a record.
+          recordMatch({ p1: this.cpu.p1 ? undefined : this.fighters.p1, p2: this.cpu.p2 ? undefined : this.fighters.p2 }, s.winner);
+          this.callFinish(s.winner, s.ending);
+        }
       }
       if (s.countdown === prev.countdown || s.countdown === null) return;
       this.sfx.play(s.countdown === 0 ? 'go' : 'beep');

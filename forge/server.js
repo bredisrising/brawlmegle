@@ -67,6 +67,26 @@ for (const id of fs.readdirSync(DATA)) {
   } catch {}
 }
 
+// Fight records for the leaderboard: one shared record per fighter (by fighter id), so every laptop sees the same
+// standings. Kept in FORGE_DATA/records.json (a file, so the fighter-folder loader above skips it).
+const RECORDS_FILE = new URL("records.json", DATA);
+/** @type {Record<string, {wins: number, losses: number, draws: number, streak: number, bestStreak: number}>} */
+let records = {};
+try {
+  records = JSON.parse(fs.readFileSync(RECORDS_FILE, "utf8"));
+} catch {}
+const seenMatches = new Set();
+const matchesAllowed = (() => {
+  const times = [];
+  return () => {
+    const now = Date.now();
+    while (times.length && now - times[0] > 60_000) times.shift();
+    if (times.length >= 30) return false;
+    times.push(now);
+    return true;
+  };
+})();
+
 function storeFor(fighter) {
   const dir = new URL(`${fighter.id}/`, DATA);
   fs.mkdirSync(dir, { recursive: true });
@@ -196,6 +216,35 @@ async function handle(req, res) {
   if (req.method === "GET" && url.pathname === "/api/fighters") {
     const ready = [...fighters.values()].filter((f) => f.status === "ready").sort((a, b) => b.createdAt - a.createdAt);
     return json(res, 200, ready.map((f) => view(f, base)));
+  }
+
+  // Leaderboard: every fighter's record.
+  if (req.method === "GET" && url.pathname === "/api/records") return json(res, 200, { records });
+
+  // The host reports a finished round. Only forged fighters on this server get records (not the CPU's or stand-ins).
+  if (req.method === "POST" && url.pathname === "/api/matches") {
+    if (ACCESS_KEY && req.headers["x-forge-key"] !== ACCESS_KEY) return json(res, 403, { error: "bad forge key" });
+    if (!matchesAllowed()) return json(res, 429, { error: "slow down" });
+    let body;
+    try {
+      body = await readJson(req);
+    } catch (err) {
+      return json(res, err.status ?? 400, { error: err.message });
+    }
+    const match = typeof body?.matchId === "string" ? body.matchId.slice(0, 64) : "";
+    const winner = body?.winner === "p1" || body?.winner === "p2" ? body.winner : null;
+    if (!match || seenMatches.has(match)) return json(res, 200, { ok: true, duplicate: !!match });
+    seenMatches.add(match);
+    for (const side of ["p1", "p2"]) {
+      const id = typeof body?.[side] === "string" ? body[side] : null;
+      if (!id || !fighters.has(id)) continue;
+      const r = records[id] ?? { wins: 0, losses: 0, draws: 0, streak: 0, bestStreak: 0 };
+      if (!winner) records[id] = { ...r, draws: r.draws + 1, streak: 0 };
+      else if (winner === side) records[id] = { ...r, wins: r.wins + 1, streak: r.streak + 1, bestStreak: Math.max(r.bestStreak, r.streak + 1) };
+      else records[id] = { ...r, losses: r.losses + 1, streak: 0 };
+    }
+    fs.writeFile(RECORDS_FILE, JSON.stringify(records), (err) => err && console.warn("records save failed:", err.message));
+    return json(res, 200, { ok: true });
   }
 
   // Commentators: one or two LLM-written lines for a moment of the fight (SPEC "Commentators").
