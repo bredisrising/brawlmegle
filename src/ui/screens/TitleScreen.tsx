@@ -51,6 +51,12 @@ export function TitleScreen() {
             <nav className="flex w-full max-w-md flex-col gap-2">
               <MenuItem index="01" label="Host" hint="Run the fight on this screen" color="hover:bg-p1" bar="bg-p1" disabled={busy} onClick={() => run(() => game.host())} delay={100} />
               <MenuItem index="02" label="Connect" hint="Join with a room code" color="hover:bg-p2" bar="bg-p2" disabled={busy} onClick={() => setMode('connect')} delay={180} />
+              {/* Dev tools live on the same site (local dev serves them from /test/). */}
+              <p className="mt-3 flex gap-5 font-cond text-sm font-bold uppercase tracking-[0.25em] text-paper/45">
+                <span>Tools</span>
+                <a className="underline-offset-4 hover:text-paper hover:underline" href={import.meta.env.DEV ? '/test/tuner/' : '/tuner/'}>Move tester</a>
+                <a className="underline-offset-4 hover:text-paper hover:underline" href={import.meta.env.DEV ? '/test/scan/' : '/scan/'}>Scan test</a>
+              </p>
             </nav>
           ) : (
             <form onSubmit={submitCode} className="animate-rise flex w-full max-w-md flex-col gap-4 border-2 border-paper/15 bg-ink p-6">

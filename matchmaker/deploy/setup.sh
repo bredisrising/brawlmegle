@@ -191,8 +191,14 @@ server {
     root /var/www/brawlegle;
     try_files \$uri \$uri/ /\$1/index.html;
   }
+  # Matchmaker extras (health, training-sample uploads, its WebRTC test page at /mm-test).
+  location = /health { proxy_pass http://127.0.0.1:3000; }
+  location = /samples { proxy_pass http://127.0.0.1:3000; }
+  location = /mm-test { proxy_pass http://127.0.0.1:3000/; }
+  # Everything else is the game itself (a static build in /var/www/brawlegle/game), one site for everyone.
   location / {
-    proxy_pass http://127.0.0.1:3000;
+    root /var/www/brawlegle/game;
+    try_files \$uri \$uri/ /index.html;
   }
 }
 EOF

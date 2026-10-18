@@ -10,6 +10,13 @@ Read `SPEC.md` (what we're building) and `architecture.md` (how the code is laid
 - Pull before you push (`git pull --rebase`). Teammates push to `main` all the time.
 - Big experiments go on a branch (e.g. `orchestrator`), then merge.
 
+## The live site
+
+**https://54-149-60-196.sslip.io/** is the whole thing on one domain (AWS box, see `matchmaker/README.md`):
+- `/` the game (static build of this repo), `/tuner/` move tester, `/scan/` scan test
+- `/api/` the forge (scan → fighter, usernames, OpenAI + Tripo keys live only on the server), `/ws` matchmaker
+- Locally, `npm run dev` uses the same shared forge and matchmaker by default, so fighters/usernames are the same everywhere.
+
 ## Running things
 
 | What | Command | Where |
