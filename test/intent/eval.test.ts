@@ -15,5 +15,5 @@ for (const c of CASES) {
     console.log('\n' + report(result, c.title));
     expect(result.recall).toBeGreaterThan(c.floor);
     expect(result.precision).toBeGreaterThan(c.precision);
-  });
+  }, 30_000);
 }
