@@ -9,3 +9,7 @@ __pycache__/
 .venv/
 .DS_Store
 scripts/perf/results/
+
+# A walkout track the owner drops in themselves (see architecture.md): never committed.
+public/walkout/custom.mp3
+public/walkout/custom.json

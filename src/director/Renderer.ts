@@ -154,6 +154,19 @@ export class Renderer {
     this.sweep = seconds ? { t: 0, duration: seconds } : null;
   }
 
+  /**
+   * Hand the camera to a director for a while (the walkout's shots): it places the camera every frame (shake still
+   * applies). null gives it back to the fight camera, as a hard cut.
+   */
+  direct(shot: ((camera: THREE.PerspectiveCamera, dt: number) => void) | null) {
+    this.shot = shot;
+    if (shot) return;
+    this.camera.fov = 40;
+    this.camera.updateProjectionMatrix();
+  }
+
+  private shot: ((camera: THREE.PerspectiveCamera, dt: number) => void) | null = null;
+
   /** Where the fighters are: their midpoint on x and the gap between them (world units). Call every frame. */
   track(midX: number, spread: number) {
     this.trackX = midX;
@@ -231,6 +244,12 @@ export class Renderer {
   private updateCamera(dt: number) {
     this.shakeAmount = Math.max(0, this.shakeAmount - dt * 0.15);
     const s = this.shakeAmount;
+    if (this.shot) {
+      this.shot(this.camera, dt);
+      this.camera.position.x += (Math.random() - 0.5) * s;
+      this.camera.position.y += (Math.random() - 0.5) * s;
+      return;
+    }
     // Ease toward the fighters' midpoint, and in when they're close (out when they're far apart).
     const ease = 1 - Math.exp(-3 * dt);
     this.camX += (this.trackX - this.camX) * ease;

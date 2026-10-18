@@ -1,8 +1,22 @@
 @import "tailwindcss";
 
+/* The walkout's graffiti type, bundled (subset to Latin): Permanent Marker (Apache 2.0), Rubik Wet Paint (OFL). */
+@font-face {
+  font-family: "Permanent Marker";
+  src: url("./assets/fonts/permanent-marker.woff2") format("woff2");
+  font-display: block;
+}
+@font-face {
+  font-family: "Rubik Wet Paint";
+  src: url("./assets/fonts/rubik-wet-paint.woff2") format("woff2");
+  font-display: block;
+}
+
 @theme {
   --font-display: "Archivo Black", "Arial Black", system-ui, sans-serif;
   --font-sans: "Archivo", system-ui, sans-serif;
+  --font-brush: "Permanent Marker", "Archivo Black", system-ui, sans-serif;
+  --font-drip: "Rubik Wet Paint", "Archivo Black", system-ui, sans-serif;
 
   --color-ink: #0b0b0d;
   --color-ink-2: #16161a;
@@ -30,6 +44,36 @@
   --animate-stripes: stripes 0.6s linear infinite;
   --animate-blink: blink 0.5s steps(2, jump-none) infinite alternate;
 
+  --animate-round-band: round-band 0.22s cubic-bezier(0.7, 0, 0.2, 1) both;
+  --animate-round-in: round-in 0.24s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+  --animate-num-slam: num-slam 0.3s cubic-bezier(0.2, 1.4, 0.4, 1) 0.16s both;
+  --animate-num-splat: num-splat 0.26s cubic-bezier(0.2, 1.5, 0.4, 1) 0.14s both;
+  --animate-fight-slam: fight-slam 0.8s cubic-bezier(0.2, 1, 0.3, 1) both;
+
+  @keyframes round-band {
+    from { clip-path: inset(0 100% 0 0); }
+    to { clip-path: inset(0 0 0 0); }
+  }
+  @keyframes round-in {
+    from { transform: translateX(-70%) skewX(-20deg); opacity: 0; }
+    to { transform: none; opacity: 1; }
+  }
+  @keyframes num-slam {
+    from { transform: scale(3) rotate(-12deg); opacity: 0; }
+    40% { opacity: 1; }
+    to { transform: rotate(-4deg); opacity: 1; }
+  }
+  @keyframes num-splat {
+    from { transform: scale(0.1) rotate(-30deg); }
+    to { transform: rotate(-12deg); }
+  }
+  @keyframes fight-slam {
+    0% { transform: scale(2.4); opacity: 0; background-position: 120% 0, 0 0; }
+    12% { transform: scale(0.94); opacity: 1; }
+    20% { transform: scale(1.03); }
+    30% { transform: scale(1); background-position: 120% 0, 0 0; }
+    100% { transform: scale(1.04); opacity: 1; background-position: -30% 0, 0 0; }
+  }
   @keyframes countdown {
     0% { transform: scale(1.9); opacity: 0; }
     16% { transform: scale(0.96); opacity: 1; }

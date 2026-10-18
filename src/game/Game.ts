@@ -6,6 +6,8 @@ import { FighterView } from '../director/FighterView';
 import { Sfx } from '../director/Sfx';
 import { Announcer } from '../director/Announcer';
 import { Fireballs } from '../director/Fireballs';
+import { Walkout } from '../director/Walkout';
+import { ROUND_CALL_SECONDS, WALKOUT_SECONDS } from '../director/walkoutTiming';
 import { Cpu, type CpuLevel, type CpuOutput } from '../fight/Cpu';
 import { FightEngine } from '../fight/FightEngine';
 import { Resolver } from '../fight/Resolver';
@@ -52,8 +54,6 @@ const REPLAY_HOLD = 0.8;
 /** Game seconds after the K.O. (after its freeze; slowed by the slow motion) before the replay starts. */
 const REPLAY_DELAY = 1.2;
 type ReplayFrame = MirrorFrame & { live: Record<PlayerId, PoseFrame | null>; events: MirrorEvent[] };
-/** How long the VS screen shows before 2, 1, FIGHT. */
-const VS_SECONDS = 2.4;
 /** Roughly head height between the two fighters. */
 const ARENA_CENTER = new THREE.Vector3(0, 0.5, 0);
 const ARENA_FLOOR = new THREE.Vector3(0, 0.01, 0);
@@ -111,6 +111,8 @@ export class Game {
   /** Shouted barks and the crowd (pre-made clips; silent until they're generated). */
   readonly announcer = new Announcer();
   private readonly fireballs: Fireballs;
+  /** The fighters' entrances before round 1 (both laptops; ui/Walkout.tsx draws its titles from it). */
+  readonly walkout: Walkout;
   /** Each fighter's phase last tick, to hear a strike come out (whoosh) on both laptops. */
   private readonly heardPhase: Partial<Record<PlayerId, string>> = {};
   private readonly unsubscribe: () => void;
@@ -148,6 +150,7 @@ export class Game {
     this.intent = { p1: new IntentReader('p1'), p2: new IntentReader('p2') };
     for (const v of Object.values(this.views)) this.renderer.scene.add(v.root);
 
+    this.walkout = new Walkout(this.renderer, this.effects, this.views, this.announcer, this.sfx, () => this.skipWalkout());
     this.renderer.onFrame(this.update);
     // Render quality steps down when this laptop's pose tracker starves (QualityGovernor).
     this.renderer.watchPose(() => poseRateOf(this.localInputSource()), (on) => setOnePose(this.localInputSource(), on));
@@ -173,7 +176,7 @@ export class Game {
         }
       }
       if (s.countdown === prev.countdown || s.countdown === null) return;
-      this.sfx.play(s.countdown === 0 ? 'go' : 'beep');
+      if (s.countdown === 0) this.sfx.play('go'); // the walkout and ROUND 1 bring their own sound
       if (s.countdown === COUNTDOWN_FROM) this.announcer.crowd('murmur', 0.35);
       if (s.countdown === 0) {
         this.announcer.bark('fight', true);
@@ -334,6 +337,13 @@ export class Game {
     this.effects.burst(this.views[id].root.position, 'spawn', PLAYER_COLORS[id]);
   }
 
+  /** Any key or click during the walkout (host): straight to ROUND 1. The client laptop follows the countdown. */
+  private skipWalkout() {
+    const { phase, countdown } = useGameStore.getState();
+    if (this.client || phase !== 'countdown' || countdown !== COUNTDOWN_FROM) return;
+    this.phaseTimer = WALKOUT_SECONDS;
+  }
+
   /** The local player chose not to wait for their forge (see setupPlayer). */
   skipForgeWait(id: PlayerId) {
     if (this.client) return this.client.skipForge();
@@ -485,6 +495,7 @@ export class Game {
     for (const v of Object.values(this.views)) v.dispose();
     this.effects.dispose();
     this.fireballs.dispose();
+    this.walkout.dispose();
     this.renderer.dispose();
   }
 
@@ -520,8 +531,8 @@ export class Game {
     const { phase, countdown } = useGameStore.getState();
     this.phaseTimer += SIM_DT;
 
-    // The first beat is the VS screen, so it holds longer.
-    if (phase === 'countdown' && this.phaseTimer >= (countdown === COUNTDOWN_FROM ? VS_SECONDS : 1)) {
+    // The first beat is the walkout, then ROUND 1, then FIGHT.
+    if (phase === 'countdown' && this.phaseTimer >= (countdown === COUNTDOWN_FROM ? (this.walkout.hold === null ? WALKOUT_SECONDS : Infinity) : ROUND_CALL_SECONDS)) {
       this.phaseTimer = 0;
       const next = (countdown ?? 1) - 1;
       useGameStore.setState(next <= 0 ? { phase: 'fighting', countdown: 0 } : { countdown: next });
@@ -917,7 +928,9 @@ export class Game {
     const vars = { a: cast.p1.name, d: cast.p2.name };
     void this.commentary
       .write('The round is about to start: introduce the two fighters with some trash talk.', cast)
-      .then((lines) => {
+      .then(async (lines) => {
+        // Not over the walkout's music and announcer: they speak once it's done.
+        await afterWalkout();
         if (useGameStore.getState().phase !== 'countdown' && useGameStore.getState().phase !== 'fighting') return;
         this.call(lines.length ? lines : [fill(TEMPLATES.intro, vars)], true);
       });
@@ -1077,6 +1090,18 @@ export class Game {
       hitstopFrames: Math.min(14, 4 + damage / 2),
     });
   };
+}
+
+/** Resolves once no walkout is playing. */
+function afterWalkout() {
+  return new Promise<void>((resolve) => {
+    if (!useGameStore.getState().walkout) return resolve();
+    const off = useGameStore.subscribe((s) => {
+      if (s.walkout) return;
+      off();
+      resolve();
+    });
+  });
 }
 
 /** Name the last real move the camera read, for the camera picture-in-picture. */

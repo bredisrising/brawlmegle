@@ -13,7 +13,8 @@ export function HUD() {
   const urgent = phase === 'fighting' && timeLeft !== null && timeLeft <= 10;
   // The K.O. replay is a cutscene: no HUD over it.
   const replay = useGameStore((s) => s.replay);
-  if (replay) return null;
+  const walkout = useGameStore((s) => s.walkout);
+  if (replay || walkout) return null;
 
   return (
     <div className="absolute inset-x-0 top-0 grid grid-cols-[1fr_auto_1fr] items-start gap-2 px-3 pt-3 sm:gap-4 sm:px-8 sm:pt-6">

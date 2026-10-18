@@ -93,6 +93,8 @@ export class FighterView {
   private lastBlow: HitInfo | null = null;
   /** A K.O.'d fighter is a ragdoll, not an animation. */
   private readonly ragdoll = new Ragdoll();
+  /** Set by the walkout while it runs: poses the fighter on top of the stance (see walkoutPose.ts). */
+  entrance: ((pose: Pose, motion: Motion, dt: number) => boolean | void) | null = null;
   /** Called once when a K.O.'d body hits the floor (world point), for the dust. */
   onLand: ((at: THREE.Vector3) => void) | null = null;
   private flash = 0;
@@ -286,6 +288,8 @@ export class FighterView {
       },
       this.motion,
     );
+    // A cutscene's pose on top (the walkout's entrance); true shows it on this frame (a key frame).
+    if (this.entrance?.(this.target, this.motion, dt)) this.forceStep = true;
     this.updateReveal(dt);
     // Stepped ("on twos") animation: the shown pose holds and jumps at config.animFps, except that a change in what
     // the engine is doing (a strike going active, a hit, a K.O.) shows on its exact frame.

@@ -4,7 +4,8 @@ import type { PlayerId } from '../types';
 export const SIM_DT = 1 / 60;
 
 export const MAX_HP = 100;
-export const COUNTDOWN_FROM = 3;
+/** The round-start beats: 2 = the walkout (fighter entrances), 1 = ROUND 1, 0 = FIGHT. */
+export const COUNTDOWN_FROM = 2;
 export const ROUND_SECONDS = 60;
 
 /** World scale: every fighter is normalized to 1 meter tall. */

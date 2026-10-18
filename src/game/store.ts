@@ -65,6 +65,8 @@ export interface GameState {
   recordingVideo: boolean;
   /** Training: no opponent fighting back, no clock, health and meter refill. */
   training: boolean;
+  /** The walkout (fighter entrances before round 1) is playing: a cutscene, so no HUD or captions over it. */
+  walkout: boolean;
   /** The K.O. replay is playing (the K.O. screen waits for it). */
   replay: boolean;
   /** A big announcer callout ("FIRST ATTACK", "PERFECT"), `key` changes with each. */
@@ -99,6 +101,7 @@ export const useGameStore = create<GameState>(() => ({
   combo: null,
   callout: null,
   replay: false,
+  walkout: false,
   recordingVideo: false,
   training: false,
   link: null,

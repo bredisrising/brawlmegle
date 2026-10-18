@@ -3,7 +3,8 @@ import { useGameStore } from '../game/store';
 /** Commentator captions, bottom center, always on (the voices can be muted with M). */
 export function Captions() {
   const caption = useGameStore((s) => s.caption);
-  if (!caption) return null;
+  const walkout = useGameStore((s) => s.walkout);
+  if (!caption || walkout) return null;
   const a = caption.voice === 'A';
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-[9%] flex justify-center px-4">

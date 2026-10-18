@@ -17,7 +17,7 @@ import { PoseDebugOverlay } from './ui/PoseDebugOverlay';
 import { CameraPip } from './ui/CameraPip';
 import { MoveGuide } from './ui/MoveGuide';
 import { Callout, ComboCounter } from './ui/ComboCounter';
-import { VsIntro } from './ui/VsIntro';
+import { Walkout } from './ui/Walkout';
 import { GameMenu } from './ui/GameMenu';
 import { Captions } from './ui/Captions';
 
@@ -59,7 +59,7 @@ export default function App() {
                 <HUD />
                 <MoveGuide />
                 <GameMenu />
-                <VsIntro />
+                <Walkout />
                 <Captions />
                 <DebugHint />
               </>

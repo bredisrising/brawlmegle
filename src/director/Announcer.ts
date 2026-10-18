@@ -38,6 +38,57 @@ export class Announcer {
     this.play(`crowd-${name}`, volume, false);
   }
 
+  /** Fetch and decode a music cue (a URL) once audio is unlocked, so it starts on time when it's needed. */
+  preloadMusic(url: string) {
+    if (!this.music.has(url)) {
+      this.music.set(
+        url,
+        this.load().then(async () => {
+          if (!this.ctx) return null;
+          try {
+            return await this.ctx.decodeAudioData(await (await fetch(url)).arrayBuffer());
+          } catch {
+            return null;
+          }
+        }),
+      );
+    }
+    return this.music.get(url)!;
+  }
+
+  /**
+   * Play a music cue from `offset` seconds into the file, `delay` seconds from now (dry, under the barks). The handle
+   * fades it out (a skip, or the end of a cue that runs long). Silent when muted, not yet unlocked, or the file is missing.
+   */
+  playMusic(url: string, volume = 0.6, offset = 0, delay = 0) {
+    let src: AudioBufferSourceNode | null = null;
+    let gain: GainNode | null = null;
+    let stopped = false;
+    if (!this.muted) {
+      void this.preloadMusic(url).then((buffer) => {
+        if (stopped || !buffer || !this.ctx || !this.out || this.ctx.state !== 'running' || offset >= buffer.duration) return;
+        src = this.ctx.createBufferSource();
+        src.buffer = buffer;
+        gain = this.ctx.createGain();
+        gain.gain.value = volume;
+        src.connect(gain).connect(this.out);
+        src.start(this.ctx.currentTime + Math.max(0, delay), Math.max(0, offset));
+      });
+    }
+    return {
+      stop: (fade = 0.12) => {
+        stopped = true;
+        if (!src || !gain || !this.ctx) return;
+        const now = this.ctx.currentTime;
+        gain.gain.setValueAtTime(gain.gain.value, now);
+        gain.gain.linearRampToValueAtTime(0, now + fade);
+        src.stop(now + fade + 0.02);
+      },
+    };
+  }
+
+  private readonly music = new Map<string, Promise<AudioBuffer | null>>();
+
   private play(name: string, volume: number, reverb: boolean) {
     if (this.muted) return;
     void this.load().then(() => {
