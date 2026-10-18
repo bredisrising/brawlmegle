@@ -188,6 +188,7 @@ export class ClientSession {
           name: fighter.name,
           status: 'forging',
           statusDetail: detail || (fighter.step ? FORGE_STEPS[fighter.step] : 'Forging your fighter'),
+          ...(fighter.cardUrl ? { portraitUrl: fighter.cardUrl } : {}),
         });
         break;
       case 'failed':

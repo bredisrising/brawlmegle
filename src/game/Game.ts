@@ -228,7 +228,12 @@ export class Game {
         const got = frames.filter(Boolean).length;
         updatePlayer(id, { status: 'forging', statusDetail: got < 3 ? `Got ${got} of 3 sides, forging anyway` : 'Forging fighter' });
         // The fighter goes by the player's username; the brief's playful nickname stays in brief.name for flavor.
-        fighter = await forgeFighter(name, frames, (f) => show(forgeStatus(f)), { username: choice.username, signal });
+        // Show the design (card, else the sheet) as soon as it exists: the 3D model takes another minute or so.
+        const preview = (f: ForgedFighter) => {
+          const art = f.cardUrl ?? f.sheetUrl ?? null;
+          if (art && art !== useGameStore.getState().players[id].portraitUrl) updatePlayer(id, { portraitUrl: art });
+        };
+        fighter = await forgeFighter(name, frames, (f) => (show(forgeStatus(f)), preview(f)), { username: choice.username, signal });
         if (fighter.status === 'ready') saveFighter(fighter); // they said yes to "save fighter to memory card"
         // A failed forge still fights: no glbUrl means the default model (SPEC fallback ladder).
         else console.warn('forge failed, using the default fighter:', fighter.error);

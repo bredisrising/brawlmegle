@@ -231,7 +231,9 @@ export class HostSession {
     let msg: HostMessage;
     if (failed) msg = { type: 'fighter', fighter: { ...base, status: 'failed', error: failed } };
     else if (this.input.source(REMOTE) !== this.remote) return;
-    else if (p2.status === 'forging') msg = { type: 'fighter', fighter: { ...base, status: 'forging' }, detail: p2.statusDetail };
+    else if (p2.status === 'forging') {
+      msg = { type: 'fighter', fighter: { ...base, status: 'forging', ...(p2.portraitUrl ? { cardUrl: p2.portraitUrl } : {}) }, detail: p2.statusDetail };
+    }
     else if (p2.status === 'ready') msg = { type: 'fighter', fighter: { ...base, status: 'ready', ...(p2.portraitUrl ? { cardUrl: p2.portraitUrl } : {}) } };
     else return;
     const key = JSON.stringify(msg);

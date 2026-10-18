@@ -106,6 +106,8 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
                 {player.statusDetail}
                 <span className="animate-blink">_</span>
               </p>
+              {/* The design arrives about a minute before the 3D model: show it off while they wait. */}
+              {player.status === 'forging' && player.portraitUrl && <DesignPreview url={player.portraitUrl} color={accent.bg} right={right} />}
             </div>
           )}
 
@@ -155,6 +157,18 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** The fighter's design art while the 3D model is still being built. */
+export function DesignPreview({ url, color, right }: { url: string; color: string; right: boolean }) {
+  return (
+    <div className={`animate-slam flex flex-col gap-1 ${right ? 'items-end origin-right' : 'items-start origin-left'}`}>
+      <div className={`cut ${color} p-[4px] [--cut:14px]`}>
+        <img src={url} alt="Your fighter's design" className="cut block max-h-[34vh] w-auto bg-ink object-contain [--cut:12px]" />
+      </div>
+      <span className="font-cond text-sm font-bold uppercase tracking-[0.25em] text-paper/70">Your fighter. Building it in 3D…</span>
     </div>
   );
 }

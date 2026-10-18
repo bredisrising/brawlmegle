@@ -3,6 +3,7 @@ import type { Phase } from '../../types';
 import { ACCENT } from '../accent';
 import { ForgeSteps } from '../ForgeSteps';
 import { MoveGuide } from '../MoveGuide';
+import { DesignPreview } from '../PlayerSlot';
 
 /** Headline once P2 is ready, following the host's phase. */
 const READY_HEADLINE: Record<Phase, string> = {
@@ -52,6 +53,7 @@ export function ClientScreen() {
             <span className="animate-blink">_</span>
           </p>
         )}
+        {player.status === 'forging' && player.portraitUrl && <DesignPreview url={player.portraitUrl} color={accent.bg} right={false} />}
 
         {player.status === 'ready' && (
           <div className="flex flex-col items-start gap-3">
