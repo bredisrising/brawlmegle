@@ -92,7 +92,7 @@ async function open(port, label) {
     const res = await route.fetch();
     await route.fulfill({ response: res, json: await pick(await res.json(), [P1, P2]) });
   });
-  await page.goto(`${BASE}?perf=1&input=camera&record=0&video=0&quality=high&demo=1`, { waitUntil: "load", timeout: 120000 });
+  await page.goto(`${BASE}?perf=1&input=camera&record=0&video=0&quality=high&demo=1&voices=0`, { waitUntil: "load", timeout: 120000 });
   await page.waitForFunction(() => window.__brawl, null, { timeout: 60000 });
   if (WARP !== 1) {
     const cdp = await context.newCDPSession(page);

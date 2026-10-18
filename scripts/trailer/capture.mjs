@@ -352,7 +352,7 @@ if (SCENE === "title") {
   await rec.stop();
 } else if (SCENE === "fight") {
   await noHighlight();
-  await page.getByRole("button", { name: /^03 Practice/ }).click();
+  await page.getByRole("button", { name: /^03 (Practice|VS CPU)/ }).click();
   await page.getByRole("button", { name: /Load fighter/ }).click();
   await page.locator(`[data-fighter="${P1}"]`).click();
   await page.waitForFunction(() => window.__brawl.store.getState().players.p2.status === "ready", null, { timeout: real(120), polling: 100 });
@@ -368,7 +368,7 @@ if (SCENE === "title") {
   await rec.start();
   rec.mark("title");
   await sleep(real(1.5));
-  await page.getByRole("button", { name: /^03 Practice/ }).click();
+  await page.getByRole("button", { name: /^03 (Practice|VS CPU)/ }).click();
   await sleep(real(1.2));
   await page.getByRole("button", { name: /Enter/ }).first().click();
   await sleep(real(0.8));
