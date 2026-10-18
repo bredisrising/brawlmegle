@@ -39,6 +39,12 @@ The orchestrator in practice (camera -> on screen, ~180 ms from the first sign o
 - test/fight/orchestrator.test.ts runs real guided recordings through all of it and prints what was thrown.
 
 Also in the fight:
+- Walkout (director/Walkout.ts, ui/Walkout.tsx, beats in director/walkoutTiming.ts): the countdown's first beat is a
+  ~5.5 s SF6-style entrance (each fighter in fire with a graffiti name slam, flame wipes, VS, READY?), then ROUND 1 and
+  FIGHT. Both laptops run it off the countdown, so the host's skip (any key/click) carries over; `?walkout=0` skips it.
+  Music: public/walkout/walkout.mp3 (original, scripts/make-walkout-music.mjs); drop in public/walkout/custom.mp3 (+
+  optional custom.json `{"start": s, "drop": s}`: where to start, and when after that the first name slam hits) to
+  use your own track instead (both gitignored).
 - Super: a meter fills from landing hits (FIGHT.meterOn*); with it full, holding both fists up over the head (the
   reader's `special` intent) throws a fireball, a projectile the engine flies, that can be blocked or ducked.
 - Commentators (game/Commentary.ts): the host picks the moments (react/callIntro/callFinish in Game.ts): instant

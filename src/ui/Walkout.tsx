@@ -11,6 +11,8 @@ if (typeof document !== 'undefined' && document.fonts) {
   void document.fonts.load('1em "Rubik Wet Paint"');
 }
 
+/** Dev: `?walkoutClock=1` shows the walkout's clock (for checking the cuts against the music). */
+const CLOCK = import.meta.env.DEV && new URLSearchParams(window.location.search).get('walkoutClock') === '1';
 const INK = '#0b0a10';
 const PAPER = '#f3f0e8';
 const YELLOW = '#ffd400';
@@ -85,6 +87,12 @@ function WalkoutTitles() {
         className="absolute inset-0 bg-paper"
         style={{ opacity: 0 }}
       />
+      {CLOCK && (
+        <div
+          ref={use((t, el) => void (el.textContent = t.toFixed(2)))}
+          className="absolute left-2 top-[11vh] bg-ink px-2 font-mono text-2xl text-hp"
+        />
+      )}
       {host && (
         <div
           ref={use((t, el) => void (el.style.opacity = String(kf(t, [[0.4, 0], [0.7, 0.75], [W.flash - 0.2, 0.75], [W.flash, 0]]))))}
@@ -141,8 +149,8 @@ function NameCard({ id, use }: { id: PlayerId; use: Use }) {
     const shown = u >= 0 && t < out + 0.3;
     el.style.visibility = shown ? 'visible' : 'hidden';
     if (!shown) return;
-    // Burns away as the wipe crosses it: sinks back and fades.
-    const gone = smoothstep((t - out - 0.06) / 0.2);
+    // Burns away as the wipe reaches it: sinks back and fades.
+    const gone = smoothstep((t - out - 0.02) / 0.14);
     el.style.opacity = String(1 - gone);
     const drift = 1 + 0.045 * smoothstep(u / 1.2);
     el.style.transform = `translate(${p1 ? 0 : 0}px, ${gone * 20}px) scale(${drift * (1 - 0.06 * gone)})`;
@@ -168,7 +176,7 @@ function NameCard({ id, use }: { id: PlayerId; use: Use }) {
   });
   const tagRef = use<HTMLDivElement>((t, el) => {
     const k = easeOut((t - slam - 0.07) / 0.16);
-    el.style.transform = `translateX(${(1 - k) * (p1 ? 140 : -140)}%) rotate(${p1 ? -4 : 3}deg)`;
+    el.style.transform = `translateX(${(1 - k) * (p1 ? -140 : 140)}%) rotate(${p1 ? -4 : 3}deg)`;
   });
   const photo = use<HTMLDivElement>((t, el) => {
     const u = t - slam - 0.03;
@@ -180,7 +188,7 @@ function NameCard({ id, use }: { id: PlayerId; use: Use }) {
   return (
     <div
       ref={card}
-      className={`absolute top-[16vh] bottom-[14vh] flex w-[58vw] flex-col justify-center ${p1 ? 'right-[3vw] items-end' : 'left-[3vw] items-start'}`}
+      className={`absolute top-[25vh] bottom-[11vh] flex w-[58vw] flex-col justify-center ${p1 ? 'right-[3vw] items-end' : 'left-[3vw] items-start'}`}
       style={{ visibility: 'hidden', transformOrigin: p1 ? '70% 55%' : '30% 55%' }}
     >
       <div className="relative">
@@ -200,7 +208,7 @@ function NameCard({ id, use }: { id: PlayerId; use: Use }) {
         {player.portraitUrl && (
           <div
             ref={photo}
-            className={`absolute top-[-62%] h-[min(24vw,34vh)] w-[min(18vw,26vh)] ${p1 ? 'left-[-4%]' : 'right-[-4%]'}`}
+            className={`absolute bottom-[78%] h-[min(24vw,34vh)] w-[min(18vw,26vh)] ${p1 ? 'right-[-3%]' : 'left-[-3%]'}`}
             style={{ opacity: 0, filter: 'drop-shadow(6px 8px 0 rgba(11,10,16,0.7))' }}
           >
             <div className="h-full w-full bg-paper p-[6px]" style={{ clipPath: tornRect(p1 ? 3 : 9) }}>
@@ -231,7 +239,7 @@ function NameCard({ id, use }: { id: PlayerId; use: Use }) {
             />
           </svg>
         </div>
-        <div ref={tagRef} className={`absolute -top-[2.6rem] sm:-top-[3.2rem] ${p1 ? 'right-[4%]' : 'left-[4%]'}`}>
+        <div ref={tagRef} className={`absolute -top-[2.6rem] sm:-top-[3.2rem] ${p1 ? 'left-[2%]' : 'right-[2%]'}`}>
           <div className="flex items-stretch bg-paper py-1 pl-2 pr-3 text-ink shadow-[5px_5px_0_rgba(11,10,16,0.8)]" style={{ clipPath: tornStrip(p1 ? 2 : 6) }}>
             <span className="grid place-items-center px-2 font-display text-lg leading-none text-paper sm:text-2xl" style={{ background: color }}>
               {label}

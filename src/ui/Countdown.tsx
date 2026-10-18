@@ -27,13 +27,13 @@ function Round() {
       >
         Round
       </span>
-      <span className="relative -ml-[0.05em] grid place-items-center">
+      <span className="relative ml-[0.25em] grid place-items-center">
         <svg viewBox="-100 -100 200 200" className="animate-num-splat absolute h-[min(26vw,40vh)] w-[min(26vw,40vh)]">
           <path d="M-62 -18 Q-70 -60 -22 -72 Q8 -96 34 -66 Q78 -64 70 -18 Q96 12 62 40 Q54 84 6 70 Q-34 92 -52 56 Q-92 34 -62 -18Z M74 -70 a7 7 0 1 0 14 0 a7 7 0 1 0 -14 0Z M-84 62 a5 5 0 1 0 10 0 a5 5 0 1 0 -10 0Z" fill="#ff2d95" />
         </svg>
         <span
-          className="animate-num-slam relative font-brush text-[min(24vw,38vh)] leading-none text-hp"
-          style={{ WebkitTextStroke: '0.04em #0b0a10', paintOrder: 'stroke fill', textShadow: '0.05em 0.06em 0 #0b0a10' }}
+          className="animate-num-slam relative font-display text-[min(22vw,34vh)] leading-none text-hp"
+          style={{ WebkitTextStroke: '0.035em #0b0a10', paintOrder: 'stroke fill', textShadow: '0.05em 0.06em 0 #ff2d95, 0.09em 0.1em 0 #0b0a10' }}
         >
           1
         </span>

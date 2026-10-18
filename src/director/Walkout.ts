@@ -16,8 +16,8 @@ const BASE = import.meta.env.BASE_URL;
 const DEFAULT_TRACK = `${BASE}walkout/walkout.mp3`;
 /** Fire per side: P1 burns hot pink-orange, P2 burns blue. */
 const PALETTES: Record<PlayerId, FirePalette> = {
-  p1: { hot: '#fff1c4', mid: '#ff6a1a', cool: '#c3133f', tint: '#ff2d95' },
-  p2: { hot: '#e9fbff', mid: '#2f9bff', cool: '#3a1fb8', tint: '#5ee8ff' },
+  p1: { hot: '#ffc21a', mid: '#ff5a1a', cool: '#b3102e', tint: '#ff2d95' },
+  p2: { hot: '#7fe9ff', mid: '#1f7bff', cool: '#2a168f', tint: '#5ee8ff' },
 };
 
 /** A walkout track: where to start in the file, and where (after that) the hit for P1's name slam lands. */
@@ -41,8 +41,10 @@ export class Walkout {
   private prevT = -1;
   private readonly fires: Record<PlayerId, Fire>;
   private readonly wipe = new FlameWipe();
-  private music: { stop(fade?: number): void } | null = null;
+  private music: ReturnType<Announcer['playMusic']> | null = null;
   private track: Track = { url: DEFAULT_TRACK, start: 0, drop: WALKOUT.p1Slam, custom: false };
+  /** The scene's exposure before the walkout dimmed it (the shots are moodier, so the fire carries them). */
+  private exposure = 1;
   private readonly look = new THREE.Vector3();
   private readonly tmp = new THREE.Vector3();
   private readonly right = new THREE.Vector3();
@@ -134,8 +136,10 @@ export class Walkout {
       this.fires[id].clear();
     }
     this.views.p2.setVisible(false);
+    this.effects.clear(); // the spawn beams from just before
     this.shown = { p1: '', p2: '' };
     this.arrive('p1');
+    this.exposure = this.renderer.renderer.toneMappingExposure;
     this.renderer.direct((camera, dt) => this.shoot(camera, dt));
     useGameStore.setState({ walkout: true });
     // Line the track's hit up with P1's name slam: start later into the file, or wait before starting it.
@@ -158,6 +162,7 @@ export class Walkout {
     }
     this.wipe.set(0, 0, 1, 0, '#000');
     this.renderer.direct(null);
+    this.renderer.renderer.toneMappingExposure = this.exposure;
     useGameStore.setState({ walkout: false });
     if (next) useGameStore.setState((s) => ({ flashKey: s.flashKey + 1 }));
   }
@@ -182,7 +187,9 @@ export class Walkout {
     }
     if (this.t < 0) return;
     this.prevT = this.t;
-    this.t = this.hold ?? this.t + dt;
+    // The music is the clock while it plays (the cuts stay on its beats through any frame hitches); else frame time.
+    const heard = this.music?.clock();
+    this.t = this.hold ?? (heard != null ? Math.max(this.t, heard) : this.t + dt);
     const W = WALKOUT;
     const { p1, p2 } = this.fires;
     if (this.crossed(W.p1Slam)) this.slam('p1');
@@ -201,8 +208,8 @@ export class Walkout {
     if (this.crossed(W.readyBark)) this.announcer.bark('ready', true);
     if (this.crossed(W.vs)) {
       this.views.p1.setVisible(true);
-      p1.target = 0.75;
-      p2.target = 0.75;
+      p1.target = 0.6;
+      p2.target = 0.6;
       p1.burst(40);
       p2.burst(40);
     }
@@ -213,7 +220,7 @@ export class Walkout {
     }
     if (this.crossed(W.ready)) {
       this.renderer.shake(0.02);
-      p1.target = p2.target = 1.1;
+      p1.target = p2.target = 0.85;
     }
     if (this.crossed(W.flash)) p1.target = p2.target = 0.3;
   }
@@ -277,22 +284,22 @@ export class Walkout {
       if (t < slamAt) {
         // Before the slam: a low, wide-ish push in on the power-up.
         const k = easeOut((t - start) / (slamAt - start));
-        ox = kf(k, [[0, 0.66], [1, 0.5]]);
+        ox = kf(k, [[0, 0.95], [1, 0.8]]);
         oy = kf(k, [[0, 0.1], [1, 0.14]]);
-        oz = kf(k, [[0, 1.12], [1, 0.9]]);
-        lookY = kf(k, [[0, 0.34], [1, 0.4]]);
-        fov = kf(k, [[0, 42], [1, 37]]);
+        oz = kf(k, [[0, 1.25], [1, 1.05]]);
+        lookY = kf(k, [[0, 0.42], [1, 0.44]]);
+        fov = kf(k, [[0, 40], [1, 37]]);
         shift = 0.12;
       } else {
         // The slam: cut in closer, a zoom punch that settles, then a slow drift in.
         const u = t - slamAt;
         const k = smoothstep(u / (end - slamAt));
-        ox = 0.44 - 0.05 * k;
-        oy = 0.2 + 0.03 * k;
-        oz = 0.72 - 0.08 * k;
-        lookY = 0.47;
-        fov = 33 - 3 * k - 7 * Math.exp(-u * 9);
-        shift = 0.2;
+        ox = 0.98 - 0.06 * k;
+        oy = 0.26 + 0.03 * k;
+        oz = 1.0 - 0.06 * k;
+        lookY = 0.5;
+        fov = 37 - 3 * k - 7 * Math.exp(-u * 9);
+        shift = 0.15;
       }
       camera.position.set(x + f * ox, oy, oz);
       this.look.set(x, lookY, 0);
@@ -306,10 +313,11 @@ export class Walkout {
       const u = t - W.vs;
       const mid = (this.views.p1.root.position.x + this.views.p2.root.position.x) / 2;
       const k = smoothstep(u / (W.end - W.vs));
-      camera.position.set(mid, 0.22 + 0.04 * k, 1.38 - 0.16 * k);
-      camera.lookAt(this.look.set(mid, 0.42, 0));
-      fov = 38 - 2 * k - 6 * Math.exp(-u * 8);
+      camera.position.set(mid, 0.2 + 0.04 * k, 1.2 - 0.14 * k);
+      camera.lookAt(this.look.set(mid, 0.4, 0));
+      fov = 37 - 2 * k - 6 * Math.exp(-u * 8);
     }
+    this.renderer.renderer.toneMappingExposure = this.exposure * (t < W.vs ? 0.72 : kf(t, [[W.vs, 0.72], [W.vs + 0.25, 0.85]]));
     if (camera.fov !== fov) {
       camera.fov = fov;
       camera.updateProjectionMatrix();

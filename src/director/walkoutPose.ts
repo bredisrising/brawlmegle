@@ -58,7 +58,7 @@ export function entrancePose(pose: Pose, motion: Motion, kind: EntranceKind, t: 
     lean(pose, -0.03);
     crouch(pose, 0.02 + 0.006 * breathe);
     const [shoulder] = arm(camSide);
-    a.set(-lead * 0.8, 0.14, 0.58).normalize().multiplyScalar((UPPER_ARM + FOREARM) * 0.97 * pop).add(pose[shoulder]);
+    a.set(-lead * 0.72, 0.08, 0.7).normalize().multiplyScalar((UPPER_ARM + FOREARM) * 0.97 * pop).add(pose[shoulder]);
     reach(pose, camSide, a, hint.set(0, -1, 0));
     const [hipShoulder] = arm(lead);
     b.set(pose[hipShoulder].x + lead * 0.07, pose[hipShoulder].y - 0.24, pose[hipShoulder].z + 0.02);

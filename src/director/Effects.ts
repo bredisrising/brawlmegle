@@ -133,6 +133,12 @@ export class Effects {
     }
   }
 
+  /** Put out everything in flight (a cutscene cutting in, e.g. the walkout over a spawn beam). */
+  clear() {
+    for (const layer of this.layers) this.release(layer);
+    this.layers.length = 0;
+  }
+
   dispose() {
     for (const layer of this.all) {
       layer.object.removeFromParent();

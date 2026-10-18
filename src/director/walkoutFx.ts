@@ -14,8 +14,10 @@ float noise(vec2 p) {
   return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
 }
 float fbm(vec2 p) {
+  // Rotating each octave hides the value noise's grid.
   float v = 0.0, a = 0.5;
-  for (int i = 0; i < 5; i++) { v += a * noise(p); p = p * 2.03 + 17.1; a *= 0.5; }
+  mat2 r = mat2(1.6, 1.2, -1.2, 1.6);
+  for (int i = 0; i < 5; i++) { v += a * noise(p); p = r * p + 17.1; a *= 0.5; }
   return v;
 }
 `;
@@ -25,7 +27,10 @@ varying vec2 vUv;
 void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
 `;
 
-/** One sheet of flame: a tongue of fire rising from the bottom edge, licking up with turbulence. */
+/**
+ * One sheet of flame: tongues of fire rising from the bottom edge. Cel-shaded like the fighters: three hard bands
+ * (dark edge, body, hot core) instead of a soft gradient, and the turbulence steps on twos (12 fps) like hand-drawn fire.
+ */
 const FLAME_FRAG = /* glsl */ `
 varying vec2 vUv;
 uniform float uTime, uAmount, uSeed;
@@ -33,15 +38,17 @@ uniform vec3 uHot, uMid, uCool;
 ${NOISE}
 void main() {
   vec2 uv = vUv;
-  float t = uTime;
-  vec2 q = vec2(uv.x * 2.4 + uSeed, uv.y * 1.5 - t * 1.9);
-  float n = fbm(q + vec2(fbm(q * 1.8 + vec2(uSeed, -t * 2.7)) * 0.9, 0.0));
-  float width = 1.0 - pow(abs(uv.x - 0.5) * 2.0, 1.6);
-  float body = width * (1.2 - uv.y * 1.35);
-  float f = (body + (n - 0.5) * 1.15) * uAmount;
-  float a = smoothstep(0.1, 0.5, f) * smoothstep(0.0, 0.06, uv.y);
-  vec3 col = mix(uCool, uMid, smoothstep(0.12, 0.5, f));
-  col = mix(col, uHot, smoothstep(0.5, 1.0, f));
+  float t = floor(uTime * 12.0) / 12.0;
+  vec2 q = vec2(uv.x * 2.6 + uSeed, uv.y * 1.7 - t * 2.1);
+  float n = fbm(q + vec2(fbm(q * 1.9 + vec2(uSeed, -t * 2.9)) * 1.1, 0.0));
+  float width = 1.0 - pow(abs(uv.x - 0.5) * 2.0, 1.4);
+  float body = width * (1.25 - uv.y * 1.45);
+  // Fade the field to nothing before the sheet's edges, so no straight cut ever shows.
+  float edge = smoothstep(1.0, 0.7, uv.y) * smoothstep(0.0, 0.18, uv.x) * smoothstep(1.0, 0.82, uv.x);
+  float f = (body + (n - 0.5) * 1.35) * uAmount * edge;
+  float a = smoothstep(0.34, 0.37, f) * smoothstep(0.0, 0.05, uv.y);
+  if (a <= 0.0) discard;
+  vec3 col = f < 0.52 ? uCool : f < 0.8 ? uMid : uHot;
   gl_FragColor = vec4(col, a);
 }
 `;
@@ -88,14 +95,14 @@ void main() {
 }
 `;
 
-const additive = (fragmentShader: string, uniforms: Record<string, THREE.IUniform>) =>
+const sheet = (fragmentShader: string, uniforms: Record<string, THREE.IUniform>, blending: THREE.Blending) =>
   new THREE.ShaderMaterial({
     vertexShader: VERT,
     fragmentShader,
     uniforms,
     transparent: true,
     depthWrite: false,
-    blending: THREE.AdditiveBlending,
+    blending,
     side: THREE.DoubleSide,
   });
 
@@ -130,24 +137,25 @@ export class Fire {
     // Sheets: one tall one behind, two at the sides, a low one licking at the feet in front (offsets in camera space:
     // x across the screen, z toward the camera).
     const layout: [x: number, z: number, w: number, h: number][] = lowPower
-      ? [[0, -0.14, 0.75, 1.0], [0, 0.1, 0.55, 0.22]]
-      : [[0, -0.16, 0.8, 1.05], [-0.2, -0.05, 0.42, 0.62], [0.21, -0.04, 0.4, 0.55], [0.0, 0.12, 0.62, 0.24], [-0.12, -0.24, 0.5, 0.85]];
+      ? [[0, -0.18, 0.6, 0.8], [0, 0.12, 0.5, 0.16]]
+      : [[0, -0.2, 0.62, 0.85], [-0.2, -0.08, 0.34, 0.5], [0.21, -0.07, 0.32, 0.44], [0.0, 0.14, 0.55, 0.17], [-0.1, -0.28, 0.42, 0.7]];
     layout.forEach(([x, z, w, h], i) => {
-      const material = additive(FLAME_FRAG, {
+      // Flat, not additive: the bands stay crisp like painted fire instead of blowing out to white.
+      const material = sheet(FLAME_FRAG, {
         uTime: { value: 0 },
         uAmount: { value: 0 },
         uSeed: { value: i * 3.7 + Math.random() },
-        uHot: { value: hdr(palette.hot, 3.2) },
-        uMid: { value: hdr(palette.mid, 2.2) },
-        uCool: { value: hdr(palette.cool, 1.1) },
-      });
+        uHot: { value: hdr(palette.hot, 1.2) },
+        uMid: { value: hdr(palette.mid, 0.85) },
+        uCool: { value: hdr(palette.cool, 0.6) },
+      }, THREE.NormalBlending);
       const mesh = new THREE.Mesh(this.sheetGeometry, material);
       mesh.scale.set(w, h, 1);
       mesh.renderOrder = 5;
       this.group.add(mesh);
       this.sheets.push({ mesh, material, offset: new THREE.Vector3(x, 0, z), scale: h });
     });
-    this.glowMaterial = additive(GLOW_FRAG, { uTime: { value: 0 }, uAmount: { value: 0 }, uMid: { value: hdr(palette.mid, 1.4) } });
+    this.glowMaterial = sheet(GLOW_FRAG, { uTime: { value: 0 }, uAmount: { value: 0 }, uMid: { value: hdr(palette.mid, 0.35) } }, THREE.AdditiveBlending);
     this.glow = new THREE.Mesh(this.glowGeometry, this.glowMaterial);
     this.glow.scale.setScalar(1.3);
     this.glow.position.y = 0.012;
@@ -166,7 +174,7 @@ export class Fire {
     this.emberMaterial = new THREE.ShaderMaterial({
       vertexShader: EMBER_VERT,
       fragmentShader: EMBER_FRAG,
-      uniforms: { uSize: { value: 26 }, uTime: { value: 0 }, uHot: { value: hdr(palette.hot, 4) }, uTint: { value: hdr(palette.tint, 3) } },
+      uniforms: { uSize: { value: 26 }, uTime: { value: 0 }, uHot: { value: hdr(palette.hot, 1.6) }, uTint: { value: hdr(palette.tint, 1.2) } },
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
@@ -271,19 +279,18 @@ void main() {
   vec2 uv = vUv;
   float x = uDir > 0.0 ? uv.x : 1.0 - uv.x;
   // A slanted front, ragged with turbulence that races along it.
-  vec2 q = vec2(uv.x * uAspect * 3.0, uv.y * 3.0 - uTime * 2.2);
-  float n = fbm(q + fbm(q * 2.1 + uTime * 1.3));
+  float t = floor(uTime * 12.0) / 12.0;
+  vec2 q = vec2(uv.x * uAspect * 4.0, uv.y * 4.0 - t * 2.6);
+  float n = fbm(q + fbm(q * 2.1 + t * 1.3));
   float front = x + (uv.y - 0.5) * 0.4 + (n - 0.5) * 0.55;
   float cover = 1.0 - smoothstep(-0.12, 0.12, front - (uIn * 1.9 - 0.45));
   float gone = smoothstep(-0.12, 0.12, front - (uOut * 1.9 - 0.45));
   float m = cover * (1.0 - (1.0 - gone) * step(0.0001, uOut));
   if (m <= 0.002) discard;
-  // Heat: hottest where the fire is thick, darker reds at the ragged edges, a pulse of turbulence through it.
-  float heat = m * (0.55 + 0.75 * n);
-  vec3 col = mix(uCool, uMid, smoothstep(0.15, 0.55, heat));
-  col = mix(col, uHot, smoothstep(0.65, 1.05, heat));
-  col = mix(col, uTint, 0.25 * (1.0 - smoothstep(0.3, 0.8, heat)));
-  gl_FragColor = vec4(col, smoothstep(0.0, 0.35, m));
+  // Cel-shaded bands like the flames: a dark ragged rim in the player's color, then red, orange, a hot core.
+  float heat = m * (0.25 + 1.0 * n);
+  vec3 col = heat < 0.3 ? uTint : heat < 0.55 ? uCool : heat < 0.8 ? uMid : uHot;
+  gl_FragColor = vec4(col, smoothstep(0.0, 0.04, m));
 }
 `;
 
@@ -301,9 +308,9 @@ export class FlameWipe {
         uDir: { value: 1 },
         uTime: { value: 0 },
         uAspect: { value: 1.6 },
-        uHot: { value: hdr('#fff4c8', 2.4) },
-        uMid: { value: hdr('#ff8a1e', 1.6) },
-        uCool: { value: hdr('#a3120a', 0.9) },
+        uHot: { value: hdr('#ffe27a', 1.1) },
+        uMid: { value: hdr('#ff7a1a', 0.9) },
+        uCool: { value: hdr('#c4161c', 0.8) },
         uTint: { value: hdr('#ff2d95', 1.2) },
       },
       transparent: true,
@@ -323,7 +330,7 @@ export class FlameWipe {
     u.uOut.value = uncover;
     u.uDir.value = dir;
     u.uTime.value = time;
-    (u.uTint.value as THREE.Color).copy(hdr(tint, 1.3));
+    (u.uTint.value as THREE.Color).copy(hdr(tint, 0.9));
     this.mesh.visible = cover > 0 && uncover < 1;
   }
 

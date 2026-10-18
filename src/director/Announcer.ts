@@ -58,24 +58,33 @@ export class Announcer {
 
   /**
    * Play a music cue from `offset` seconds into the file, `delay` seconds from now (dry, under the barks). The handle
-   * fades it out (a skip, or the end of a cue that runs long). Silent when muted, not yet unlocked, or the file is missing.
+   * fades it out (a skip, or the end of a cue that runs long), and `clock()` is the audio clock's seconds since this
+   * call while it plays (null when silent), so visuals cut to it can follow the music instead of the frame rate.
+   * Silent when muted, not yet unlocked, or the file is missing.
    */
   playMusic(url: string, volume = 0.6, offset = 0, delay = 0) {
     let src: AudioBufferSourceNode | null = null;
     let gain: GainNode | null = null;
     let stopped = false;
-    if (!this.muted) {
+    const ctx = this.ctx;
+    const calledAt = ctx?.currentTime ?? 0;
+    if (!this.muted && ctx?.state === 'running') {
       void this.preloadMusic(url).then((buffer) => {
-        if (stopped || !buffer || !this.ctx || !this.out || this.ctx.state !== 'running' || offset >= buffer.duration) return;
-        src = this.ctx.createBufferSource();
+        if (stopped || !buffer || !this.out || ctx.state !== 'running') return;
+        // Started late (still decoding when called)? Start that much further in, to stay on the beat.
+        const at = calledAt + Math.max(0, delay);
+        const late = Math.max(0, ctx.currentTime - at);
+        if (offset + late >= buffer.duration) return;
+        src = ctx.createBufferSource();
         src.buffer = buffer;
-        gain = this.ctx.createGain();
+        gain = ctx.createGain();
         gain.gain.value = volume;
         src.connect(gain).connect(this.out);
-        src.start(this.ctx.currentTime + Math.max(0, delay), Math.max(0, offset));
+        src.start(at + late, Math.max(0, offset) + late);
       });
     }
     return {
+      clock: () => (src && ctx?.state === 'running' && !stopped ? ctx.currentTime - calledAt : null),
       stop: (fade = 0.12) => {
         stopped = true;
         if (!src || !gain || !this.ctx) return;
