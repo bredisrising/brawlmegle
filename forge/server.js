@@ -46,6 +46,8 @@ const devPage = fs.readFileSync(new URL("./public/index.html", import.meta.url))
 
 /** @type {Map<string, object>} */
 const fighters = new Map();
+/** Forge requests that passed the caps and are still uploading. They count against the caps too. */
+let uploading = 0;
 fs.mkdirSync(DATA, { recursive: true });
 for (const id of fs.readdirSync(DATA)) {
   try {
@@ -105,6 +107,8 @@ function readJson(req) {
       }
     });
     req.on("error", reject);
+    // An upload cut off halfway must settle too, or it would hold its forge slot forever.
+    req.on("close", () => reject(Object.assign(new Error("upload aborted"), { status: 400 })));
   });
 }
 
@@ -159,15 +163,24 @@ async function handle(req, res) {
   if (req.method === "POST" && url.pathname === "/api/forge") {
     if (!req.headers["content-type"]?.startsWith("application/json")) return json(res, 415, { error: "send JSON" });
     if (ACCESS_KEY && req.headers["x-forge-key"] !== ACCESS_KEY) return json(res, 403, { error: "bad forge key" });
-    const active = [...fighters.values()].filter((f) => f.status === "forging").length;
+    const active = [...fighters.values()].filter((f) => f.status === "forging" || f.status === "scanning").length + uploading;
     if (active >= MAX_ACTIVE) return json(res, 429, { error: `${active} forges already running, try again in a minute` });
     // Every forge spends OpenAI and Tripo credits: cap them.
     const now = Date.now();
     const recent = [...fighters.values()].filter((f) => now - f.createdAt < 86_400_000);
-    if (recent.filter((f) => now - f.createdAt < 3_600_000).length >= MAX_PER_HOUR || recent.length >= MAX_PER_DAY) {
+    const lastHour = recent.filter((f) => now - f.createdAt < 3_600_000).length;
+    if (lastHour + uploading >= MAX_PER_HOUR || recent.length + uploading >= MAX_PER_DAY) {
       return json(res, 429, { error: "forge limit reached for now, try again later" });
     }
-    const body = await readJson(req);
+    // Hold the slot while the photos upload, so parallel requests can't all get past the caps above.
+    uploading++;
+    let body;
+    try {
+      body = await readJson(req);
+    } finally {
+      uploading--;
+    }
+    if (!body || typeof body !== "object") return json(res, 400, { error: "send a JSON object" });
     const frames = Array.isArray(body.frames) ? body.frames.map(decodeImage) : [];
     if (frames.length < 1 || frames.length > 3 || frames.includes(null)) {
       return json(res, 400, { error: "frames must be 1 to 3 JPEG or PNG images, base64 or data URLs" });
