@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { findProfile, normalizeUsername } from '../../forge/forge';
 import { listFighters } from '../../forge/roster';
+import { preloadModel } from '../../forge/models';
 import { fighterRecord, totalMatches, winRate } from '../../forge/leaderboard';
 import { localPlayerId, useGameStore } from '../../game/store';
 import type { ForgedFighter, PlayerId } from '../../types';
@@ -164,7 +165,11 @@ function NameStep({ player }: { player: PlayerId }) {
     let alive = true;
     const timer = setTimeout(() => {
       findProfile(username)
-        .then((f) => alive && setFound(f))
+        .then((f) => {
+          // "Welcome back": they'll most likely fight as this one, so its model starts downloading now.
+          if (alive && f) preloadModel(f.glbUrl, 'high')?.catch(() => {});
+          if (alive) setFound(f);
+        })
         .catch(() => alive && setFound(null));
     }, 300);
     return () => {
@@ -256,6 +261,13 @@ function RosterStep({ player }: { player: PlayerId }) {
   const fighters = fromHost ? hostRoster : localRoster;
   const preview = focused ?? fighters?.[0] ?? null;
   const accent = ACCENT[player];
+
+  // A fighter they stop on is a likely pick: start downloading its model (not every tile the mouse crosses).
+  useEffect(() => {
+    if (!focused?.glbUrl) return;
+    const timer = setTimeout(() => preloadModel(focused.glbUrl)?.catch(() => {}), 300);
+    return () => clearTimeout(timer);
+  }, [focused]);
 
   useEffect(() => {
     if (fromHost) return;

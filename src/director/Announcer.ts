@@ -91,7 +91,8 @@ export class Announcer {
       await Promise.all(
         Object.entries(this.available ?? {}).map(async ([name, file]) => {
           try {
-            const data = await (await fetch(BASE + file)).arrayBuffer();
+            // Low priority: 19 clips (~0.75 MB) load on the first click, next to the fighter and pose model downloads.
+            const data = await (await fetch(BASE + file, { priority: 'low' })).arrayBuffer();
             this.clips.set(name, await ctx.decodeAudioData(data));
           } catch {
             // One bad clip doesn't silence the rest.

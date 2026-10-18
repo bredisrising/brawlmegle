@@ -2,7 +2,7 @@ import type { PoseLandmarker } from '@mediapipe/tasks-vision';
 import type { Landmark, PoseFrame } from '../../types';
 import type { InputSource } from '../InputSource';
 import {
-  WASM_ROOT, landmarkerOptions, selectCenteredPose, toLandmark,
+  WASM_ROOT, landmarkerOptions, modelUrl, selectCenteredPose, toLandmark,
   type PoseDelegate, type PoseVariant, type PoseWorkerReply, type PoseWorkerRequest,
 } from './poseModel';
 
@@ -18,6 +18,26 @@ const DELEGATE: PoseDelegate = PARAMS.get('posedelegate')?.toLowerCase() === 'cp
 const WORKER_OK = PARAMS.get('poseworker') !== '0';
 /** Over this many ms per detection the full model can't keep up with a 30 fps camera: drop to lite (unless ?pose=). */
 const SLOW_DETECT_MS = 38;
+/** Same test as start(): the model runs in the worker (MediaPipe's module build) where the browser can. */
+const useWorker = () => WORKER_OK && typeof Worker === 'function' && typeof VideoFrame === 'function' && typeof OffscreenCanvas === 'function';
+
+let preloaded = false;
+/**
+ * Warm the browser's cache with what the camera will load (MediaPipe's wasm, ~3.6 MB compressed, and the pose model,
+ * 9.4 MB): the game calls this at the title screen, so "Fight as" doesn't then wait ~10 s for them on venue Wi-Fi.
+ * Low priority, so nothing on screen waits for it. The page or the pose worker then gets them from the cache
+ * (jsDelivr's files are immutable, the model is cached for an hour). Safe to call more than once.
+ */
+export function preloadPose() {
+  if (preloaded) return;
+  preloaded = true;
+  const wasm = `${WASM_ROOT}/vision_wasm${useWorker() ? '_module' : ''}_internal`;
+  for (const url of [modelUrl(POSE_VARIANT), `${wasm}.js`, `${wasm}.wasm`]) {
+    void fetch(url, { priority: 'low' })
+      .then((res) => res.arrayBuffer())
+      .catch(() => {});
+  }
+}
 
 /**
  * Webcam -> MediaPipe PoseLandmarker -> timestamped image and world landmarks.
@@ -116,6 +136,8 @@ export class CameraSource implements InputSource {
     this.video.autoplay = true;
     this.video.muted = true;
     this.video.playsInline = true;
+    // Downloads run while the permission prompt is up (no-op if the title screen already started them).
+    preloadPose();
     try {
       this.stream = await navigator.mediaDevices
         .getUserMedia({
@@ -129,7 +151,7 @@ export class CameraSource implements InputSource {
       this.video.srcObject = this.stream;
       await this.video.play();
 
-      if (WORKER_OK && typeof Worker === 'function' && typeof VideoFrame === 'function' && typeof OffscreenCanvas === 'function') {
+      if (useWorker()) {
         try {
           await this.startWorker();
         } catch (err) {
