@@ -303,8 +303,8 @@ export class IntentReader {
       // whether it's an uppercut or just the guard coming up.
       const shoulderY = (body.points[LM.lShoulder].p.y + body.points[LM.rShoulder].p.y) / 2;
       const fromLow = s.anchorTip.y < shoulderY - 0.8;
-      // Holding a block, small adjustments aren't punches: it takes a bigger motion to strike out of the shell.
-      const needed = def.kind === 'arm' && this.guardUp ? cfg.strikeDist * 1.0 : cfg.strikeDist;
+      // Same bar with the guard up: people fight from their guard, and a punch out of it is still a punch.
+      const needed = cfg.strikeDist;
       const farEnough = def.kind === 'arm' && !fromLow && s.peakDisp >= needed && t - s.since >= (cfg.confirmMs ?? 60);
       // Peaked: the reach hasn't grown for 60 ms. (Not "the speed dropped": the fast signal wobbles mid-punch,
       // and judging then cuts the punch short.)
@@ -317,7 +317,7 @@ export class IntentReader {
       const goingDown = def.kind === 'arm' && s.peak.y < -0.15 && s.peak.y < -0.5 * len(s.peak);
       const reason = s.peakDisp < needed || (def.kind === 'leg' && lift < this.config.legRise) ? 'too small'
         : goingDown ? 'going down'
-        : def.kind === 'arm' && raisingGuard(body, s.anchorTip, tipPt.p, this.config.guard.radius) ? 'raising guard'
+        : def.kind === 'arm' && raisingGuard(body, name, s.anchorTip, tipPt.p, this.config.guard.radius, t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 400) ? 'raising guard'
         : def.kind === 'arm' && bothHandsUp(body, name, s.peak, s.since - s.faceBeforeOnset > 600 && t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 250) ? 'both hands up'
         : def.kind === 'arm' && movedTogether(s.peak, this.limbs[name === 'armL' ? 'armR' : 'armL'], t) ? 'both hands moved'
         : def.kind === 'arm' && raisedOverHead(body, s.peakTip, s.peak, midPt.p, root.p) ? 'not a punch'
@@ -584,14 +584,18 @@ function movedTogether(travel: Vec3, other: LimbState, t: number) {
  * your guard up, not an uppercut. Real uppercuts start from guard height.
  */
 
-function raisingGuard(body: Body, start: Vec3, end: Vec3, radius: number) {
+function raisingGuard(body: Body, limb: LimbName, start: Vec3, end: Vec3, radius: number, otherRose: boolean) {
   const nose = body.points[LM.nose].p;
   const shoulderY = (body.points[LM.lShoulder].p.y + body.points[LM.rShoulder].p.y) / 2;
   // Lap level, not just a low guard: plenty of people punch (and uppercut) from below the shoulders.
   const startedLow = start.y < shoulderY - 0.8;
   // Ends by the face, or anywhere around shoulder height (some people hold their hands lower).
   const endsUp = Math.hypot(end.x - nose.x, end.y - nose.y) < radius * 1.2 || end.y > shoulderY - 0.25;
-  return startedLow && endsUp;
+  // A guard is two hands: this one joins the other by the face, or both came up together. One hand shooting up
+  // from the lap on its own is a punch (seated players rest their hands in their lap between punches).
+  const other = body.points[limb === 'armL' ? LM.rWrist : LM.lWrist].p;
+  const otherUp = Math.hypot(other.x - nose.x, other.y - nose.y) < radius * 1.2;
+  return startedLow && endsUp && (otherUp || otherRose);
 }
 
 function classify(kind: 'arm' | 'leg', dir: Vec3, out: number, tip: Vec3, mid: Vec3, midOut: number, travel: Vec3, midRise: number, ext = 0, elbow = 180): StrikeStyle {
