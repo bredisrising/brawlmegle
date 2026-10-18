@@ -89,12 +89,6 @@ export function TitleScreen() {
                 <MenuItem index="03" label="Practice" hint="Fight the CPU on this screen" color="hover:bg-hp" bar="bg-hp" disabled={busy} onClick={() => run(() => game.practice())} delay={260} />
                 <MenuItem index="04" label="Training" hint="Practice moves on a dummy" color="hover:bg-hp" bar="bg-hp" disabled={busy} onClick={() => run(() => game.practice('dummy'))} delay={340} />
                 <MenuItem index="05" label="Leaderboard" hint="See every fighter's record" color="hover:bg-paper" bar="bg-paper" disabled={busy} onClick={() => setMode('leaderboard')} delay={420} />
-                {/* Dev tools live on the same site (local dev serves them from /test/). */}
-                <p className="mt-[clamp(0.25rem,1.2vh,0.75rem)] flex gap-5 font-cond text-sm font-bold uppercase tracking-[0.25em] text-paper/45">
-                  <span>Tools</span>
-                  <a className="underline-offset-4 hover:text-paper hover:underline" href={import.meta.env.DEV ? '/test/tuner/' : '/tuner/'}>Move tester</a>
-                  <a className="underline-offset-4 hover:text-paper hover:underline" href={import.meta.env.DEV ? '/test/scan/' : '/scan/'}>Scan test</a>
-                </p>
               </nav>
             ) : mode === 'connect' ? (
               <form onSubmit={submitCode} className="animate-rise flex w-full max-w-md flex-col gap-4 border-2 border-paper/15 bg-ink p-6">
