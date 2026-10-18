@@ -39,7 +39,11 @@ const MAX_SAMPLES_BYTES_TOTAL = 2 * 1024 * 1024 * 1024;
 let samplesBytes = 0;
 if (SAMPLES_DIR) {
   fs.mkdirSync(SAMPLES_DIR, { recursive: true });
-  for (const f of fs.readdirSync(SAMPLES_DIR)) samplesBytes += fs.statSync(`${SAMPLES_DIR}/${f}`).size;
+  for (const f of fs.readdirSync(SAMPLES_DIR)) {
+    const st = fs.statSync(`${SAMPLES_DIR}/${f}`);
+    if (st.isDirectory()) for (const g of fs.readdirSync(`${SAMPLES_DIR}/${f}`)) samplesBytes += fs.statSync(`${SAMPLES_DIR}/${f}/${g}`).size;
+    else samplesBytes += st.size;
+  }
 }
 
 function saveSample(req, res) {
@@ -67,6 +71,40 @@ function saveSample(req, res) {
     samplesBytes += body.length;
     const name = `${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomBytes(3).toString("hex")}.jsonl`;
     fs.writeFile(`${SAMPLES_DIR}/${name}`, body, (err) => {
+      if (err) {
+        samplesBytes -= body.length;
+        return res.writeHead(500, cors).end(JSON.stringify({ error: "write failed" }));
+      }
+      res.writeHead(201, cors).end(JSON.stringify({ ok: true, name }));
+    });
+  });
+}
+
+/**
+ * A round's camera video from a laptop that opted in (`?video=1`), for checking what was really thrown against what
+ * the game read. Same caps as the pose samples; stored next to them in videos/.
+ */
+function saveVideo(req, res, url) {
+  const cors = { "access-control-allow-origin": "*", "content-type": "application/json" };
+  if (!SAMPLES_DIR) return res.writeHead(503, cors).end(JSON.stringify({ error: "samples disabled" }));
+  if (!(req.headers["content-type"] ?? "").startsWith("video/webm")) return res.writeHead(415, cors).end(JSON.stringify({ error: "send video/webm" }));
+  const tag = (url.searchParams.get("name") ?? "clip").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 60) || "clip";
+  const chunks = [];
+  let size = 0;
+  req.on("data", (c) => {
+    size += c.length;
+    if (size > MAX_SAMPLE_BYTES) req.destroy();
+    else chunks.push(c);
+  });
+  req.on("end", () => {
+    const body = Buffer.concat(chunks);
+    if (body.length < 1000) return res.writeHead(400, cors).end(JSON.stringify({ error: "empty video" }));
+    if (samplesBytes + body.length > MAX_SAMPLES_BYTES_TOTAL) return res.writeHead(507, cors).end(JSON.stringify({ error: "storage full" }));
+    samplesBytes += body.length;
+    const dir = `${SAMPLES_DIR}/videos`;
+    fs.mkdirSync(dir, { recursive: true });
+    const name = `${new Date().toISOString().replace(/[:.]/g, "-")}-${tag}-${crypto.randomBytes(3).toString("hex")}.webm`;
+    fs.writeFile(`${dir}/${name}`, body, (err) => {
       if (err) {
         samplesBytes -= body.length;
         return res.writeHead(500, cors).end(JSON.stringify({ error: "write failed" }));
@@ -274,7 +312,12 @@ function onMessage(client, raw) {
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url ?? "/", "http://localhost");
-  if (url.pathname === "/samples" && req.method === "OPTIONS") {
+  if (url.pathname === "/samples/video" && req.method === "OPTIONS") {
+    res.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-methods": "POST", "access-control-allow-headers": "content-type" });
+    res.end();
+  } else if (url.pathname === "/samples/video" && req.method === "POST") {
+    saveVideo(req, res, url);
+  } else if (url.pathname === "/samples" && req.method === "OPTIONS") {
     res.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-methods": "POST", "access-control-allow-headers": "content-type" });
     res.end();
   } else if (url.pathname === "/samples" && req.method === "POST") {

@@ -194,6 +194,7 @@ server {
   # Matchmaker extras (health, training-sample uploads, its WebRTC test page at /mm-test).
   location = /health { proxy_pass http://127.0.0.1:3000; }
   location = /samples { proxy_pass http://127.0.0.1:3000; }
+  location = /samples/video { proxy_pass http://127.0.0.1:3000; }
   location = /mm-test { proxy_pass http://127.0.0.1:3000/; }
   # Everything else is the game itself (a static build in /var/www/brawlegle/game), one site for everyone.
   # index.html is always revalidated, so a laptop never runs a stale page that points at deleted bundles.

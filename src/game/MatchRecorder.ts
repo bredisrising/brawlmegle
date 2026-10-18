@@ -5,9 +5,10 @@ import type { FightEvent, PlayerId, PoseFrame } from '../types';
 /**
  * Records real matches to improve the move reader: per player, every camera frame's pose points, every intent the
  * reader produced and every fight event, as JSONL in the tuner's clip format (so the existing scorers and the
- * tuner's replay read it). Uploaded to the server's /samples after each round (pose points only, never video).
- * Optionally (`?video=1`) this laptop's own camera is also recorded at low resolution and downloaded locally, so a
- * person can check what was really thrown against what the game read.
+ * tuner's replay read it). Uploaded to the server's /samples after each round (pose points only).
+ * Only with `?video=1` (the team's own sessions) is this laptop's camera also recorded, at low resolution, and
+ * uploaded to /samples/video (saved locally if that fails), so what was really thrown can be checked against what
+ * the game read.
  *
  * Off unless turned on (menu toggle, saved in this browser, or `?record=1`).
  */
@@ -119,7 +120,7 @@ export class MatchRecorder {
     if (!v) return;
     this.video = null;
     const stamp = new Date(this.startedAt).toISOString().replace(/[:.]/g, '-');
-    v.recorder.onstop = () => download(new Blob(v.chunks, { type: 'video/webm' }), `brawlmegle-match-${stamp}.webm`);
+    v.recorder.onstop = () => void uploadVideo(new Blob(v.chunks, { type: 'video/webm' }), `brawlmegle-match-${stamp}-p1.webm`);
     v.recorder.stop();
   }
 }
@@ -149,8 +150,25 @@ export class VideoClip {
     if (!r) return;
     this.rec = null;
     const stamp = new Date(r.started).toISOString().replace(/[:.]/g, '-');
-    r.recorder.onstop = () => download(new Blob(r.chunks, { type: 'video/webm' }), `brawlmegle-match-${stamp}-${tag}.webm`);
+    r.recorder.onstop = () => void uploadVideo(new Blob(r.chunks, { type: 'video/webm' }), `brawlmegle-match-${stamp}-${tag}.webm`);
     r.recorder.stop();
+  }
+}
+
+/** A round's video to the server for training (the laptop opted in with ?video=1); kept locally if that fails. */
+async function uploadVideo(blob: Blob, name: string) {
+  try {
+    const base = config.forgeApi.replace(/\/+$/, '');
+    const res = await fetch(`${base}/samples/video?name=${encodeURIComponent(name.replace(/\.webm$/, ''))}`, {
+      method: 'POST',
+      headers: { 'content-type': 'video/webm' },
+      body: blob,
+    });
+    if (!res.ok) throw new Error(`${res.status}`);
+    console.info(`[record] video ${name} saved for training`);
+  } catch (err) {
+    console.warn('[record] video upload failed, saving locally', err);
+    download(blob, name);
   }
 }
 
