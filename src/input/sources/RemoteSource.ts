@@ -5,24 +5,37 @@ import type { Peer } from '../../net/Peer';
 /**
  * Frames streamed from the client laptop over the P2P "poses" channel.
  * On the host this looks like any other source to the InputHub.
- *
- * TODO: listen for { type: 'pose' } messages on the peer and re-emit their frames.
+ * The host keeps one Peer across client rejoins, so this keeps working after a reconnect.
  */
 export class RemoteSource implements InputSource {
   readonly kind = 'remote';
   private readonly peer: Peer;
+  private readonly listeners = new Set<(frame: PoseFrame) => void>();
+  private unsubscribe: (() => void) | null = null;
+  latestFrame: PoseFrame | null = null;
 
   constructor(peer: Peer) {
     this.peer = peer;
   }
 
+  /** Resolves right away: frames show up whenever the client streams them. */
   async start() {
-    void this.peer;
+    if (this.unsubscribe) return;
+    this.unsubscribe = this.peer.onMessage((msg) => {
+      if (msg.type !== 'pose') return;
+      this.latestFrame = msg.frame;
+      for (const cb of this.listeners) cb(msg.frame);
+    });
   }
 
-  stop() {}
+  stop() {
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+    this.latestFrame = null;
+  }
 
-  onFrame(_cb: (frame: PoseFrame) => void) {
-    return () => {};
+  onFrame(cb: (frame: PoseFrame) => void) {
+    this.listeners.add(cb);
+    return () => this.listeners.delete(cb);
   }
 }
