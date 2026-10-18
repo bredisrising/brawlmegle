@@ -5,6 +5,7 @@ import type { ForgedFighter } from '../../types';
 import { Arrow, ArcadeButton, TextButton } from '../ArcadeButton';
 import { useGame } from '../GameContext';
 import { HighlightReel } from '../HighlightReel';
+import { TitleCam } from '../TitleCam';
 
 /**
  * The main menu, written so a first-time player needs no explanation: Find a fight (matchmaking) first, then Play a
@@ -67,6 +68,8 @@ export function TitleScreen() {
         <div className="absolute inset-0 bg-p2" style={{ clipPath: 'polygon(76% 0, 100% 0, 100% 100%, 36% 100%)' }} />
         <div className="tex-dots absolute inset-0 bg-ink-2" style={{ clipPath: 'polygon(calc(76% + 10px) 0, 100% 0, 100% 100%, calc(36% + 10px) 100%)' }} />
       </div>
+
+      {mode !== 'leaderboard' && <TitleCam />}
 
       <div className="relative flex h-full flex-col justify-between gap-[clamp(1rem,3.5vh,2.5rem)] overflow-y-auto p-6 sm:px-12 sm:py-[clamp(1.25rem,4.5vh,3rem)]">
         <div className="animate-in-l">
