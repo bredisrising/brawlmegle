@@ -26,6 +26,13 @@ export const config = {
    * only adds their lean, head and hand positions on top of the fighting stance. `?live=` overrides.
    */
   liveBlend: clamp01(Number(params.get('live') ?? 0.35)),
+  /**
+   * Fighters animate "on twos" like hand-animated fighting games: poses hold and step at this rate (0 = smooth).
+   * Key frames (a strike landing, a hit) always show on the frame they happen. `?fps=` overrides.
+   */
+  animFps: Math.max(0, Number(params.get('fps') ?? 12) || 0),
+  /** Full-screen impact frames on big hits (`?fx=low` turns them off, e.g. for flashing-light sensitivity). */
+  impactFrames: params.get('fx') !== 'low',
 };
 
 function clamp01(v: number) {

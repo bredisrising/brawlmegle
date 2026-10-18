@@ -77,6 +77,14 @@ export class FighterView {
   private hit: HitInfo | null = null;
   private flash = 0;
   private readonly motion: Motion = { lunge: 0, tilt: 0, lift: 0 };
+  /** Stepped animation: time since the shown pose last changed, and what the engine was doing then. */
+  private sinceStep = Infinity;
+  private shownPhase = '';
+  private forceStep = false;
+  /** Materialize-in: world height up to which the fighter is drawn (rises from the floor when it spawns). */
+  private readonly reveal = { value: 100 };
+  private readonly revealColor = { value: new THREE.Color() };
+  private revealT = -1;
 
   constructor(id: PlayerId) {
     this.id = id;
@@ -104,6 +112,8 @@ export class FighterView {
     this.placeholder.add(this.bones);
     this.body.add(this.placeholder);
     this.flashMaterials = [{ material, emissive: material.emissive.clone(), intensity: material.emissiveIntensity }];
+    this.revealColor.value.set(PLAYER_COLORS[id]).multiplyScalar(6);
+    this.patchReveal(material);
     this.applyPose(copyPose(this.pose, GUARD_POSE));
   }
 
@@ -125,6 +135,7 @@ export class FighterView {
     this.flashMaterials = [];
     const collect = (m: THREE.Material) => {
       if (m instanceof THREE.MeshStandardMaterial) this.flashMaterials.push({ material: m, emissive: m.emissive.clone(), intensity: m.emissiveIntensity });
+      this.patchReveal(m);
     };
     if (model) {
       model.traverse((object) => {
@@ -150,6 +161,12 @@ export class FighterView {
 
   setVisible(visible: boolean) {
     this.root.visible = visible;
+  }
+
+  /** Build the fighter up out of light, feet first (spawning in, a player joining). */
+  materialize() {
+    this.revealT = 0;
+    this.reveal.value = -0.05;
   }
 
   /** Back to a fresh fighter (rematch). */
@@ -205,8 +222,22 @@ export class FighterView {
       },
       this.motion,
     );
-    // A light final smoothing hides the odd pop (a strike cut off by a hit), costing about a tick of delay.
-    for (const j of JOINTS) this.pose[j].lerp(this.target[j], 0.6);
+    this.updateReveal(dt);
+    // Stepped ("on twos") animation: the shown pose holds and jumps at config.animFps, except that a change in what
+    // the engine is doing (a strike going active, a hit, a K.O.) shows on its exact frame.
+    const phaseKey = `${state.phase}:${state.move ?? ''}`;
+    if (phaseKey !== this.shownPhase) this.forceStep = true;
+    this.sinceStep += dt;
+    const stepped = config.animFps > 0;
+    if (stepped && !this.forceStep && this.sinceStep < 1 / config.animFps) {
+      this.updateFlash(dt);
+      return;
+    }
+    this.sinceStep = 0;
+    this.forceStep = false;
+    this.shownPhase = phaseKey;
+    // Smooth mode eases a little to hide the odd pop (a strike cut off by a hit); stepped mode pops on purpose.
+    for (const j of JOINTS) this.pose[j].lerp(this.target[j], stepped ? 1 : 0.6);
     this.body.position.set(0, this.motion.lift, this.motion.lunge);
     this.body.rotation.x = this.motion.tilt;
 
@@ -228,8 +259,10 @@ export class FighterView {
       const strength = Math.min(1.4, Math.max(0.5, (event.damage ?? 5) / 10)) * (event.type === 'counter' ? 1.25 : 1);
       this.hit = { move: event.move, hand: by?.hand, height: by?.height, strength };
       this.flash = event.type === 'counter' ? 1 : 0.7;
+      this.forceStep = true;
     } else if (event.type === 'blocked') {
       this.flash = 0.25;
+      this.forceStep = true;
     }
   }
 
@@ -255,6 +288,56 @@ export class FighterView {
       const w = LEG_JOINTS.has(j) && !this.mapper.legsVisible ? 0 : Math.min(1, base * LIVE_WEIGHT[j]);
       if (w > 0) this.target[j].lerp(this.smoothLive[j], w);
     }
+  }
+
+  /** Rises from the floor to over the head in ~1.4 s; the glowing edge band is drawn by the patched shader. */
+  private updateReveal(dt: number) {
+    if (this.revealT < 0) return;
+    this.revealT += dt;
+    const t = Math.min(1, this.revealT / 1.4);
+    // Ease out: fast up the legs, slowing into the head. Heights in world units (fighters ~0.75 tall on screen).
+    this.reveal.value = -0.05 + (1 - (1 - t) ** 2) * 0.95;
+    if (t >= 1) {
+      this.revealT = -1;
+      this.reveal.value = 100;
+    }
+  }
+
+  /**
+   * Materialize shader: everything above the reveal height is cut away, and a band just under it glows in the
+   * player's color with a little noise, like it's being printed out of light.
+   */
+  private patchReveal(material: THREE.Material) {
+    if (!(material instanceof THREE.MeshStandardMaterial) || material.userData.reveal) return;
+    material.userData.reveal = true;
+    const reveal = this.reveal;
+    const color = this.revealColor;
+    material.onBeforeCompile = (shader) => {
+      shader.uniforms.uReveal = reveal;
+      shader.uniforms.uRevealColor = color;
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vRevealPos;')
+        .replace('#include <project_vertex>', '#include <project_vertex>\nvRevealPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      shader.fragmentShader = shader.fragmentShader
+        .replace(
+          '#include <common>',
+          '#include <common>\nvarying vec3 vRevealPos;\nuniform float uReveal;\nuniform vec3 uRevealColor;',
+        )
+        .replace(
+          '#include <clipping_planes_fragment>',
+          `#include <clipping_planes_fragment>
+          float revealNoise = fract(sin(dot(floor(vRevealPos.xz * 90.0), vec2(12.9898, 78.233))) * 43758.5453) * 0.025;
+          if (vRevealPos.y > uReveal + revealNoise) discard;`,
+        )
+        .replace(
+          '#include <emissivemap_fragment>',
+          `#include <emissivemap_fragment>
+          float revealBand = 1.0 - smoothstep(0.0, 0.06, uReveal + revealNoise - vRevealPos.y);
+          totalEmissiveRadiance += uRevealColor * revealBand * step(uReveal, 50.0);`,
+        );
+    };
+    material.customProgramCacheKey = () => 'reveal';
+    material.needsUpdate = true;
   }
 
   /** Hit flash: the fighter's materials glow white for a moment. */

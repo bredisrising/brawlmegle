@@ -17,7 +17,7 @@ import {
   PLAYER_IDS, opponentOf,
   type Command, type FightEvent, type ForgedFighter, type PlayerId, type Stance,
 } from '../types';
-import { COUNTDOWN_FROM, KO_FREEZE, MAX_HP, PLAYER_NAMES, ROUND_SECONDS, SIM_DT } from './constants';
+import { COUNTDOWN_FROM, KO_FREEZE, MAX_HP, PLAYER_COLORS, PLAYER_NAMES, ROUND_SECONDS, SIM_DT } from './constants';
 import { ClientSession } from './ClientSession';
 import { HostSession } from './HostSession';
 import { localPlayerId, pushPopup, updatePlayer, useGameStore } from './store';
@@ -139,12 +139,18 @@ export class Game {
       console.warn('cpu fighter failed to load, using the placeholder', err);
       await this.views[id].setFighter({ id: 'cpu', name: 'Sparring Bot', status: 'ready' });
     }
-    this.views[id].setVisible(true);
-    this.effects.burst(this.views[id].root.position, 'spawn');
+    this.spawn(id);
     const label = level === 'normal' ? 'CPU' : `CPU ${level}`;
     updatePlayer(id, { name: `${fighter.name} (${label})`, status: 'ready', statusDetail: '', portraitUrl: fighter.cardUrl ?? null });
     const { players } = useGameStore.getState();
     if (PLAYER_IDS.every((p) => players[p].status === 'ready')) this.startCountdown();
+  }
+
+  /** A fighter arrives: it prints in out of a beam of light in its player's color. */
+  private spawn(id: PlayerId) {
+    this.views[id].setVisible(true);
+    this.views[id].materialize();
+    this.effects.burst(this.views[id].root.position, 'spawn', PLAYER_COLORS[id]);
   }
 
   /** Secret debug menu: fire an effect in the middle of the arena, optionally with hit-stop + shake. */
@@ -189,8 +195,7 @@ export class Game {
       await this.loadFighter(id, fighter);
       this.lifetime.signal.throwIfAborted();
 
-      this.views[id].setVisible(true);
-      this.effects.burst(this.views[id].root.position, 'spawn');
+      this.spawn(id);
       updatePlayer(id, { status: 'ready', statusDetail: '', portraitUrl: fighter.cardUrl ?? null });
 
       const { players } = useGameStore.getState();
@@ -337,9 +342,25 @@ export class Game {
     updatePlayer(defender, { hp });
     this.views[defender].onEvent(event, this.fight.state(event.attacker));
 
-    const point = this.views[defender].worldJoint('head');
+    const by = this.fight.state(event.attacker);
+    const point = this.views[defender].worldJoint(by.height === 'body' || event.move === 'knee' ? 'neck' : 'head');
+    if (by.height === 'body' || event.move === 'knee') point.y -= 0.08;
     const heavy = event.type === 'counter' || event.damage >= 10;
+    const ko = hp <= 0;
     this.effects.burst(point, event.type === 'blocked' ? 'blocked' : event.type === 'counter' ? 'counter' : 'hit');
+    // Punch: impact frames on the big ones, the camera leaning into the hit.
+    if (!ko && event.type === 'counter') {
+      if (config.impactFrames) this.renderer.impact(point, 0.08, '#ffc83a');
+      this.renderer.punch(point, 0.22, 2.5);
+    } else if (!ko && heavy && event.type !== 'blocked') {
+      if (config.impactFrames) this.renderer.impact(point, 0.045);
+      this.renderer.punch(point, 0.12, 3);
+    } else if (event.type === 'blocked') {
+      this.renderer.shake(0.012);
+    } else {
+      this.renderer.shake(0.018);
+      this.renderer.punch(point, 0.05, 4);
+    }
     pushPopup({
       ...this.renderer.project(point),
       label: event.type === 'blocked' ? 'BLOCKED' : event.type === 'counter' ? 'COUNTER!' : event.move.toUpperCase(),
@@ -350,8 +371,11 @@ export class Game {
       this.renderer.shake(0.04);
       useGameStore.setState((s) => ({ flashKey: s.flashKey + 1 }));
     }
-    if (hp <= 0) {
+    if (ko) {
       this.renderer.freeze(KO_FREEZE);
+      if (config.impactFrames) this.renderer.impact(point, 0.14, '#ffffff');
+      this.renderer.punch(point, 0.4, 0.7);
+      this.renderer.slowMotion(KO_FREEZE + 1.4, 0.3);
       this.effects.burst(point, 'ko');
       useGameStore.setState({ phase: 'ko', ending: 'ko', winner: event.attacker, countdown: null });
     }

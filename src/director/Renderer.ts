@@ -4,6 +4,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { createArena, type Arena } from './Arena';
+import { ImpactPass } from './ImpactPass';
 
 export type FrameCallback = (dt: number, frozen: boolean) => void;
 
@@ -27,6 +28,15 @@ export class Renderer {
   private lastTime = 0;
   private freezeTimer = 0;
   private shakeAmount = 0;
+  private readonly impactPass = new ImpactPass();
+  /** Camera punch-in toward a point (big hits, K.O.), easing back out. */
+  private readonly punchTarget = new THREE.Vector3();
+  private punchAmount = 0;
+  private punchDecay = 2;
+  /** Slow motion: sim time runs at `slowScale` for `slowTimer` more real seconds. */
+  private slowTimer = 0;
+  private slowScale = 1;
+  private readonly lookNow = new THREE.Vector3();
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -45,6 +55,7 @@ export class Renderer {
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.4, 1));
     this.composer.addPass(new OutputPass());
+    this.composer.addPass(this.impactPass);
 
     this.arena = createArena(this.scene, this.renderer);
     this.camera.position.copy(this.cameraHome);
@@ -73,6 +84,26 @@ export class Renderer {
     this.shakeAmount = Math.max(this.shakeAmount, amount);
   }
 
+  /** Impact frame centered on a world point (see ImpactPass). */
+  impact(world: THREE.Vector3, seconds: number, accent?: THREE.ColorRepresentation) {
+    const v = world.clone().project(this.camera);
+    this.impactPass.trigger({ x: (v.x + 1) / 2, y: (v.y + 1) / 2 }, seconds, accent);
+  }
+
+  /** Push the camera in toward a world point by `amount` (0..1 of the way), easing out over ~1/decay seconds. */
+  punch(world: THREE.Vector3, amount: number, decay = 2) {
+    if (amount < this.punchAmount) return;
+    this.punchTarget.copy(world);
+    this.punchAmount = amount;
+    this.punchDecay = decay;
+  }
+
+  /** Run the simulation at `scale` speed for `seconds` of real time (K.O. slow motion). */
+  slowMotion(seconds: number, scale: number) {
+    this.slowTimer = seconds;
+    this.slowScale = scale;
+  }
+
   /** World position -> CSS pixel coordinates within the container (for UI popups). */
   project(world: THREE.Vector3) {
     const v = world.clone().project(this.camera);
@@ -98,21 +129,29 @@ export class Renderer {
 
     const frozen = this.freezeTimer > 0;
     if (frozen) this.freezeTimer -= dt;
-    for (const cb of this.callbacks) cb(dt, frozen);
+    let simDt = dt;
+    if (this.slowTimer > 0) {
+      this.slowTimer -= dt;
+      simDt = dt * this.slowScale;
+    }
+    for (const cb of this.callbacks) cb(simDt, frozen);
 
     this.updateCamera(dt);
+    this.impactPass.tick(dt, this.camera.aspect);
     this.composer.render(dt);
   };
 
   private updateCamera(dt: number) {
     this.shakeAmount = Math.max(0, this.shakeAmount - dt * 0.15);
     const s = this.shakeAmount;
+    this.punchAmount = Math.max(0, this.punchAmount - dt * this.punchDecay * Math.max(0.15, this.punchAmount));
+    const p = this.punchAmount;
     this.camera.position.set(
-      this.cameraHome.x + (Math.random() - 0.5) * s,
-      this.cameraHome.y + (Math.random() - 0.5) * s,
-      this.cameraHome.z,
+      this.cameraHome.x + (this.punchTarget.x - this.cameraHome.x) * p + (Math.random() - 0.5) * s,
+      this.cameraHome.y + (this.punchTarget.y - this.cameraHome.y) * p * 0.5 + (Math.random() - 0.5) * s,
+      this.cameraHome.z + (this.punchTarget.z - this.cameraHome.z) * p,
     );
-    this.camera.lookAt(this.lookTarget);
+    this.camera.lookAt(this.lookNow.copy(this.lookTarget).lerp(this.punchTarget, p * 1.2));
   }
 
   private resize() {

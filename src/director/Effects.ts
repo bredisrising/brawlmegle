@@ -11,11 +11,16 @@ interface EffectSpec {
   sparks?: { count: number; color: string; intensity: number; speed: number; size: number; life: number; gravity: number; upward?: boolean };
   ring?: { color: string; intensity: number; from: number; to: number; life: number; flat?: boolean };
   flash?: { color: string; intensity: number; size: number; life: number };
+  /** Comic-book impact star: sharp spikes bursting out from the hit, facing the camera. */
+  spikes?: { count: number; color: string; intensity: number; length: number; width: number; life: number };
+  /** A column of light from the floor (spawning in). */
+  beam?: { color: string; intensity: number; radius: number; height: number; life: number };
 }
 
 const SPECS: Record<EffectKind, EffectSpec> = {
   hit: {
     sparks: { count: 18, color: '#ffb347', intensity: 6, speed: 1.6, size: 0.025, life: 0.35, gravity: 3 },
+    spikes: { count: 9, color: '#fff1c9', intensity: 3, length: 0.2, width: 0.035, life: 0.12 },
     ring: { color: '#ffd28a', intensity: 3, from: 0.03, to: 0.22, life: 0.18 },
     flash: { color: '#fff1d0', intensity: 4, size: 0.25, life: 0.08 },
   },
@@ -28,17 +33,20 @@ const SPECS: Record<EffectKind, EffectSpec> = {
   },
   counter: {
     sparks: { count: 36, color: '#ff4a3d', intensity: 8, speed: 2.4, size: 0.03, life: 0.45, gravity: 3 },
+    spikes: { count: 12, color: '#ffd84a', intensity: 5, length: 0.34, width: 0.05, life: 0.16 },
     ring: { color: '#ffcf5a', intensity: 5, from: 0.04, to: 0.35, life: 0.25 },
     flash: { color: '#fff4c2', intensity: 3, size: 0.32, life: 0.1 },
   },
   ko: {
     sparks: { count: 70, color: '#ffe08a', intensity: 10, speed: 3, size: 0.035, life: 0.8, gravity: 2.5 },
+    spikes: { count: 16, color: '#ffffff', intensity: 6, length: 0.5, width: 0.06, life: 0.3 },
     ring: { color: '#ffffff', intensity: 3, from: 0.05, to: 0.6, life: 0.4 },
     flash: { color: '#ffffff', intensity: 2.5, size: 0.45, life: 0.16 },
   },
   spawn: {
     sparks: { count: 30, color: '#5ee8ff', intensity: 5, speed: 0.6, size: 0.02, life: 0.9, gravity: -0.6, upward: true },
     ring: { color: '#5ee8ff', intensity: 4, from: 0.05, to: 0.45, life: 0.5, flat: true },
+    beam: { color: '#5ee8ff', intensity: 3, radius: 0.22, height: 1.1, life: 1.6 },
   },
 };
 
@@ -61,18 +69,22 @@ export class Effects {
   private readonly layers: Layer[] = [];
   private readonly ringGeometry = new THREE.RingGeometry(0.85, 1, 48);
   private readonly glowTexture = createGlowTexture();
+  private readonly beamTexture = createBeamTexture();
 
   constructor(scene: THREE.Scene, camera: THREE.Camera) {
     this.scene = scene;
     this.camera = camera;
   }
 
-  burst(point: THREE.Vector3, kind: EffectKind) {
+  /** `color` overrides the beam color (a player's color when they spawn in). */
+  burst(point: THREE.Vector3, kind: EffectKind, color?: THREE.ColorRepresentation) {
     const spec = SPECS[kind];
     const at = point.clone();
     if (spec.sparks) this.addSparks(at, spec.sparks);
     if (spec.ring) this.addRing(at, spec.ring);
     if (spec.flash) this.addFlash(at, spec.flash);
+    if (spec.spikes) this.addSpikes(at, spec.spikes);
+    if (spec.beam) this.addBeam(at, spec.beam, color);
   }
 
   /** Called every render frame (keeps animating during freeze frames). */
@@ -92,6 +104,7 @@ export class Effects {
     this.layers.length = 0;
     this.ringGeometry.dispose();
     this.glowTexture.dispose();
+    this.beamTexture.dispose();
   }
 
   private addSparks(at: THREE.Vector3, s: NonNullable<EffectSpec['sparks']>) {
@@ -177,6 +190,63 @@ export class Effects {
     });
   }
 
+  private addSpikes(at: THREE.Vector3, k: NonNullable<EffectSpec['spikes']>) {
+    // Thin triangles from the center outward at random angles and lengths, in one billboarded mesh.
+    const verts: number[] = [];
+    for (let i = 0; i < k.count; i++) {
+      const a = ((i + Math.random() * 0.6) / k.count) * Math.PI * 2;
+      const len = k.length * (0.5 + Math.random() * 0.5);
+      const w = k.width * (0.6 + Math.random() * 0.4);
+      const [c, s] = [Math.cos(a), Math.sin(a)];
+      const base = 0.25 * len;
+      verts.push(c * base - s * w, s * base + c * w, 0, c * base + s * w, s * base - c * w, 0, c * len, s * len, 0);
+    }
+    const geometry = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    const material = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(k.color).multiplyScalar(k.intensity),
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: false,
+      side: THREE.DoubleSide,
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.copy(at);
+    mesh.renderOrder = 10;
+    const spin = (Math.random() - 0.5) * 0.6;
+    this.addLayer(mesh, material, geometry, (age) => {
+      const t = age / k.life;
+      // Snap out to full size almost at once, then thin out.
+      mesh.scale.set(0.6 + 0.6 * Math.min(1, t * 4), 0.6 + 0.6 * Math.min(1, t * 4), 1);
+      mesh.quaternion.copy(this.camera.quaternion);
+      mesh.rotateZ(spin);
+      material.opacity = t < 0.4 ? 1 : 1 - (t - 0.4) / 0.6;
+      return t < 1;
+    });
+  }
+
+  private addBeam(at: THREE.Vector3, b: NonNullable<EffectSpec['beam']>, color?: THREE.ColorRepresentation) {
+    const geometry = new THREE.CylinderGeometry(b.radius, b.radius * 1.15, b.height, 32, 1, true);
+    geometry.translate(0, b.height / 2, 0);
+    const material = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(color ?? b.color).multiplyScalar(b.intensity),
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      alphaMap: this.beamTexture,
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(at.x, 0, at.z);
+    this.addLayer(mesh, material, geometry, (age) => {
+      const t = age / b.life;
+      // Shoots up fast, holds while the fighter prints in, then narrows away.
+      mesh.scale.set(t < 0.7 ? 1 : 1 - (t - 0.7) / 0.3, Math.min(1, t * 6), t < 0.7 ? 1 : 1 - (t - 0.7) / 0.3);
+      material.opacity = t < 0.1 ? t * 10 : t < 0.7 ? 0.9 : 0.9 * (1 - (t - 0.7) / 0.3);
+      return t < 1;
+    });
+  }
+
   private addLayer(object: THREE.Object3D, material: THREE.Material, geometry: THREE.BufferGeometry | undefined, step: Layer['step']) {
     const layer: Layer = { object, material, geometry, step, age: 0 };
     step(0);
@@ -203,5 +273,21 @@ function createGlowTexture() {
   g.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, size, size);
+  return new THREE.CanvasTexture(canvas);
+}
+
+/** Vertical fade for the spawn beam: bright at the floor, gone at the top. */
+function createBeamTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 4;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d')!;
+  const g = ctx.createLinearGradient(0, 64, 0, 0);
+  // alphaMap reads the green channel, so this is an opaque gray ramp, not transparency.
+  g.addColorStop(0, '#fff');
+  g.addColorStop(0.5, '#737373');
+  g.addColorStop(1, '#000');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 4, 64);
   return new THREE.CanvasTexture(canvas);
 }
