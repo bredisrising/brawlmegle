@@ -8,19 +8,37 @@ model sheet (landmarks.py). The sheet is a straight-on front A-pose, so the shee
 mesh's front view: each joint lands on the mesh by matching the two bounding boxes, then gets its depth from the mesh
 (halfway between the front and back surface there).
 
-Skin weights come from Blender's bone heat, run on a watertight voxel-remeshed copy of the mesh (bone heat often fails
-on generated meshes with holes and loose bits) and copied back to the real mesh. Any vertex left without weights
-falls back to its nearest bone. The output is about 1 m tall, feet at y=0, with the "mixamorig:" bone names the game
-looks up (src/director/skeletonPose.ts).
+Skin weights come from Blender's bone heat, run on a watertight solid proxy of the mesh (bone heat often fails on
+generated meshes with holes and loose bits) and copied back to the real mesh. Every result is checked (rig_check.py:
+each limb owned by its bones, no bone owning the mesh); a failed check moves on to the next way of weighting it:
+
+1. "bone-heat": bone heat on an 8 mm voxel remesh of the mesh.
+2. "bone-heat-retry": bone heat on a solid made by voxel flood fill. TRELLIS.2's meshes are hollow (a 2-3 mm
+   double-walled shell), and when the remesh doesn't fill the inside it comes out as ~1,000 sub-voxel blobs, of which
+   path 1 would keep one chest- or leg-sized patch (dylan, lamdestroyer, lampham). The flood fill closes small openings
+   and fills whatever the outside can't reach, so it doesn't depend on that.
+3. "envelope": distance to the fitted bone segments with a smooth falloff, each vertex limited to the bones of its
+   own body part (and the joints next to it), then smoothed over the surface.
+
+`--attempt 2` (the forge's re-rig after its own rig check turned the first rig down) goes straight to the envelope.
+The result reports the path, every attempt and the check's numbers; `rig_ok: false` means even the last path failed.
+The output is about 1 m tall, feet at y=0, with the "mixamorig:" bone names the game looks up
+(src/director/skeletonPose.ts).
 """
 import json
 import math
+import os
 import sys
 import time
 
 import bpy
 import bmesh
+import numpy as np
 from mathutils import Matrix, Vector, kdtree
+from mathutils.bvhtree import BVHTree
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from rig_check import CHAINS, blender_stats, seg_dist  # noqa: E402
 
 argv = sys.argv[sys.argv.index("--") + 1 :]
 IN_GLB, LANDMARKS, OUT_GLB = argv[:3]
@@ -29,6 +47,7 @@ VOXEL = float(opts.get("--voxel", 0.008))  # proxy voxel size for a 1 m tall mod
 DEBUG_BLEND = opts.get("--debug")
 STATIC_GLB = opts.get("--static")  # also write the oriented, normalized model without a skeleton
 YAW = float(opts.get("--yaw", 0))  # degrees about +y (glTF up) that turn the generator's front to +x
+ATTEMPT = int(opts.get("--attempt", 1))  # 2+: the forge's re-rig after its rig check failed: use the envelope
 PROXY_FACES = 40000
 t0 = time.time()
 marks = {}
@@ -244,113 +263,338 @@ for b in eb:
 bpy.ops.object.mode_set(mode="OBJECT")
 mark("armature")
 
-# --- skin weights: bone heat on a watertight proxy, copied back --------------------------------------------------
-proxy = body.copy()
-proxy.data = body.data.copy()
-proxy.name = "Proxy"
-bpy.context.scene.collection.objects.link(proxy)
-proxy.data.materials.clear()
-rm = proxy.modifiers.new("remesh", "REMESH")
-rm.mode = "VOXEL"
-rm.voxel_size = VOXEL
-rm.adaptivity = 0.0
-bpy.ops.object.select_all(action="DESELECT")
-proxy.select_set(True)
-bpy.context.view_layer.objects.active = proxy
-bpy.ops.object.modifier_apply(modifier="remesh")
-if len(proxy.data.polygons) > PROXY_FACES:
-    dec = proxy.modifiers.new("dec", "DECIMATE")
-    dec.ratio = PROXY_FACES / len(proxy.data.polygons)
-    bpy.ops.object.modifier_apply(modifier="dec")
-# Bone heat's solver fails for every bone if the mesh has degenerate faces, loose verts or extra pieces (the
-# remesh leaves small floaters): clean up and keep only the body.
-bm = bmesh.new()
-bm.from_mesh(proxy.data)
-bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-4)
-bmesh.ops.dissolve_degenerate(bm, edges=bm.edges, dist=1e-5)
-bmesh.ops.triangulate(bm, faces=bm.faces)
-bm.verts.ensure_lookup_table()
-seen = set()
-pieces = []
-for v in bm.verts:
-    if v.index in seen:
-        continue
-    seen.add(v.index)
-    stack, piece = [v], []
-    while stack:
-        x = stack.pop()
-        piece.append(x)
-        for e in x.link_edges:
-            o = e.other_vert(x)
-            if o.index not in seen:
-                seen.add(o.index)
-                stack.append(o)
-    pieces.append(piece)
-pieces.sort(key=len, reverse=True)
-bmesh.ops.delete(bm, geom=[v for piece in pieces[1:] for v in piece], context="VERTS")
-bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context="VERTS")
-bm.to_mesh(proxy.data)
-bm.free()
-mark("proxy")
-proxy_faces = len(proxy.data.polygons)
-if DEBUG_BLEND:
-    bpy.ops.wm.save_as_mainfile(filepath=DEBUG_BLEND)
-
-bpy.ops.object.select_all(action="DESELECT")
-proxy.select_set(True)
-rig.select_set(True)
-bpy.context.view_layer.objects.active = rig
-bpy.ops.object.parent_set(type="ARMATURE_AUTO")
-mark("bone_heat")
-heat = {g.index: 0 for g in proxy.vertex_groups}
-for v in proxy.data.vertices:
-    for g in v.groups:
-        if g.weight > 1e-3:
-            heat[g.group] += 1
-heat_empty = [g.name for g in proxy.vertex_groups if heat[g.index] == 0]
-heat_unweighted = sum(1 for v in proxy.data.vertices if sum(g.weight for g in v.groups) < 1e-4)
-
-# Copy weights to the real mesh: each vertex takes the weights of the nearest proxy surface point.
-dt = body.modifiers.new("weights", "DATA_TRANSFER")
-dt.object = proxy
-dt.use_vert_data = True
-dt.data_types_verts = {"VGROUP_WEIGHTS"}
-dt.vert_mapping = "POLYINTERP_NEAREST"
-dt.layers_vgroup_select_src = "ALL"
-dt.layers_vgroup_select_dst = "NAME"
-bpy.ops.object.select_all(action="DESELECT")
-body.select_set(True)
-bpy.context.view_layer.objects.active = body
-for b in arm_data.bones:
-    if not body.vertex_groups.get(b.name):
-        body.vertex_groups.new(name=b.name)
-bpy.ops.object.datalayout_transfer(modifier="weights")
-bpy.ops.object.modifier_apply(modifier="weights")
-mark("transfer")
-
-# Vertices bone heat missed: give them to the nearest bone segment.
-bones = [(b.name, b.head_local.copy(), b.tail_local.copy()) for b in arm_data.bones if not b.name.endswith("ToeBase")]
+# --- skin weights: bone heat on a solid proxy, checked, with fallbacks (see the top) ------------------------------
+BONES = [b.name for b in arm_data.bones]
+SEGMENTS = [(b.name, b.head_local.copy(), b.tail_local.copy()) for b in arm_data.bones]
 
 
-def seg_dist(p, a, b):
-    ab = b - a
-    t = max(0.0, min(1.0, (p - a).dot(ab) / max(ab.length_squared, 1e-12)))
-    return (p - (a + ab * t)).length
+def body_points():
+    pts = np.empty(len(body.data.vertices) * 3)
+    body.data.vertices.foreach_get("co", pts)
+    return pts.reshape(-1, 3)
 
 
-groups = {g.index: g for g in body.vertex_groups}
-orphans = 0
-for v in body.data.vertices:
-    if sum(g.weight for g in v.groups) > 1e-4:
-        continue
-    orphans += 1
-    name = min(bones, key=lambda b: seg_dist(v.co, b[1], b[2]))[0]
-    body.vertex_groups[name].add([v.index], 1.0, "REPLACE")
-bpy.ops.object.vertex_group_limit_total(group_select_mode="ALL", limit=4)
-bpy.ops.object.vertex_group_normalize_all(group_select_mode="ALL", lock_active=False)
-mark("cleanup")
+def link_new(name, mesh):
+    obj = bpy.data.objects.new(name, mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    return obj
 
-bpy.data.objects.remove(proxy, do_unlink=True)
+
+def apply_modifier(obj, mod):
+    bpy.ops.object.select_all(action="DESELECT")
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.modifier_apply(modifier=mod.name)
+
+
+def keep_largest(obj):
+    """Bone heat's solver fails for every bone if the mesh has degenerate faces, loose verts or extra pieces (the
+    remesh leaves small floaters): clean up and keep only the biggest piece. Returns (pieces, share of faces kept)."""
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-4)
+    bmesh.ops.dissolve_degenerate(bm, edges=bm.edges, dist=1e-5)
+    bmesh.ops.triangulate(bm, faces=bm.faces)
+    bm.verts.ensure_lookup_table()
+    seen = set()
+    pieces = []
+    for v in bm.verts:
+        if v.index in seen:
+            continue
+        seen.add(v.index)
+        stack, piece = [v], []
+        while stack:
+            x = stack.pop()
+            piece.append(x)
+            for e in x.link_edges:
+                o = e.other_vert(x)
+                if o.index not in seen:
+                    seen.add(o.index)
+                    stack.append(o)
+        pieces.append(piece)
+    pieces.sort(key=len, reverse=True)
+    total_faces = len(bm.faces)
+    bmesh.ops.delete(bm, geom=[v for piece in pieces[1:] for v in piece], context="VERTS")
+    bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context="VERTS")
+    kept = len(bm.faces) / max(1, total_faces)
+    bm.to_mesh(obj.data)
+    bm.free()
+    return len(pieces), round(kept, 3)
+
+
+def remesh_proxy(src_mesh, voxel):
+    """A watertight voxel remesh of src_mesh, decimated for bone heat, biggest piece only."""
+    proxy = link_new("Proxy", src_mesh.copy())
+    proxy.data.materials.clear()
+    rm = proxy.modifiers.new("remesh", "REMESH")
+    rm.mode = "VOXEL"
+    rm.voxel_size = voxel
+    rm.adaptivity = 0.0
+    apply_modifier(proxy, rm)
+    remeshed = len(proxy.data.polygons)
+    if remeshed > PROXY_FACES:
+        dec = proxy.modifiers.new("dec", "DECIMATE")
+        dec.ratio = PROXY_FACES / remeshed
+        apply_modifier(proxy, dec)
+    pieces, kept = keep_largest(proxy)
+    return proxy, {"voxel": voxel, "proxy_faces": len(proxy.data.polygons), "pieces": pieces, "kept": kept}
+
+
+def dilate(a, n):
+    for _ in range(n):
+        b = a.copy()
+        for ax in range(3):
+            b |= np.roll(a, 1, ax) | np.roll(a, -1, ax)
+        a = b
+    return a
+
+
+def erode(a, n):
+    for _ in range(n):
+        b = a.copy()
+        for ax in range(3):
+            b &= np.roll(a, 1, ax) & np.roll(a, -1, ax)
+        a = b
+    return a
+
+
+def solid_mesh(voxel, close):
+    """The body as a solid, independent of whether the shell is hollow or open: the surface goes into a voxel grid,
+    thickened by `close` voxels to seal openings up to ~2 * close voxels wide, then everything the outside can't
+    reach is solid; the thickening comes off again. Returns the solid's voxel faces as a closed mesh."""
+    pts = body_points()
+    me = body.data
+    me.calc_loop_triangles()
+    tri = np.empty(len(me.loop_triangles) * 3, dtype=np.int64)
+    me.loop_triangles.foreach_get("vertices", tri)
+    tri = tri.reshape(-1, 3)
+    a, b, c = pts[tri[:, 0]], pts[tri[:, 1]], pts[tri[:, 2]]
+    # Surface samples no more than half a voxel apart, so every voxel the surface passes through gets one.
+    longest = np.maximum(np.maximum(np.linalg.norm(b - a, axis=1), np.linalg.norm(c - b, axis=1)), np.linalg.norm(a - c, axis=1))
+    steps = np.clip(np.ceil(longest / (voxel * 0.5)).astype(int), 1, 64)
+    samples = [pts]
+    for n in np.unique(steps):
+        m = steps == n
+        A, AB, AC = a[m], b[m] - a[m], c[m] - a[m]
+        for i in range(n + 1):
+            for j in range(n + 1 - i):
+                samples.append(A + AB * (i / n) + AC * (j / n))
+    samples = np.concatenate(samples)
+    pad = close + 2
+    lo = samples.min(axis=0) - pad * voxel
+    ijk = np.floor((samples - lo) / voxel).astype(int)
+    shape = tuple(ijk.max(axis=0) + pad + 1)
+    occ = np.zeros(shape, dtype=bool)
+    occ[ijk[:, 0], ijk[:, 1], ijk[:, 2]] = True
+    wall = dilate(occ, close)
+    outside = np.zeros(shape, dtype=bool)
+    outside[0], outside[-1], outside[:, 0], outside[:, -1], outside[:, :, 0], outside[:, :, -1] = True, True, True, True, True, True
+    outside &= ~wall
+    while True:
+        grown = dilate(outside, 1) & ~wall
+        if grown.sum() == outside.sum():
+            break
+        outside = grown
+    solid = erode(~outside, close) | occ
+    # Voxel faces between solid and empty, wound outward (corners on the voxel grid, shared).
+    S = np.pad(solid, 1)
+    ny, nz = S.shape[1] + 1, S.shape[2] + 1
+    quads = []
+    for ax, (bx, cx) in ((0, (1, 2)), (1, (2, 0)), (2, (0, 1))):
+        e_a, e_b, e_c = np.eye(3, dtype=np.int64)[ax], np.eye(3, dtype=np.int64)[bx], np.eye(3, dtype=np.int64)[cx]
+        for sign in (1, -1):
+            v = np.argwhere(S & ~np.roll(S, -sign, ax))
+            if sign > 0:
+                base = v + e_a
+                corners = [base, base + e_b, base + e_b + e_c, base + e_c]
+            else:
+                corners = [v, v + e_c, v + e_b + e_c, v + e_b]
+            quads.append(np.stack([(q[:, 0] * ny + q[:, 1]) * nz + q[:, 2] for q in corners], axis=1))
+    quads = np.concatenate(quads)
+    ids, inverse = np.unique(quads, return_inverse=True)
+    corner = np.stack([ids // (ny * nz), (ids // nz) % ny, ids % nz], axis=1)
+    verts = lo + (corner - 1) * voxel
+    mesh = bpy.data.meshes.new("Solid")
+    mesh.from_pydata(verts.tolist(), [], inverse.reshape(-1, 4).tolist())
+    mesh.update()
+    return mesh, {"close": close, "solid_voxels": int(solid.sum()), "shell_voxels": int(occ.sum())}
+
+
+def proxy_cover(proxy, tol):
+    """Share of the body's vertices within tol of the proxy's surface: a proxy that lost a limb or broke into
+    blobs (of which only one was kept) leaves most of the body far away."""
+    me = proxy.data
+    tree = BVHTree.FromPolygons([v.co for v in me.vertices], [p.vertices[:] for p in me.polygons])
+    near = 0
+    for v in body.data.vertices:
+        hit = tree.find_nearest(v.co, tol)
+        near += hit[0] is not None
+    return round(near / max(1, len(body.data.vertices)), 3)
+
+
+def reset_groups():
+    body.vertex_groups.clear()
+    for name in BONES:
+        body.vertex_groups.new(name=name)
+
+
+def finish_weights():
+    """Vertices left without weights go to the nearest bone segment, then at most 4 bones each, summing to 1."""
+    segs = [s for s in SEGMENTS if not s[0].endswith("ToeBase")]
+    pts = body_points()
+    dist = np.stack([seg_dist(pts, np.array(s[1]), np.array(s[2])) for s in segs], axis=1)
+    orphans = 0
+    for v in body.data.vertices:
+        if sum(g.weight for g in v.groups) > 1e-4:
+            continue
+        orphans += 1
+        body.vertex_groups[segs[int(dist[v.index].argmin())][0]].add([v.index], 1.0, "REPLACE")
+    bpy.ops.object.select_all(action="DESELECT")
+    body.select_set(True)
+    bpy.context.view_layer.objects.active = body
+    bpy.ops.object.vertex_group_limit_total(group_select_mode="ALL", limit=4)
+    bpy.ops.object.vertex_group_normalize_all(group_select_mode="ALL", lock_active=False)
+    return orphans
+
+
+def heat_weights(proxy):
+    """Bone heat on the proxy, copied to the body: each vertex takes the weights of the nearest proxy surface point."""
+    bpy.ops.object.select_all(action="DESELECT")
+    proxy.select_set(True)
+    rig.select_set(True)
+    bpy.context.view_layer.objects.active = rig
+    bpy.ops.object.parent_set(type="ARMATURE_AUTO")
+    heat = {g.index: 0 for g in proxy.vertex_groups}
+    for v in proxy.data.vertices:
+        for g in v.groups:
+            if g.weight > 1e-3:
+                heat[g.group] += 1
+    empty = [g.name for g in proxy.vertex_groups if heat[g.index] == 0]
+    unweighted = sum(1 for v in proxy.data.vertices if sum(g.weight for g in v.groups) < 1e-4)
+    reset_groups()
+    dt = body.modifiers.new("weights", "DATA_TRANSFER")
+    dt.object = proxy
+    dt.use_vert_data = True
+    dt.data_types_verts = {"VGROUP_WEIGHTS"}
+    dt.vert_mapping = "POLYINTERP_NEAREST"
+    dt.layers_vgroup_select_src = "ALL"
+    dt.layers_vgroup_select_dst = "NAME"
+    bpy.ops.object.select_all(action="DESELECT")
+    body.select_set(True)
+    bpy.context.view_layer.objects.active = body
+    bpy.ops.object.datalayout_transfer(modifier="weights")
+    bpy.ops.object.modifier_apply(modifier="weights")
+    return {"heat_empty": empty, "heat_unweighted": unweighted, "orphans": finish_weights()}
+
+
+# Envelope: which bones a vertex may take weight from, by the body part its nearest bone is in: that part's bones
+# plus the joint it hangs from (a hand next to the thigh never takes thigh weight).
+ENVELOPE_SIGMA = 0.02  # m on a 1 m model: how far past the nearest bone a neighbor still pulls
+JOINS = {
+    "spine": ["Neck", "LeftShoulder", "RightShoulder", "LeftArm", "RightArm", "LeftUpLeg", "RightUpLeg"],
+    "head": ["Spine2"],
+    "armL": ["Spine2"],
+    "armR": ["Spine2"],
+    "legL": ["Hips"],
+    "legR": ["Hips"],
+}
+
+
+def envelope_weights():
+    pts = body_points()
+    names = [s[0][len(P):] for s in SEGMENTS]
+    dist = np.stack([seg_dist(pts, np.array(s[1]), np.array(s[2])) for s in SEGMENTS], axis=1)
+    chain_names = list(CHAINS)
+    chain_of = {b: ci for ci, c in enumerate(chain_names) for b in CHAINS[c]}
+    allowed = np.zeros((len(chain_names), len(names)), dtype=bool)
+    for ci, c in enumerate(chain_names):
+        for j, nm in enumerate(names):
+            allowed[ci, j] = nm in CHAINS[c] or nm in JOINS[c]
+    nearest = dist.argmin(axis=1)
+    mask = allowed[np.array([chain_of[names[j]] for j in nearest])]
+    w = np.exp(-(((dist - dist.min(axis=1, keepdims=True)) / ENVELOPE_SIGMA) ** 2)) * mask
+    # Smooth over the surface (UV seams split vertices, so weld by position first) to soften the joints.
+    key = np.round(pts / 1e-5).astype(np.int64)
+    _, weld = np.unique(key, axis=0, return_inverse=True)
+    weld = weld.reshape(-1)
+    edges = np.empty(len(body.data.edges) * 2, dtype=np.int64)
+    body.data.edges.foreach_get("vertices", edges)
+    e = weld[edges.reshape(-1, 2)]
+    e = e[e[:, 0] != e[:, 1]]
+    n = weld.max() + 1
+    wm = np.zeros((n, w.shape[1]))
+    np.add.at(wm, weld, w)
+    wm /= np.maximum(np.bincount(weld, minlength=n), 1)[:, None]
+    deg = np.bincount(e.ravel(), minlength=n)[:, None]
+    for _ in range(4):
+        acc = np.zeros_like(wm)
+        np.add.at(acc, e[:, 0], wm[e[:, 1]])
+        np.add.at(acc, e[:, 1], wm[e[:, 0]])
+        wm = np.where(deg > 0, 0.5 * wm + 0.5 * acc / np.maximum(deg, 1), wm)
+    w = wm[weld] * mask
+    w[w < 0.02 * w.max(axis=1, keepdims=True)] = 0
+    w /= np.maximum(w.sum(axis=1, keepdims=True), 1e-9)
+    reset_groups()
+    groups = [body.vertex_groups[s[0]] for s in SEGMENTS]
+    for i in range(len(pts)):
+        for j in np.argsort(w[i])[::-1][:4]:
+            if w[i, j] > 0:
+                groups[j].add([i], float(w[i, j]), "REPLACE")
+    return {"orphans": finish_weights()}
+
+
+def check_weights():
+    out = blender_stats(body, rig)
+    out.pop("dominant", None)
+    return out
+
+
+COVER_MIN = 0.95  # share of the body within 3 voxels of the proxy
+KEPT_MIN = 0.8  # share of the remesh in its biggest piece
+
+
+def solid_proxy(close):
+    mesh, info = solid_mesh(VOXEL, close)
+    proxy, pinfo = remesh_proxy(mesh, VOXEL)
+    bpy.data.meshes.remove(mesh)
+    return proxy, info | pinfo
+
+
+attempts = []
+result = None
+plan = [] if ATTEMPT > 1 else [("bone-heat", lambda: remesh_proxy(body.data, VOXEL))] + [("bone-heat-retry", lambda c=c: solid_proxy(c)) for c in (1, 2)]
+
+for path, make in plan:
+    start = time.time()
+    proxy, info = make()
+    info["cover"] = proxy_cover(proxy, 3 * VOXEL)
+    entry = {"path": path} | info
+    if DEBUG_BLEND:
+        bpy.ops.wm.save_as_mainfile(filepath=DEBUG_BLEND.replace(".blend", f"-{len(attempts) + 1}.blend"))
+    if info["cover"] < COVER_MIN or info["kept"] < KEPT_MIN:
+        entry |= {"ok": False, "fails": [f"proxy covers {info['cover']} of the body, biggest piece {info['kept']} of {info['pieces']}"]}
+    else:
+        entry |= heat_weights(proxy)
+        check = check_weights()
+        entry |= {"ok": check["ok"], "fails": check["fails"]}
+        if check["ok"]:
+            result = (path, check)
+    bpy.data.objects.remove(proxy, do_unlink=True)
+    entry["s"] = round(time.time() - start, 2)
+    attempts.append(entry)
+    if result:
+        break
+if not result:
+    start = time.time()
+    entry = {"path": "envelope"} | envelope_weights()
+    check = check_weights()
+    entry |= {"ok": check["ok"], "fails": check["fails"], "s": round(time.time() - start, 2)}
+    attempts.append(entry)
+    result = ("envelope", check)
+    if not check["ok"]:
+        print("RIG_WARNING the envelope weights failed the check too:", check["fails"])
+rig_path, rig_check = result
+mark("skin")
 mod = body.modifiers.new("Armature", "ARMATURE")
 mod.object = rig
 body.parent = rig
@@ -369,4 +613,11 @@ bpy.ops.export_scene.gltf(
     export_apply=False,
 )
 mark("export")
-print("RIG_RESULT " + json.dumps({"timings": marks, "verts": len(body.data.vertices), "proxy_faces": proxy_faces, "orphans": orphans, "turned": turned, "toe_lead": round(toe_lead, 4), "heat_empty": heat_empty, "heat_unweighted": heat_unweighted, "height_in": round(height, 4)}))
+last = attempts[-1]
+print("RIG_RESULT " + json.dumps({
+    "timings": marks, "verts": len(body.data.vertices), "turned": turned, "toe_lead": round(toe_lead, 4), "height_in": round(height, 4),
+    "rig": rig_path, "rig_ok": rig_check["ok"], "attempt": ATTEMPT, "attempts": attempts, "check": rig_check,
+    # The old fields, from the path that made the rig.
+    "proxy_faces": last.get("proxy_faces", 0), "orphans": last.get("orphans", 0), "heat_empty": last.get("heat_empty", []),
+    "heat_unweighted": last.get("heat_unweighted", 0),
+}))
