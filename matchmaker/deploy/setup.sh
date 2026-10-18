@@ -196,9 +196,17 @@ server {
   location = /samples { proxy_pass http://127.0.0.1:3000; }
   location = /mm-test { proxy_pass http://127.0.0.1:3000/; }
   # Everything else is the game itself (a static build in /var/www/brawlegle/game), one site for everyone.
+  # index.html is always revalidated, so a laptop never runs a stale page that points at deleted bundles.
   location / {
     root /var/www/brawlegle/game;
     try_files \$uri \$uri/ /index.html;
+    add_header Cache-Control "no-cache";
+  }
+  # Hashed bundles never change. A missing one is a 404, not index.html served as JavaScript (a blank page).
+  location /assets/ {
+    root /var/www/brawlegle/game;
+    try_files \$uri =404;
+    add_header Cache-Control "public, max-age=31536000, immutable";
   }
 }
 EOF
