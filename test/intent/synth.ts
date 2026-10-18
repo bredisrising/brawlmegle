@@ -162,9 +162,15 @@ function kick(l: boolean): Move {
 function shiftAll(f: (j: string, p: number, amp: number, R: Pose) => V): Move['pose'] {
   return (p, amp, R) => Object.fromEntries(Object.keys(R).map((j) => [j, f(j, p, amp, R)]));
 }
+/** A real hop: dip, both feet leave the floor ~15–25 cm, land. */
+const jump: Move = {
+  name: 'jump', kind: 'jump', ms: 550, standingOnly: true,
+  pose: shiftAll((j, p, amp, R) => add(R[j], [0, (p < 0.25 ? -0.05 * smooth(p / 0.25) : -0.05 + 0.25 * Math.sin(Math.PI * Math.min(1, (p - 0.25) / 0.6))) * amp, 0])),
+};
+/** Boxer's bounce on the toes: a few small bobs. Not a jump. */
 const bounce: Move = {
-  name: 'bounce', kind: 'jump', ms: 450, standingOnly: true,
-  pose: shiftAll((j, p, amp, R) => add(R[j], [0, (p < 0.25 ? -0.03 * smooth(p / 0.25) : -0.03 + 0.11 * Math.sin(Math.PI * Math.min(1, (p - 0.25) / 0.6))) * amp, 0])),
+  name: 'bounce on toes', kind: 'negative', ms: 1600, standingOnly: true,
+  pose: shiftAll((j, p, _a, R) => (j.endsWith('Ankle') ? R[j] : add(R[j], [0, 0.035 * Math.abs(Math.sin(p * Math.PI * 4)), 0]))),
 };
 const duck: Move = {
   name: 'duck', kind: 'duck', ms: 900,
@@ -263,8 +269,8 @@ const walk: Move = {
 
 const MOVES: Move[] = [
   straight(true), straight(false), straight(true), straight(false), hook(true), hook(false), uppercut(true), uppercut(false),
-  knee(true), knee(false), kick(true), kick(false), bounce, duck, slip(true), slip(false),
-  fidget(true), fidget(false), slowReach(true), walk, wave(false), scratch(true), twist(true), twist(false), handsDown,
+  knee(true), knee(false), kick(true), kick(false), jump, duck, slip(true), slip(false),
+  fidget(true), fidget(false), slowReach(true), walk, bounce, wave(false), scratch(true), twist(true), twist(false), handsDown,
 ];
 const BY_NAME = new Map(MOVES.map((m) => [m.name, m]));
 const COMBOS: string[][] = [
@@ -339,8 +345,33 @@ export function synthesize(options: SynthOptions = {}): { frames: (PoseFrame | {
   const rand = rng(seed);
   const gauss = () => Math.sqrt(-2 * Math.log(rand() + 1e-12)) * Math.cos(2 * Math.PI * rand());
   const R = restPose(stance);
-  const pool = MOVES.filter((m) => (!only || only.includes(m.name)) && !(sitting && m.standingOnly)).map((m) => (sitting && m === duck ? seatedDuck : m));
   const depthGain = options.depthGain ?? 0.1 + rand() * 0.25;
+
+  // Camera: a pinhole at `distance`, rotated `yaw` around the player, aimed at `lookAt`. 4:3, 640x480.
+  const W = 640, H = 480;
+  const fov = options.fov ?? 55;
+  const f = H / 2 / Math.tan((fov * Math.PI) / 360);
+  const yaw = (cameraYaw * Math.PI) / 180;
+  const camH = (options.cameraHeight ?? (sitting ? 0.95 : 1.2)) * (sitting ? 1 : body.height);
+  const dist = options.distance ?? (sitting ? 0.7 : 2.6);
+  const lookY = options.lookAt ?? camH;
+  const cam: V = [Math.sin(yaw) * dist, camH, Math.cos(yaw) * dist];
+  const fwd = normalize([-cam[0], lookY - cam[1], -cam[2]]);
+  const right = normalize(cross(fwd, [0, 1, 0]));
+  const up = cross(right, fwd);
+  const project = (p: V) => {
+    const d: V = [p[0] - cam[0], p[1] - cam[1], p[2] - cam[2]];
+    const depth = Math.max(0.05, dot(d, fwd));
+    return { x: 0.5 + (f * dot(d, right)) / depth / W, y: 0.5 - (f * dot(d, up)) / depth / H, depth };
+  };
+  // Legs (and jumps) only when the feet are in the frame: close framing and sitting can't see them.
+  const restShaped = shapeBody(R, body);
+  const feetVisible = ['lAnkle', 'rAnkle', 'lKnee', 'rKnee'].every((j) => {
+    const p = project(restShaped[j]);
+    return p.x > 0 && p.x < 1 && p.y > 0 && p.y < 1;
+  });
+  const pool = MOVES.filter((m) => (!only || only.includes(m.name)) && !((sitting || !feetVisible) && m.standingOnly))
+    .map((m) => (sitting && m === duck ? seatedDuck : m));
 
   // Script: random moves with random gaps, speeds and sizes; some fast combos.
   type Item = { move: Move; start: number; ms: number; amp: number };
@@ -373,23 +404,6 @@ export function synthesize(options: SynthOptions = {}): { frames: (PoseFrame | {
     t += ms + 350 + rand() * 900;
   }
 
-  // Camera: a pinhole at `distance`, rotated `yaw` around the player, aimed at `lookAt`. 4:3, 640x480.
-  const W = 640, H = 480;
-  const fov = options.fov ?? 55;
-  const f = H / 2 / Math.tan((fov * Math.PI) / 360);
-  const yaw = (cameraYaw * Math.PI) / 180;
-  const camH = (options.cameraHeight ?? (sitting ? 0.95 : 1.2)) * (sitting ? 1 : body.height);
-  const dist = options.distance ?? (sitting ? 0.7 : 2.6);
-  const lookY = options.lookAt ?? camH;
-  const cam: V = [Math.sin(yaw) * dist, camH, Math.cos(yaw) * dist];
-  const fwd = normalize([-cam[0], lookY - cam[1], -cam[2]]);
-  const right = normalize(cross(fwd, [0, 1, 0]));
-  const up = cross(right, fwd);
-  const project = (p: V) => {
-    const d: V = [p[0] - cam[0], p[1] - cam[1], p[2] - cam[2]];
-    const depth = Math.max(0.05, dot(d, fwd));
-    return { x: 0.5 + (f * dot(d, right)) / depth / W, y: 0.5 - (f * dot(d, up)) / depth / H, depth };
-  };
   // A desk between a seated player and the laptop hides what's below its top.
   const deskY = 0.72 * body.height, deskEdge = 0.28;
   const hiddenByDesk = (p: V) => {

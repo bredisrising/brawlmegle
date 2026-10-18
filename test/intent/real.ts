@@ -5,7 +5,7 @@ import path from 'node:path';
 import type { Intent, IntentConfig } from '../../src/intent/intents';
 import { DEFAULT_INTENT } from '../../src/intent/intents';
 import type { PoseFrame } from '../../src/types';
-import { loadClip, runClip, type ClipFrame } from './clip';
+import { defaultReader, loadClip, runClip, type ClipFrame, type ReaderFactory } from './clip';
 import { evaluate, type EvalResult } from './eval';
 import type { Label } from './synth';
 
@@ -61,10 +61,10 @@ export function loadGuided(file: string): { labels: GuidedLabel[]; frames: PoseF
 const describe = (i: Intent) => i.kind === 'strike' ? `${i.limb}:${i.style}` : i.kind === 'guard' ? `guard:${i.up ? 'up' : 'down'}`
   : i.kind === 'dodge' ? `dodge:${i.dir}` : i.kind === 'cancel' ? `(cancel ${i.limb}: ${i.reason})` : i.kind;
 
-export function scoreGuided(file: string, config: IntentConfig = DEFAULT_INTENT): GuidedScore | null {
+export function scoreGuided(file: string, config: IntentConfig = DEFAULT_INTENT, makeReader: ReaderFactory = defaultReader): GuidedScore | null {
   const g = loadGuided(file);
   if (!g) return null;
-  const { intents } = runClip({ header: {}, frames: g.frames }, config);
+  const { intents } = runClip({ header: {}, frames: g.frames }, config, null, makeReader);
   const shown = intents.filter((i) => i.kind !== 'anticipate' && i.kind !== 'cancel');
   const t0 = g.frames[0].t;
   const dts = g.frames.slice(1).map((f, k) => f.t - g.frames[k].t).sort((a, b) => a - b);
@@ -109,9 +109,9 @@ export function listClips(spec: string | undefined): string[] {
 }
 
 /** Free-form clips with no labels: what the reader saw. */
-export function summarizeUnlabeled(file: string, config: IntentConfig = DEFAULT_INTENT) {
+export function summarizeUnlabeled(file: string, config: IntentConfig = DEFAULT_INTENT, makeReader: ReaderFactory = defaultReader) {
   const clip = loadClip(file);
-  const { intents } = runClip(clip, config);
+  const { intents } = runClip(clip, config, null, makeReader);
   const counts = new Map<string, number>();
   for (const i of intents) {
     if (i.kind === 'anticipate' || i.kind === 'cancel' || (i.kind === 'guard' && !i.up)) continue;
