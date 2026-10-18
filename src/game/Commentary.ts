@@ -64,7 +64,8 @@ export class Commentary {
     const line = this.queue.shift();
     if (!line) return;
     this.speaking = true;
-    useGameStore.setState({ caption: { voice: line.voice, text: line.text, key: now } });
+    // [tags] are delivery directions for the voice, not words to show.
+    useGameStore.setState({ caption: { voice: line.voice, text: line.text.replace(/\[[^\]]*\]\s*/g, ''), key: now } });
     try {
       if (!this.muted) await this.voice(line);
       else await wait(1200 + line.text.length * 35);

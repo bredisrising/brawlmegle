@@ -189,7 +189,8 @@ const VOICES = { A: process.env.FORGE_VOICE_A ?? "onyx", B: process.env.FORGE_VO
 const COMMENTARY_PROMPT = `You are two fighting-game commentators calling a webcam fighting game at a college hackathon
 (DubHacks, late at night). A is the hype play-by-play announcer, B is the dry, roasting color commentator.
 Write 1 or 2 short lines (max 14 words each) for the moment described. Call each fighter by their "name" exactly
-(it's their username); the brief's nickname and details are only flavor for the jokes. Be funny and
+(it's their username); the brief's nickname and details are only flavor for the jokes. Start each line with one
+delivery tag for the voice actor: A uses [shouting] or [excited], B uses [deadpan], [sarcastic] or [laughs]. Be funny and
 specific: roast the fighting, the outfits and costume details, the hour, the record. NEVER comment on bodies,
 faces, weight, skin, age or anything a person can't change. Keep it PG-13. Reply as JSON:
 {"lines":[{"voice":"A"|"B","text":"..."}]}`;
@@ -221,15 +222,46 @@ export async function commentate(ctx) {
     .map((l) => ({ voice: l.voice, text: l.text.slice(0, 140) }));
 }
 
-/** One commentator line as MP3 bytes. */
+/**
+ * ElevenLabs voices (much more alive than OpenAI's for this): A = Ed, the arena announcer who also does the barks,
+ * B = Blue, a dry Gen-Z sports commentator. eleven_v3 reads [tags] like [excited] or [sarcastic] as delivery.
+ */
+const ELEVEN_VOICES = {
+  A: process.env.ELEVEN_VOICE_A ?? "dHd5gvgSOzSfduK4CvEg",
+  B: process.env.ELEVEN_VOICE_B ?? "kfU9VUUMjY4PWNoUfZ45",
+};
+
+async function speakEleven(text, voice) {
+  const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${ELEVEN_VOICES[voice] ?? ELEVEN_VOICES.A}?output_format=mp3_44100_128`, {
+    method: "POST",
+    headers: { "xi-api-key": process.env.ELEVENLABS_API_KEY, "content-type": "application/json" },
+    body: JSON.stringify({
+      text,
+      model_id: process.env.ELEVEN_MODEL ?? "eleven_v3",
+      voice_settings: { stability: voice === "B" ? 0.5 : 0.3, similarity_boost: 0.8, style: voice === "B" ? 0.4 : 0.8, speed: 1.1 },
+    }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) throw new Error(`ElevenLabs TTS ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  return Buffer.from(await res.arrayBuffer());
+}
+
+/** One commentator line as MP3 bytes (ElevenLabs when configured, else OpenAI). */
 export async function speak(text, voice) {
+  if (process.env.ELEVENLABS_API_KEY) {
+    try {
+      return await speakEleven(text, voice);
+    } catch (err) {
+      console.warn("elevenlabs failed, falling back to openai:", err.message);
+    }
+  }
   const res = await fetch(API + "/audio/speech", {
     method: "POST",
     headers: { authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "content-type": "application/json" },
     body: JSON.stringify({
       model: TTS_MODEL,
       voice: VOICES[voice] ?? VOICES.A,
-      input: text,
+      input: text.replace(/\[[^\]]*\]\s*/g, ""),
       response_format: "mp3",
       instructions: voice === "B"
         ? "Dry, witty fighting-game color commentator. Quick, deadpan, a little smug."
