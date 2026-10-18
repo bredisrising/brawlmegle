@@ -106,7 +106,9 @@ dust), Sfx (synthesized sounds, M mutes).
 ### forge/
 scanBuckets.ts (pure: facing from landmarks, front/left/right buckets, sharpness), scan.ts (live capture
 from the camera's video + pose frames), forge.ts (captureScan, submitForge/getForge/forgeFighter against
-config.forgeApi, mocked when empty), roster.ts (memory card: forge server's fighters + localStorage + house).
+config.forgeApi, mocked when empty), roster.ts (memory card: forge server's fighters + localStorage + house),
+models.ts (every GLB load: the meshopt-capable loader, and preloadModel() to start a fighter's download as soon as
+it's known; forge/optimize.js shrinks fighters on the server, vite.config.ts the arena at build).
 
 ### game/
 Game.ts wires everything on the host and runs the phases (round clock, combos, callouts), or mirrors the

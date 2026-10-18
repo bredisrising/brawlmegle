@@ -4,6 +4,7 @@ Scan frames in, fighter out. It holds the OpenAI key so the browser never sees i
 
 ```
 cd forge
+npm ci         # the fighter optimizer's packages (gltf-transform, meshoptimizer, sharp)
 npm start      # http://127.0.0.1:8787, reads OPENAI_API_KEY from the repo root .env
 ```
 
@@ -25,6 +26,8 @@ Fighters are saved in `forge/data/<id>/` (gitignored). An empty `name` gets the 
 2. **Model sheet** (`gpt-image-2.5-sunburst`, 1536x2304, about 19 s at medium): the player as a Street Fighter 6 style fighter in a full-body A-pose on light gray, drawn with more detail and contrast than the model should end up with (the 3D rebuild softens it). This is what the image-to-3D step gets.
 3. **Card art** (`gpt-image-2.5-flare`, about 13 s): same character in a fighting stance, using the sheet as the reference.
 4. **Back view + 3D model + rig** (runs next to step 3): sunburst draws the back of the sheet (about 20 s), then Tripo builds the model from front + back (multiview, H v3.1, Ultra geometry, up to 60,000 faces, detailed PBR textures with the sheet's shading kept, about 100 s, 60 credits) and auto-rigs it with a Mixamo skeleton (about 8 s, 25 credits). If the back view fails the model is built from the front alone. `glbUrl` is the rigged GLB (or the static one if rigging fails). Needs `TRIPO_API_KEY` in the root `.env` and API credits on the Tripo platform; without them `glbUrl` stays empty, `modelError` says why, and the game uses its default fighter.
+
+5. **Optimize** (`optimize.js`, about 2 s): before the fighter is marked ready, the GLB the game loads gets WebP textures (base color 2048, normal and metal/roughness 1024 instead of Tripo's 4096s) and meshopt-compressed geometry, about 10.5 MB down to 1 MB with no visible difference in game; the skeleton, weights and bone names are untouched. The original is kept as `rigged.orig.glb` (not served). The card and sheet get `.webp` copies, which the API hands out as `cardUrl`/`sheetUrl` (the PNGs stay). Without `npm ci` the step is skipped with a warning. Fighters forged before this: `node optimize-all.js <FORGE_DATA>` (see the top of that file). Measurements: `research/perf-assets.md`.
 
 A whole forge takes about 2.5 minutes and 85 Tripo credits. `FORGE_STYLE=goldsrc` brings back the previous forge exactly (Half-Life 1 style sheet, 30,000 faces, single image, 65 credits, about 2 minutes). Why these settings: `research/forge-quality.md`.
 
