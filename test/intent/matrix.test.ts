@@ -29,5 +29,14 @@ test('condition matrix', () => {
       fpPerMin: r.fpPerMin, latency: r.latency, effective: r.effective, scores: r.scores.map((s) => ({ name: s.name, labels: s.labels, hits: s.hits, styleOk: s.styleOk })),
     })), null, 1));
   }
-  for (const { result } of rows) expect(result.recall).toBeGreaterThan(0.3);
+  // Floors a little under where the reader is now, so regressions fail. Raise them as it improves.
+  for (const { name, result } of rows) {
+    expect(result.recall, name).toBeGreaterThan(0.7);
+    expect(result.precision, name).toBeGreaterThan(0.65);
+  }
+  if (rows.length === CONDITIONS.length) {
+    expect(mean((s) => s.recall)).toBeGreaterThan(0.86);
+    expect(mean((s) => s.precision)).toBeGreaterThan(0.8);
+    expect(mean((s) => s.comboRecall)).toBeGreaterThan(0.7);
+  }
 }, 120_000);

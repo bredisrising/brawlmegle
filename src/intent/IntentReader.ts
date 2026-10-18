@@ -37,6 +37,7 @@ const EXT_WEIGHT = 0.6;
 /** Elbow angles from one camera wobble; ignore the first ~15° of opening. */
 const EXT_DEADBAND = 0.1;
 const LIMB_NAMES = Object.keys(LIMBS) as LimbName[];
+const PARTNER: Record<LimbName, LimbName> = { armL: 'armR', armR: 'armL', legL: 'legR', legR: 'legL' };
 
 /**
  * Tip and middle joint relative to the limb root, plus (arms) how open the elbow is, scaled by EXT_WEIGHT, and
@@ -209,15 +210,16 @@ export class IntentReader {
   }
 
   /**
-   * A strike this frame while the other hand made the same move at the same time (both just struck, or the other
-   * is mid wind-up going the same way) is the body or the camera moving, not two punches. Checked after both
-   * arms are up to date, so the comparison isn't a frame stale.
+   * A strike this frame while the other hand (or leg) made the same move at the same time (both just struck, or
+   * the other is mid wind-up going the same way) is the body or the camera moving, not two punches: twisting or
+   * ducking with the guard up, a camera jolt, both knees coming up in a jump. Checked after all limbs are up to
+   * date, so the comparison isn't a frame stale.
    */
   private bothArmsTogether(t: number, out: Intent[]) {
-    for (const name of ['armL', 'armR'] as const) {
+    for (const name of LIMB_NAMES) {
       const i = out.findIndex((x) => x.kind === 'strike' && x.limb === name);
       if (i < 0) continue;
-      const other = name === 'armL' ? 'armR' : 'armL';
+      const other = PARTNER[name];
       const otherNow = out.some((x) => x.kind === 'strike' && x.limb === other);
       if (!movedTogether(this.limbs[name].peak, this.limbs[other], t, otherNow)) continue;
       out.splice(i, 1, { kind: 'cancel', limb: name, t, reason: 'both hands moved' });
@@ -314,7 +316,10 @@ export class IntentReader {
       }
       // A hand dropping fast (back to the lap, or lowering the guard) can't be starting a punch.
       const dropping = def.kind === 'arm' && vel.tip.y < -1.2;
-      if (visible && !dropping && outward > cfg.onsetSpeed && disp > cfg.onsetDist && (strikeLike(def, tTip, tMid, disp) || extensionStrike(def, tTip, tExt, disp))) {
+      // An arm already up in the air (elbow at shoulder height, hand above it: waving, a hand on the head) isn't
+      // throwing a punch, whatever it does next. Punches start from a guard, elbow down.
+      const raised = def.kind === 'arm' && s.anchor.mid.y > -0.15 && s.anchor.tip.y - s.anchor.mid.y > 0.25;
+      if (visible && !dropping && !raised && outward > cfg.onsetSpeed && disp > cfg.onsetDist && (strikeLike(def, tTip, tMid, disp) || extensionStrike(def, tTip, tExt, disp))) {
         Object.assign(s, { phase: 'onset', since: t, grewAt: t, faceBeforeOnset: s.nearFaceAt, peakDisp: disp, peakSpeed: outward, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: legs ? 0 : body.elbow[side], anchorTip: { x: tipPt.p.x - tTip.x, y: tipPt.p.y - tTip.y, z: tipPt.p.z } });
         out.push({ kind: 'anticipate', limb: name, t });
       }
