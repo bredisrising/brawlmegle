@@ -10,7 +10,10 @@ import { setCamHidden, useGameStore } from '../../src/game/store';
  */
 declare global {
   interface Window {
-    __q?: { game: Game; store: typeof useGameStore; setCamHidden: typeof setCamHidden; camView: typeof camView; frames: (s: MediaStream) => Promise<number> };
+    __q?: {
+      game: Game; store: typeof useGameStore; setCamHidden: typeof setCamHidden; camView: typeof camView; frames: (s: MediaStream) => Promise<number>;
+      setHidden: (hidden: boolean) => void; kos: () => number; notices: string[];
+    };
   }
 }
 
@@ -40,17 +43,48 @@ setInterval(() => {
 }, 66);
 game.cameraOverride = canvas.captureStream(15);
 
-/** Plays a received stream and resolves with its picture width once frames arrive (0 if none in 8 s). */
+/** Plays a received stream and resolves with its picture width once frames arrive (0 if none in 20 s). */
 async function frames(stream: MediaStream) {
   const v = document.createElement('video');
   v.muted = true;
   v.srcObject = stream;
-  await v.play().catch(() => {});
+  void v.play().catch(() => {}); // not awaited: with no frames yet it can stay pending for good
   const start = performance.now();
-  while (v.videoWidth === 0 && performance.now() - start < 8000) await new Promise((r) => setTimeout(r, 100));
+  while (v.videoWidth === 0 && performance.now() - start < 20_000) await new Promise((r) => setTimeout(r, 100));
   const w = v.videoWidth;
   v.srcObject = null;
   return w;
 }
 
-window.__q = { game, store: useGameStore, setCamHidden, camView, frames };
+// A fake tab switch: document.visibilityState / hidden as the test says, and the event the browser would fire.
+let hidden = false;
+Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => (hidden ? 'hidden' : 'visible') });
+Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
+const setHidden = (h: boolean) => {
+  hidden = h;
+  document.dispatchEvent(new Event('visibilitychange'));
+};
+
+// Every K.O. screen this laptop reached (a result is only posted from one): a called-off match must not reach one.
+let kos = 0;
+useGameStore.subscribe((s, prev) => {
+  if (s.phase === 'ko' && prev.phase !== 'ko') kos++;
+});
+
+// Every notice shown here (they hide after a few seconds; a stalled test page can miss one by polling).
+const notices: string[] = [];
+useGameStore.subscribe((s, prev) => {
+  if (s.notice && s.notice !== prev.notice) notices.push(s.notice.text);
+});
+
+window.__q = { game, store: useGameStore, setCamHidden, camView, frames, setHidden, kos: () => kos, notices };
+
+// The longest the page's event loop went without a turn (software WebGL compiling shaders can block it for seconds).
+let lastTick = performance.now();
+let maxGap = 0;
+setInterval(() => {
+  const now = performance.now();
+  maxGap = Math.max(maxGap, now - lastTick);
+  lastTick = now;
+}, 100);
+(window as unknown as { __gap: () => number }).__gap = () => Math.round(maxGap);
