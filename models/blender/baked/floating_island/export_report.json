@@ -1,0 +1,33 @@
+{
+  "file": "C:\\Users\\adria\\source\\repos\\brawlegle\\models\\floating_island.glb",
+  "bytes": 3470820,
+  "meshes": 17,
+  "triangles": 3694,
+  "atlas": "C:\\Users\\adria\\source\\repos\\brawlegle\\models\\blender\\baked\\floating_island\\floating_island_basecolor.png",
+  "resolution": 2048,
+  "source_materials": {
+    "Material.001": "lit",
+    "top": "lit",
+    "light rock": "lit",
+    "PS2 - pixel palette (opaque)": "lit",
+    "moss rock": "lit",
+    "Material.002": "unlit"
+  },
+  "export_materials": [
+    "Floating Island - Baked Lit",
+    "Floating Island - Baked Unlit"
+  ],
+  "extensions": [
+    "KHR_materials_specular",
+    "KHR_materials_unlit"
+  ],
+  "scope": "EXPORT - Floating Island only; excludes hills, mountain, source library, cameras and lights",
+  "baked": "Shader color, texture mixes, curves, moss masks and shader ambient occlusion",
+  "source_preserved": true,
+  "roundtrip_validation": {
+    "reimported_meshes": 17,
+    "reimported_triangles": 3694,
+    "bounding_box_max_error": 0.0,
+    "embedded_textures_load": true
+  }
+}

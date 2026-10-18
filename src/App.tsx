@@ -9,6 +9,7 @@ import { HitPopups } from './ui/HitPopups';
 import { ScreenFlash } from './ui/ScreenFlash';
 import { KOOverlay } from './ui/KOOverlay';
 import { DebugHint } from './ui/DebugHint';
+import { DebugEffects } from './ui/DebugEffects';
 import { TitleScreen } from './ui/screens/TitleScreen';
 import { AvatarScreen } from './ui/screens/AvatarScreen';
 import { ClientScreen } from './ui/screens/ClientScreen';
@@ -51,6 +52,7 @@ export default function App() {
                 <DebugHint />
               </>
             )}
+            <DebugEffects />
           </div>
           <PoseDebugOverlay />
         </GameContext.Provider>

@@ -1,5 +1,9 @@
 import * as THREE from 'three';
-import { createArena } from './Arena';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { createArena, type Arena } from './Arena';
 
 export type FrameCallback = (dt: number, frozen: boolean) => void;
 
@@ -11,6 +15,8 @@ export class Renderer {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(40, 1, 0.05, 100);
   readonly renderer = new THREE.WebGLRenderer({ antialias: true });
+  private readonly composer: EffectComposer;
+  readonly arena: Arena;
 
   private readonly container: HTMLElement;
   private readonly callbacks = new Set<FrameCallback>();
@@ -26,10 +32,21 @@ export class Renderer {
     this.container = container;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     container.appendChild(this.renderer.domElement);
 
-    createArena(this.scene);
+    // HDR pipeline: render -> bloom (only values above 1.0, i.e. emissive/sun) -> tone map + sRGB.
+    // The composer's own target is multisampled since canvas antialiasing doesn't apply to it.
+    this.composer = new EffectComposer(
+      this.renderer,
+      new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }),
+    );
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.4, 1));
+    this.composer.addPass(new OutputPass());
+
+    this.arena = createArena(this.scene, this.renderer);
     this.camera.position.copy(this.cameraHome);
     this.camera.lookAt(this.lookTarget);
 
@@ -68,6 +85,8 @@ export class Renderer {
   dispose() {
     cancelAnimationFrame(this.frameId);
     this.resizeObserver.disconnect();
+    this.arena.dispose();
+    this.composer.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }
@@ -82,7 +101,7 @@ export class Renderer {
     for (const cb of this.callbacks) cb(dt, frozen);
 
     this.updateCamera(dt);
-    this.renderer.render(this.scene, this.camera);
+    this.composer.render(dt);
   };
 
   private updateCamera(dt: number) {
@@ -100,6 +119,8 @@ export class Renderer {
     const { clientWidth: w, clientHeight: h } = this.container;
     if (!w || !h) return;
     this.renderer.setSize(w, h);
+    this.composer.setPixelRatio(this.renderer.getPixelRatio());
+    this.composer.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   }

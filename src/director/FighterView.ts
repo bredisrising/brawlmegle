@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import type { FightEvent, FighterState, ForgedFighter, PlayerId, PoseFrame } from '../types';
 import { FIGHTER_SCALE, FIGHTER_SPACING, PLAYER_COLORS } from '../game/constants';
+import { disposeObject } from './dispose';
 import { BONES, GUARD_POSE, JOINTS, copyPose, createPose, type JointName, type Pose } from './pose';
 import { worldLandmarksToPose } from './livePose';
 
@@ -160,23 +161,4 @@ export class FighterView {
 const UP = new THREE.Vector3(0, 1, 0);
 function midpoint(a: THREE.Vector3, b: THREE.Vector3) {
   return a.clone().add(b).multiplyScalar(0.5);
-}
-
-function disposeObject(root: THREE.Object3D) {
-  const geometries = new Set<THREE.BufferGeometry>();
-  const materials = new Set<THREE.Material>();
-  const textures = new Set<THREE.Texture>();
-  root.traverse((object) => {
-    if (!(object instanceof THREE.Mesh || object instanceof THREE.LineSegments)) return;
-    geometries.add(object.geometry);
-    for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
-      materials.add(material);
-      for (const value of Object.values(material)) {
-        if (value instanceof THREE.Texture) textures.add(value);
-      }
-    }
-  });
-  for (const geometry of geometries) geometry.dispose();
-  for (const material of materials) material.dispose();
-  for (const texture of textures) texture.dispose();
 }

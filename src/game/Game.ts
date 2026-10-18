@@ -1,5 +1,6 @@
 import { Renderer } from '../director/Renderer';
-import { Effects } from '../director/Effects';
+import * as THREE from 'three';
+import { Effects, type EffectKind } from '../director/Effects';
 import { FighterView } from '../director/FighterView';
 import { FightEngine } from '../fight/FightEngine';
 import { Resolver } from '../fight/Resolver';
@@ -19,6 +20,10 @@ import {
 import { COUNTDOWN_FROM, KO_FREEZE, MAX_HP, PLAYER_NAMES, SIM_DT } from './constants';
 import { ClientSession } from './ClientSession';
 import { localPlayerId, pushPopup, updatePlayer, useGameStore } from './store';
+
+/** Roughly head height between the two fighters. */
+const ARENA_CENTER = new THREE.Vector3(0, 0.5, 0);
+const ARENA_FLOOR = new THREE.Vector3(0, 0.01, 0);
 
 /** What the player picked on the avatar screen. */
 export type FighterChoice =
@@ -51,7 +56,7 @@ export class Game {
 
   constructor(container: HTMLElement) {
     this.renderer = new Renderer(container);
-    this.effects = new Effects(this.renderer.scene);
+    this.effects = new Effects(this.renderer.scene, this.renderer.camera);
     this.views = { p1: new FighterView('p1'), p2: new FighterView('p2') };
     this.intent = { p1: new IntentReader('p1'), p2: new IntentReader('p2') };
     for (const v of Object.values(this.views)) this.renderer.scene.add(v.root);
@@ -103,6 +108,15 @@ export class Game {
   /** Dev only: fill a slot with a house fighter driven by a MockSource. */
   addTestPlayer(id: PlayerId) {
     return this.setupPlayer(id, { kind: 'existing', fighter: { id: 'test', name: PLAYER_NAMES[id], status: 'ready' } }, new MockSource());
+  }
+
+  /** Secret debug menu: fire an effect in the middle of the arena, optionally with hit-stop + shake. */
+  debugBurst(kind: EffectKind, impact = false) {
+    // Spawn is a ground effect (it fires at a fighter's feet in play).
+    this.effects.burst(kind === 'spawn' ? ARENA_FLOOR : ARENA_CENTER, kind);
+    if (!impact) return;
+    this.renderer.freeze(kind === 'ko' ? KO_FREEZE : kind === 'counter' ? 0.2 : 0.08);
+    if (kind === 'counter' || kind === 'ko') this.renderer.shake(0.04);
   }
 
   /** Start a player's input source, get their fighter (scan + forge, masked, or saved), spawn them. */

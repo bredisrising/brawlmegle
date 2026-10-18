@@ -1,4 +1,4 @@
-"""Export the current asset scene, or choose --asset island / rainier / backdrop.
+"""Export the current asset scene, or choose --asset island / rainier / backdrop / hills.
 
 Blender Text Editor: open this script, select the desired scene, click Run Script.
 CLI: blender -b floating_island.blend --python export_glb.py -- --asset island
@@ -10,21 +10,44 @@ import sys
 import bpy
 
 # Text Editor shortcut: use 'backdrop' for the placed distant mountain,
-# 'rainier' for the standalone model, or None for the current scene's asset.
+# 'rainier' for the standalone model, 'hills' for hills with scattered trees,
+# or None for the current scene's asset.
 DEFAULT_ASSET = None
+
+
+def triangle_count(objects):
+    """Count evaluated geometry, including live tree scatter and modifiers."""
+    graph = bpy.context.evaluated_depsgraph_get()
+    total = 0
+    for obj in objects:
+        if obj.type != 'MESH':
+            continue
+        if not obj.modifiers:
+            total += sum(len(poly.vertices) - 2 for poly in obj.data.polygons)
+            continue
+        evaluated = obj.evaluated_get(graph)
+        data = evaluated.to_mesh()
+        try:
+            total += sum(len(poly.vertices) - 2 for poly in data.polygons)
+        finally:
+            evaluated.to_mesh_clear()
+    return total
 
 
 def export_asset(asset=None, output=None):
     scenes = {"island": "Floating Island - PS2", "rainier": "Mount Rainier - PS2",
-              "backdrop": "Floating Island - PS2"}
+              "backdrop": "Floating Island - PS2", "hills": "Floating Island - PS2"}
     scene = bpy.data.scenes[scenes[asset]] if asset else bpy.context.scene
-    backdrop = asset == 'backdrop'
-    name = scene.get("background_export_collection" if backdrop else "export_collection")
+    collection_key, filename_key = {
+        'backdrop': ('background_export_collection', 'background_export_filename'),
+        'hills': ('hills_export_collection', 'hills_export_filename'),
+    }.get(asset, ('export_collection', 'export_filename'))
+    name = scene.get(collection_key)
     coll = bpy.data.collections.get(name or "")
     if coll is None:
-        raise RuntimeError("Choose the Floating Island - PS2 or Mount Rainier - PS2 scene before exporting.")
+        raise RuntimeError("Choose an asset scene with an export collection, or request island, rainier, backdrop or hills.")
     directory = Path(bpy.path.abspath("//")) if bpy.data.filepath else Path(scene["asset_directory"])
-    filename = scene["background_export_filename" if backdrop else "export_filename"]
+    filename = scene[filename_key]
     destination = Path(output).expanduser().resolve() if output else directory / "exports" / filename
     destination.parent.mkdir(parents=True, exist_ok=True)
     objects = [o for o in coll.all_objects if o.type in {"MESH", "EMPTY"}]
@@ -81,8 +104,7 @@ def export_asset(asset=None, output=None):
         result = bpy.ops.export_scene.gltf(**args)
         if 'FINISHED' not in result or not destination.is_file():
             raise RuntimeError(f"Export failed: {result}")
-        triangles = sum(sum(len(p.vertices) - 2 for p in o.data.polygons)
-                        for o in objects if o.type == 'MESH')
+        triangles = triangle_count(objects)
         print(f"EXPORTED {destination} ({destination.stat().st_size:,} bytes, {triangles:,} triangles)")
         return destination
     finally:
@@ -105,7 +127,7 @@ def export_asset(asset=None, output=None):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--asset', choices=('island', 'rainier', 'backdrop'), default=DEFAULT_ASSET)
+    parser.add_argument('--asset', choices=('island', 'rainier', 'backdrop', 'hills'), default=DEFAULT_ASSET)
     parser.add_argument('--output')
     args = parser.parse_args(sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else [])
     export_asset(args.asset, args.output)

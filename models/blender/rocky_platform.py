@@ -177,7 +177,8 @@ def ruined_arch(api,coll,root,material):
         for depth in (-.45,.45):
             for radius,angle in ((1.08,a),(1.77,a),(1.77,b),(1.08,b)):
                 vertices.append((x+radius*math.cos(angle),y+depth,z+1.9+radius*math.sin(angle)))
-        geo.add(vertices,[(0,3,2,1),(4,5,6,7),(0,1,5,4),(1,2,6,5),(2,3,7,6),(3,0,4,7)],
+        # Wound so normals face outward (the reverse order left these stones inside out).
+        geo.add(vertices,[(0,1,2,3),(4,7,6,5),(0,4,5,1),(1,5,6,2),(2,6,7,3),(3,7,4,0)],
                 [20,19,3,21,20,19])
     for i,(dx,dy) in enumerate(((-2.1,-.8),(.6,-1.4),(2.2,.1))):
         geo.box((x+dx,y+dy,ground_z(x+dx,y+dy)+.13),(.7,.6,.35),(19,20,3,21,20,21),yaw=i*.6,tilt=.16)

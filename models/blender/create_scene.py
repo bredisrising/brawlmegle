@@ -254,6 +254,10 @@ def main():
     scene["export_collection"] = asset.name
     scene["export_filename"] = "floating_island.glb"
     scene["asset_directory"] = str(HERE)
+    hills_spec = importlib.util.spec_from_file_location('forested_hills', HERE / 'forested_hills.py')
+    hills_module = importlib.util.module_from_spec(hills_spec)
+    hills_spec.loader.exec_module(hills_module)
+    _, _, _, hills_scene = hills_module.build(globals(), scene, material)
     # Independent scene with full proportions, ready for separate inspection/export.
     mountain_scene = bpy.data.scenes.new("Mount Rainier - PS2")
     mountain_asset = collection("EXPORT - Mount Rainier", mountain_scene.collection)
@@ -265,7 +269,7 @@ def main():
     mountain_scene["export_filename"] = "mount_rainier.glb"
     mountain_scene["asset_directory"] = str(HERE)
     # Store export code in the .blend for a self-contained Text Editor workflow.
-    for filename in ("create_scene.py", "rocky_platform.py", "export_glb.py"):
+    for filename in ("create_scene.py", "rocky_platform.py", "forested_hills.py", "export_glb.py"):
         path = HERE / filename
         if path.exists():
             text = bpy.data.texts.new(filename)
@@ -282,6 +286,11 @@ def main():
                     space.region_3d.view_camera_offset = (0, 0)
                     space.overlay.show_overlays = False
                     space.shading.type = 'RENDERED'
+    if bpy.context.window:
+        bpy.context.window.scene = hills_scene
+    bpy.ops.wm.save_as_mainfile(filepath=str(HERE / "forested_hills.blend"))
+    if bpy.context.window:
+        bpy.context.window.scene = mountain_scene
     bpy.ops.wm.save_as_mainfile(filepath=str(HERE / "mount_rainier.blend"))
     if bpy.context.window:
         bpy.context.window.scene = scene
