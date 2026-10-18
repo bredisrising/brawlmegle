@@ -151,6 +151,30 @@ describe('forge server', () => {
     });
   });
 
+  describe('FORGE_3D=gradio (the ZeroGPU Space)', () => {
+    const space = { FORGE_3D: 'gradio', FORGE_3D_URL: 'https://gradio.mock', FORGE_3D_KEY: 'gpu-key', FORGE_3D_HF_TOKEN: 'hf_x' };
+    const done = (x: Record<string, unknown>) => x.status !== 'scanning' && x.status !== 'forging';
+
+    it('builds the rigged model on the Space', async () => {
+      const { base, forge, until } = await startForge(space);
+      const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
+      const f = await until(id, done);
+      expect(f.engine3d).toBe('gradio');
+      expect(f.rigged).toBe(true);
+      expect(f.modelUrl).toBe(f.glbUrl);
+      expect(f.gpuTimings).toEqual({ model: 20.5, rig: 3.1 });
+      expect(await (await fetch(`${base}/api/forge/${id}/rigged.glb`)).text()).toBe('glTF-gradio-rigged');
+    });
+
+    it('falls back to Tripo when the Space errors', async () => {
+      const { forge, until } = await startForge({ ...space, MOCK_GRADIO: 'error' });
+      const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
+      const f = await until(id, done);
+      expect(f.engine3d).toBe('tripo');
+      expect(String(f.localError)).toMatch(/GPU Space/);
+    });
+  });
+
   it('answers a JSON null body with 400, not 500', async () => {
     const { forge } = await startForge();
     expect((await forge(null)).status).toBe(400);

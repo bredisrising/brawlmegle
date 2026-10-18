@@ -13,12 +13,12 @@ import urllib.request
 POSE_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task"
 
 
-def ensure(model_dir: str, pose_path: str) -> None:
+def ensure(model_dir: str, pose_path: str, trellis: bool = True) -> None:
     os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
     from huggingface_hub import hf_hub_download, snapshot_download
 
     done = os.path.join(model_dir, ".forge3d-ready")
-    if not os.path.exists(done):
+    if trellis and not os.path.exists(done):
         snapshot_download("microsoft/TRELLIS.2-4B", local_dir=model_dir)
         for ext in ("json", "safetensors"):
             hf_hub_download("microsoft/TRELLIS-image-large", f"ckpts/ss_dec_conv3d_16l8_fp16.{ext}")

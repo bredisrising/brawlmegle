@@ -26,7 +26,7 @@ Fighters are saved in `forge/data/<id>/` (gitignored). An empty `name` gets the 
 3. **Card art** (`gpt-image-2.5-flare`, about 13 s): same character in a fighting stance, using the sheet as the reference.
 4. **Back view + 3D model + rig** (runs next to step 3): sunburst draws the back of the sheet (about 20 s), then Tripo builds the model from front + back (multiview, H v3.1, Ultra geometry, up to 60,000 faces, detailed PBR textures with the sheet's shading kept, about 100 s, 60 credits) and auto-rigs it with a Mixamo skeleton (about 8 s, 25 credits). If the back view fails the model is built from the front alone. `glbUrl` is the rigged GLB (or the static one if rigging fails). Needs `TRIPO_API_KEY` in the root `.env` and API credits on the Tripo platform; without them `glbUrl` stays empty, `modelError` says why, and the game uses its default fighter.
 
-5. **Or our own GPU box** (`FORGE_3D=local`): the sheet goes to `forge/gpu` (TRELLIS.2 + a Blender Mixamo rig on an AWS L40S) instead of Tripo, with the same `model` → `rig` steps and the same files. If the box fails, is warming up or isn't done within `FORGE_3D_TIMEOUT`, Tripo builds the model as before (`localError` says why, `engine3d` says which one built it, `gpuTimings` has the box's own timings). See `forge/gpu/README.md` and `research/forge-gpu.md`.
+5. **Or our own GPU service** (`FORGE_3D=local` or `gradio`): the sheet goes to `forge/gpu` (TRELLIS.2 + a Blender Mixamo rig, on an AWS GPU box or a private Hugging Face Space) instead of Tripo, with the same `model` → `rig` steps and the same files. If the box fails, is warming up or isn't done within `FORGE_3D_TIMEOUT`, Tripo builds the model as before (`localError` says why, `engine3d` says which one built it, `gpuTimings` has the box's own timings). See `forge/gpu/README.md` and `research/forge-gpu.md`.
 
 A whole forge takes about 2.5 minutes and 85 Tripo credits. `FORGE_STYLE=goldsrc` brings back the previous forge exactly (Half-Life 1 style sheet, 30,000 faces, single image, 65 credits, about 2 minutes). Why these settings: `research/forge-quality.md`.
 
@@ -47,8 +47,9 @@ Prompts live in `prompts.js`.
 | `FORGE_GEOMETRY_QUALITY` | `detailed` (Tripo's Ultra geometry, +20 credits); `standard` with goldsrc |
 | `FORGE_DELIGHT` | `0`: keep the sheet's painted shading in the textures (`1` with goldsrc, Tripo's default) |
 | `FORGE_RIG_MODEL` | `v1.0-20240301` (biped, Mixamo bone names) |
-| `FORGE_3D` | `tripo`; `local` builds the model on our GPU box first (Tripo stays the fallback) |
-| `FORGE_3D_URL` / `FORGE_3D_KEY` | the GPU box (`http://<private ip>:8790`) and its key (`FORGE3D_KEY` in the box's `/etc/forge3d.env`) |
+| `FORGE_3D` | `tripo`; `local` builds the model on our GPU service first (the AWS box or the Docker Space), `gradio` on the ZeroGPU Space. Tripo stays the fallback |
+| `FORGE_3D_URL` / `FORGE_3D_KEY` | the service (`http://<private ip>:8790` for the AWS box, `https://<user>-<space>.hf.space` for a Space) and its key (`FORGE3D_KEY`) |
+| `FORGE_3D_HF_TOKEN` | an HF token that can read the private Space (Spaces only) |
 | `FORGE_3D_TIMEOUT` | `90` seconds before falling back to Tripo |
 | `FORGE_PORT` / `FORGE_BIND` | `8787` / `127.0.0.1` |
 | `FORGE_ALLOWED_ORIGINS` | the Vite dev and preview origins on localhost, plus the hosted test pages (https://54-149-60-196.sslip.io) |

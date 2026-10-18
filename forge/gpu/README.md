@@ -48,9 +48,30 @@ Blender 5.2, the app) and a systemd unit (`forge3d`, restarts on failure, starts
 
 After changing it: `sudo systemctl restart forge3d`.
 
+## Or on Hugging Face
+
+`hf_space.py` puts the same service in a private Space, using HF_TOKEN (a write token) from the env or the root `.env`:
+
+- **ZeroGPU** (`zerogpu/`, needs HF PRO): a Gradio app on HF's shared GPUs with Microsoft's own TRELLIS.2 Space
+  stack (torch 2.11 and prebuilt CUDA extensions). Only the TRELLIS.2 call holds a GPU; the landmarks and the
+  Blender rig run on the Space's CPU. GPU time counts against the caller's daily ZeroGPU quota. The forge
+  calls it with `FORGE_3D=gradio`.
+- **Docker** (`docker-space/`, dedicated `a100-large`, `l40sx1`, ..., billed per minute while running): the same
+  image as the AWS box, with the same job API (`FORGE_3D=local`).
+
+```
+python forge/gpu/hf_space.py push --variant zerogpu && python forge/gpu/hf_space.py hardware zero-a10g
+python forge/gpu/hf_space.py push --variant docker && python forge/gpu/hf_space.py hardware a100-large --variant docker
+python forge/gpu/hf_space.py status [--variant docker]    # prints FORGE_3D_URL
+python forge/gpu/hf_space.py pause [--variant docker]
+```
+
+The forge then needs `FORGE_3D_URL`, `FORGE_3D_KEY` (`push` appends a new one to `.env` if there's none) and
+`FORGE_3D_HF_TOKEN` (a token that can read the Space). The weights download on the first start (about 17 GB).
+
 ## Without a GPU
 
-`FORGE3D_FAKE_GLB=some.glb` skips TRELLIS and "generates" that file every time; the HTTP, landmark and rig steps
+`FORGE3D_FAKE_GLB=some.glb` (server.py and zerogpu/app.py) skips TRELLIS and "generates" that file every time; the HTTP, landmark and rig steps
 are real. It needs Python with `mediapipe pillow numpy`, a Linux Blender and the
 [pose model](https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task)
 (on WSL, run it without `DISPLAY`: the service already strips it for Blender):

@@ -71,6 +71,9 @@ class Generator:
         # TRELLIS.2 defaults to moving each model onto the GPU only while it runs. A 48 GB card holds them all, which
         # saves seconds per stage; FORGE3D_LOW_VRAM=1 for small cards (8-24 GB).
         self.pipe.low_vram = os.environ.get("FORGE3D_LOW_VRAM", "0") == "1"
+        # ZhengPeng7/BiRefNet loads in fp16, but TRELLIS.2's wrapper feeds it fp32 images.
+        if getattr(self.pipe.rembg_model, "model", None) is not None:
+            self.pipe.rembg_model.model.float()
         self.pipe.cuda()
         self.pipeline_type = pipeline_type
         self.steps = steps
