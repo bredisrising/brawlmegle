@@ -30,6 +30,7 @@ import { ClientSession } from './ClientSession';
 import type { MatchPlayer, MirrorEvent, MirrorFrame } from '../net/protocol';
 import { HostSession } from './HostSession';
 import { MatchRecorder, recordingEnabled } from './MatchRecorder';
+import { HighlightRecorder } from './HighlightRecorder';
 import { Commentary, TEMPLATES, fill, spoken, type Line } from './Commentary';
 import { localPlayerId, pushPopup, updatePlayer, useGameStore } from './store';
 
@@ -136,6 +137,8 @@ export class Game {
   private replay: { frames: ReplayFrame[]; pos: number; drawn: number; hold: number } | null = null;
   /** Seconds of game time until the replay starts (counts after the K.O. freeze), or -1. */
   private replayIn = -1;
+  /** Records the replay as a highlight for the title screen's reel (the laptop running the fight only). */
+  private readonly highlight = new HighlightRecorder();
   private firstHitDone = false;
   private accumulator = 0;
   private phaseTimer = 0;
@@ -483,6 +486,7 @@ export class Game {
 
   dispose() {
     this.lifetime.abort();
+    this.highlight.cancel();
     window.removeEventListener('keydown', this.onDebugKey);
     window.removeEventListener('keydown', this.onMuteKey);
     this.unsubscribe();
@@ -670,6 +674,7 @@ export class Game {
   /** Drop a pending or running K.O. replay (a rematch, a new round). */
   private stopReplay() {
     this.replayIn = -1;
+    this.highlight.cancel();
     if (this.replay) this.endReplay();
     this.history = [];
   }
@@ -812,6 +817,22 @@ export class Game {
     this.replay = { frames, pos: 0, drawn: -1, hold: 0 };
     this.renderer.cinematic((frames.length / 60) / REPLAY_SPEED + REPLAY_HOLD);
     useGameStore.setState({ replay: true });
+    const finish = this.history[ko].events.find((e) => e.kind === 'fight' && e.ko);
+    if (finish?.kind === 'fight') this.startHighlight(finish.event);
+  }
+
+  /** Host or Practice (not Training, not the client laptop): record the replay for the title screen's reel. */
+  private startHighlight(finish: FightEvent) {
+    const { training, players } = useGameStore.getState();
+    if (this.client || training || !HighlightRecorder.supported()) return;
+    const side = (id: PlayerId) => ({ id: this.fighters[id]?.id, name: players[id].name.replace(/\s*\(CPU[^)]*\)$/, ''), cpu: !!this.cpu[id] });
+    const winner = finish.attacker;
+    this.highlight.start(this.renderer.renderer.domElement, {
+      p1: side('p1'), p2: side('p2'), winner, move: finish.move,
+      combo: this.combo.player === winner ? Math.max(1, this.combo.hits) : 1,
+      roundTime: Math.round((ROUND_SECONDS - this.clock) * 10) / 10,
+    });
+    if (this.highlight.recording) this.renderer.onDrawn = () => this.highlight.frame();
   }
 
   private replayTick() {
@@ -848,6 +869,8 @@ export class Game {
   }
 
   private endReplay() {
+    this.highlight.finish();
+    this.renderer.onDrawn = null;
     this.replay = null;
     this.renderer.cinematic(null);
     this.fireballs.sync([]);

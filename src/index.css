@@ -196,3 +196,25 @@ html, body, #root {
     transition-duration: 1ms !important;
   }
 }
+
+/*
+ * Title screen highlight reel (ui/HighlightReel.tsx). .reel-area is the free space left of the menu; the reel takes
+ * as much of it as fits at 16:9 (minus its header and the captions hanging off the bottom), and steps aside when
+ * there isn't room for a reel worth watching (phones, short or narrow windows).
+ */
+.reel-area {
+  container: reel-area / size;
+}
+.reel {
+  container-type: inline-size;
+  width: min(100cqw, (100cqh - 3.5rem) * 16 / 9 + 0.75rem, 52vw);
+}
+@container reel-area (max-height: 11.5rem) or (max-width: 17rem) {
+  .reel {
+    display: none;
+  }
+}
+@keyframes reel-fill {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}

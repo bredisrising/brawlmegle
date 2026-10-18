@@ -54,6 +54,10 @@ Also in the fight:
   template lines for big moments, LLM-written intro and K.O. lines from the forge server (POST /api/commentary, using
   the fighters' forge briefs), voiced through GET /api/tts (OpenAI TTS, cached) with captions; mirrored as `call` events.
 - K.O. replay: both laptops keep the last ~4 s as drawn and replay the finish slowly from a sweeping camera.
+- Highlights (game/HighlightRecorder.ts): the laptop running the fight (host or Practice; not Training, the client or
+  phones) records the K.O. replay off the WebGL canvas (960x540 VP9, ~1.2 MB) and uploads it with who, the move and
+  the combo to POST /api/highlights; the title screen's reel (ui/HighlightReel.tsx) cycles the newest.
+  scripts/highlights/ has the Edge test driver and the seed clips (upload.mjs).
 - Match recording (game/MatchRecorder.ts, menu toggle or `?record=1`): both players' poses, intents and fight events
   per round, uploaded to /samples for improving the reader (`?video=1` also saves each laptop's camera locally).
   test/intent/match.test.ts re-reads recorded matches.
@@ -126,6 +130,6 @@ HostSession.ts (host) and ClientSession.ts (client) are the two ends of the P2P 
 welcome, roster, phase and P2's `fighter` progress; the client sends profile/scan/pick and poses.
 
 ### ui/
-screens/: TitleScreen (Host / Connect), AvatarScreen (scan new / choose existing / name),
+screens/: TitleScreen (Host / Connect, the highlight reel), AvatarScreen (scan new / choose existing / name),
 ClientScreen (client's waiting view). Plus HUD, health bars, lobby panels, countdown, popups, K.O.
 CameraPip (your camera + skeleton + the last move read; C toggles), MoveGuide (H), ComboCounter + Callout.

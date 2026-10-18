@@ -17,6 +17,8 @@ Then set `VITE_FORGE_API=http://127.0.0.1:8787` in the root `.env` for the game.
 | `POST /api/forge` `{name, frames: [front, left, right]}` (1–3 base64 JPEG/PNG or data URLs) | `{id}`, then the forge runs in the background |
 | `GET /api/forge/:id` | The fighter: `status` (`scanning` → `forging` → `ready` or `failed`), `step` (`brief` → `sheet` → `model`), `brief`, `sheetUrl`, `cardUrl`, `timings`, `error` |
 | `GET /api/fighters` | Ready fighters, newest first (for the roster) |
+| `POST /api/highlights` (body: the clip, `video/webm` or `video/mp4`, up to 6 MB; `x-forge-key`; `x-highlight-meta`: URI-encoded JSON `{p1, p2, winner, move, combo, roundTime, duration}`, sides `{id?, name, cpu?}`) | The highlight. K.O. replays the game records, kept in `FORGE_DATA/highlights/` (newest 40) |
+| `GET /api/highlights` | `{highlights}`, newest first, each with `url` (clips are immutable and served with byte ranges) |
 
 Fighters are saved in `forge/data/<id>/` (gitignored). An empty `name` gets the fighter name from the brief.
 
@@ -56,5 +58,6 @@ Prompts live in `prompts.js`.
 | `FORGE_PORT` / `FORGE_BIND` | `8787` / `127.0.0.1` |
 | `FORGE_ALLOWED_ORIGINS` | the Vite dev and preview origins on localhost, plus the hosted test pages (https://54-149-60-196.sslip.io) |
 | `FORGE_MAX_ACTIVE` | `3` forges at once |
+| `FORGE_HIGHLIGHT_KEEP` / `FORGE_HIGHLIGHT_MAX_BYTES` / `FORGE_MAX_HIGHLIGHTS` | `40` clips kept / `6291456` bytes per clip / `20` uploads per 10 minutes |
 
 Only pages from `FORGE_ALLOWED_ORIGINS` can call the API from a browser, so a random website can't spend our credits through it.

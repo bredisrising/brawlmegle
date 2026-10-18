@@ -4,6 +4,7 @@ import { listFighters } from '../../forge/roster';
 import type { ForgedFighter } from '../../types';
 import { Arrow, ArcadeButton, TextButton } from '../ArcadeButton';
 import { useGame } from '../GameContext';
+import { HighlightReel } from '../HighlightReel';
 
 /** Host / Connect. The host laptop runs the game; the client laptop joins with a room code. */
 export function TitleScreen() {
@@ -53,7 +54,7 @@ export function TitleScreen() {
 
       <div className="relative flex h-full flex-col justify-between gap-[clamp(1rem,3.5vh,2.5rem)] overflow-y-auto p-6 sm:px-12 sm:py-[clamp(1.25rem,4.5vh,3rem)]">
         <div className="animate-in-l">
-          <h1 className="font-display text-[clamp(3rem,min(10.5vw,16vh),10rem)] uppercase leading-[0.82] tracking-tighter">
+          <h1 className="font-display text-[clamp(3rem,min(10.5vw,15vh),10rem)] uppercase leading-[0.82] tracking-tighter">
             Brawl<span className="text-hp">megle</span>
           </h1>
           <p className="mt-[clamp(0.6rem,2.2vh,1.25rem)] inline-block bg-paper px-3 py-1.5 font-cond text-base font-extrabold uppercase tracking-[0.3em] text-ink sm:text-lg">
@@ -61,44 +62,50 @@ export function TitleScreen() {
           </p>
         </div>
 
-        <div className="flex flex-col items-start gap-5 md:items-end">
-          {mode === 'pick' ? (
-            <nav className="flex w-full max-w-md flex-col gap-[clamp(0.3rem,1vh,0.5rem)]">
-              <MenuItem index="01" label="Host" hint="Run the fight on this screen" color="hover:bg-p1" bar="bg-p1" disabled={busy} onClick={() => run(() => game.host())} delay={100} />
-              <MenuItem index="02" label="Connect" hint="Join with a room code" color="hover:bg-p2" bar="bg-p2" disabled={busy} onClick={() => setMode('connect')} delay={180} />
-              <MenuItem index="03" label="Practice" hint="Fight the CPU on this screen" color="hover:bg-hp" bar="bg-hp" disabled={busy} onClick={() => run(() => game.practice())} delay={260} />
-              <MenuItem index="04" label="Training" hint="Practice moves on a dummy" color="hover:bg-hp" bar="bg-hp" disabled={busy} onClick={() => run(() => game.practice('dummy'))} delay={340} />
-              <MenuItem index="05" label="Leaderboard" hint="See every fighter's record" color="hover:bg-paper" bar="bg-paper" disabled={busy} onClick={() => setMode('leaderboard')} delay={420} />
-              {/* Dev tools live on the same site (local dev serves them from /test/). */}
-              <p className="mt-[clamp(0.25rem,1.2vh,0.75rem)] flex gap-5 font-cond text-sm font-bold uppercase tracking-[0.25em] text-paper/45">
-                <span>Tools</span>
-                <a className="underline-offset-4 hover:text-paper hover:underline" href={import.meta.env.DEV ? '/test/tuner/' : '/tuner/'}>Move tester</a>
-                <a className="underline-offset-4 hover:text-paper hover:underline" href={import.meta.env.DEV ? '/test/scan/' : '/scan/'}>Scan test</a>
-              </p>
-            </nav>
-          ) : mode === 'connect' ? (
-            <form onSubmit={submitCode} className="animate-rise flex w-full max-w-md flex-col gap-4 border-2 border-paper/15 bg-ink p-6">
-              <label htmlFor="room-code" className="font-cond text-sm font-bold uppercase tracking-[0.3em] text-paper/60">
-                Room code from the host screen
-              </label>
-              <input
-                id="room-code"
-                autoFocus
-                value={code}
-                onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4))}
-                placeholder="ABCD"
-                autoComplete="off"
-                className="w-full border-b-[6px] border-p2 bg-paper py-3 text-center font-display text-6xl tracking-[0.3em] text-ink caret-dmg outline-none placeholder:text-ink/15"
-              />
-              <div className="flex items-center justify-between gap-6">
-                <TextButton onClick={() => setMode('pick')}>← Back</TextButton>
-                <ArcadeButton type="submit" color="bg-p2" disabled={busy || code.length !== 4}>
-                  Join
-                </ArcadeButton>
-              </div>
-            </form>
-          ) : null}
-          {error && <p className="border-l-4 border-dmg bg-ink-2 px-3 py-2 font-semibold">{error}</p>}
+        <div className="flex flex-1 items-end gap-[clamp(1.5rem,3.5vw,3.5rem)]">
+          {/* Recent K.O.s in the free space left of the menu (hidden on phones and when there's no room). */}
+          <div className="reel-area hidden min-w-0 flex-1 items-end self-stretch md:flex">
+            <HighlightReel paused={mode === 'leaderboard'} />
+          </div>
+          <div className="flex w-full flex-col items-start gap-5 md:w-md md:shrink-0 md:items-end">
+            {mode === 'pick' ? (
+              <nav className="flex w-full max-w-md flex-col gap-[clamp(0.3rem,1vh,0.5rem)]">
+                <MenuItem index="01" label="Host" hint="Run the fight on this screen" color="hover:bg-p1" bar="bg-p1" disabled={busy} onClick={() => run(() => game.host())} delay={100} />
+                <MenuItem index="02" label="Connect" hint="Join with a room code" color="hover:bg-p2" bar="bg-p2" disabled={busy} onClick={() => setMode('connect')} delay={180} />
+                <MenuItem index="03" label="Practice" hint="Fight the CPU on this screen" color="hover:bg-hp" bar="bg-hp" disabled={busy} onClick={() => run(() => game.practice())} delay={260} />
+                <MenuItem index="04" label="Training" hint="Practice moves on a dummy" color="hover:bg-hp" bar="bg-hp" disabled={busy} onClick={() => run(() => game.practice('dummy'))} delay={340} />
+                <MenuItem index="05" label="Leaderboard" hint="See every fighter's record" color="hover:bg-paper" bar="bg-paper" disabled={busy} onClick={() => setMode('leaderboard')} delay={420} />
+                {/* Dev tools live on the same site (local dev serves them from /test/). */}
+                <p className="mt-[clamp(0.25rem,1.2vh,0.75rem)] flex gap-5 font-cond text-sm font-bold uppercase tracking-[0.25em] text-paper/45">
+                  <span>Tools</span>
+                  <a className="underline-offset-4 hover:text-paper hover:underline" href={import.meta.env.DEV ? '/test/tuner/' : '/tuner/'}>Move tester</a>
+                  <a className="underline-offset-4 hover:text-paper hover:underline" href={import.meta.env.DEV ? '/test/scan/' : '/scan/'}>Scan test</a>
+                </p>
+              </nav>
+            ) : mode === 'connect' ? (
+              <form onSubmit={submitCode} className="animate-rise flex w-full max-w-md flex-col gap-4 border-2 border-paper/15 bg-ink p-6">
+                <label htmlFor="room-code" className="font-cond text-sm font-bold uppercase tracking-[0.3em] text-paper/60">
+                  Room code from the host screen
+                </label>
+                <input
+                  id="room-code"
+                  autoFocus
+                  value={code}
+                  onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4))}
+                  placeholder="ABCD"
+                  autoComplete="off"
+                  className="w-full border-b-[6px] border-p2 bg-paper py-3 text-center font-display text-6xl tracking-[0.3em] text-ink caret-dmg outline-none placeholder:text-ink/15"
+                />
+                <div className="flex items-center justify-between gap-6">
+                  <TextButton onClick={() => setMode('pick')}>← Back</TextButton>
+                  <ArcadeButton type="submit" color="bg-p2" disabled={busy || code.length !== 4}>
+                    Join
+                  </ArcadeButton>
+                </div>
+              </form>
+            ) : null}
+            {error && <p className="border-l-4 border-dmg bg-ink-2 px-3 py-2 font-semibold">{error}</p>}
+          </div>
         </div>
       </div>
       {mode === 'leaderboard' && <Leaderboard fighters={fighters} records={records} onBack={() => setMode('pick')} />}
@@ -159,7 +166,7 @@ function MenuItem(props: { index: string; label: string; hint: string; color: st
       <span className="font-cond text-sm font-bold tracking-[0.3em] text-paper/45 group-hover:hidden">{index}</span>
       <span className="min-w-0 flex-1">
         <span className="block truncate font-display text-[clamp(1.6rem,5vh,3rem)] uppercase leading-none tracking-tight">{label}</span>
-        <span className="mt-1 block truncate font-cond text-sm font-semibold uppercase tracking-[0.15em] text-paper/50 group-hover:text-ink/70 [@media(max-height:640px)]:hidden">{hint}</span>
+        <span className="mt-1 block truncate font-cond text-sm font-semibold uppercase tracking-[0.15em] text-paper/50 group-hover:text-ink/70 [@media(max-height:680px)]:hidden">{hint}</span>
       </span>
       <Arrow className="text-3xl group-hover:hidden" />
     </button>

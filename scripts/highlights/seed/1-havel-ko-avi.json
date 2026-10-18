@@ -1,0 +1,17 @@
+{
+  "p1": {
+    "id": "770897ad-65fe-465e-9341-e830435e2585",
+    "name": "avi",
+    "cpu": true
+  },
+  "p2": {
+    "id": "13e72265-5521-49c8-88f9-80e173ddd19a",
+    "name": "havel",
+    "cpu": true
+  },
+  "winner": "p2",
+  "move": "cross",
+  "combo": 1,
+  "roundTime": 18.8,
+  "duration": 6.9
+}
