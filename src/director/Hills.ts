@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { loadModel } from '../forge/models';
 import hillsUrl from '../../models/forested_hills.glb?url';
 import type { HillsLodReply, HillsLodRequest } from './hillsLod.worker';
 
@@ -71,7 +71,7 @@ type Row = { mesh: THREE.InstancedMesh; matrices: THREE.Matrix4[]; spheres: THRE
 
 /** Background scenery: rows of the forested hill, spread across the screen at each depth and hazed with distance. */
 export async function loadHills(camera: THREE.PerspectiveCamera, options: Partial<HillOptions> = {}): Promise<Hills> {
-  const gltf = await new GLTFLoader().loadAsync(hillsUrl);
+  const gltf = await loadModel(hillsUrl);
   // Just the mesh, without the scene placement it was exported with.
   let source: THREE.Mesh | undefined;
   gltf.scene.traverse((object) => {

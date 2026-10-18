@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { loadModel } from '../forge/models';
 import islandUrl from '../../models/floating_island.glb?url';
 import mountainUrl from '../../models/rainier.png?url';
 import { disposeObject } from './dispose';
@@ -180,7 +180,7 @@ async function loadMountain() {
 
 /** The fight floor: the baked floating island, scaled to fighter size. */
 async function loadIsland() {
-  const model = (await new GLTFLoader().loadAsync(islandUrl)).scene;
+  const model = (await loadModel(islandUrl)).scene;
   model.scale.setScalar(ISLAND_SCALE);
   model.traverse((object) => {
     if (object instanceof THREE.Mesh) {
