@@ -43,6 +43,7 @@ export type GuidedLabel = { say: string; expect: { kind: string; limb?: string; 
 export type GuidedScore = {
   file: string;
   lines: string[];
+  rows: { t: number; say: string; verdict: string; seen: string }[];
   strikes: number; caught: number; styled: number;
   other: number; otherOk: number;
   /** Strikes (or dodges/ducks/jumps) where none was asked for: stay-still, wave, scratch, block, duck, lean, or the wrong arm. */
@@ -68,7 +69,7 @@ export function scoreGuided(file: string, config: IntentConfig = DEFAULT_INTENT,
   const shown = intents.filter((i) => i.kind !== 'anticipate' && i.kind !== 'cancel');
   const t0 = g.frames[0].t;
   const dts = g.frames.slice(1).map((f, k) => f.t - g.frames[k].t).sort((a, b) => a - b);
-  const s: GuidedScore = { file: path.basename(file), lines: [], strikes: 0, caught: 0, styled: 0, other: 0, otherOk: 0, fakes: 0, doubles: 0, fps: 1000 / dts[Math.floor(dts.length / 2)] };
+  const s: GuidedScore = { file: path.basename(file), lines: [], rows: [], strikes: 0, caught: 0, styled: 0, other: 0, otherOk: 0, fakes: 0, doubles: 0, fps: 1000 / dts[Math.floor(dts.length / 2)] };
   const actions = (xs: Intent[]) => xs.filter((i) => i.kind === 'strike' || i.kind === 'dodge' || i.kind === 'duck' || i.kind === 'jump');
   for (const l of g.labels) {
     const during = shown.filter((i) => i.t >= l.start && i.t <= l.end);
@@ -95,7 +96,9 @@ export function scoreGuided(file: string, config: IntentConfig = DEFAULT_INTENT,
       s.fakes += fake.length;
       verdict = (ok ? 'ok' : 'MISS') + (fake.length ? `, +${fake.length} fake` : '');
     }
-    s.lines.push(`${((l.start - t0) / 1000).toFixed(1).padStart(5)}s  ${l.say.padEnd(18)} ${verdict.padEnd(22)} ${during.map(describe).join(', ') || '-'}`);
+    const seen = during.map(describe).join(', ') || '-';
+    s.rows.push({ t: (l.start - t0) / 1000, say: l.say, verdict, seen });
+    s.lines.push(`${((l.start - t0) / 1000).toFixed(1).padStart(5)}s  ${l.say.padEnd(18)} ${verdict.padEnd(22)} ${seen}`);
   }
   return s;
 }

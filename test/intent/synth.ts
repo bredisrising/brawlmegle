@@ -53,6 +53,11 @@ export type SynthOptions = {
   depthGain?: number;
   /** Whole-skeleton one-frame tracking glitches, per frame. */
   glitchRate?: number;
+  /**
+   * A handheld or bumped camera: 1 = a phone held in the hand (the whole image shifts, rolls and zooms a little
+   * at 2–8 Hz, and jolts every few seconds), 2 = shaky.
+   */
+  cameraShake?: number;
   /** Only use moves with these names (e.g. ['jab']). */
   only?: string[];
 };
@@ -341,6 +346,7 @@ export function synthesize(options: SynthOptions = {}): { frames: (PoseFrame | {
   const jitterMs = options.jitterMs ?? 3;
   const comboShare = options.combos ?? 0;
   const glitchRate = options.glitchRate ?? 0.002 * noise;
+  const shake = options.cameraShake ?? 0;
   const body = { height: options.body?.height ?? 1, arm: options.body?.arm ?? 1, shoulders: options.body?.shoulders ?? 1, sitting };
   const rand = rng(seed);
   const gauss = () => Math.sqrt(-2 * Math.log(rand() + 1e-12)) * Math.cos(2 * Math.PI * rand());
@@ -417,6 +423,26 @@ export function synthesize(options: SynthOptions = {}): { frames: (PoseFrame | {
     return k > 0 && k < 1 && p[1] + k * (cam[1] - p[1]) < deskY;
   };
 
+  // Camera shake as an image-space similarity per frame: translation (fraction of image height), roll (rad), zoom.
+  // A few sinusoids between 2 and 8 Hz (hand tremor and sway), plus jolts: a quick shove that settles back.
+  const waves = shake ? Array.from({ length: 4 }, () => ({ f: 2 + rand() * 6, p: rand() * 6.28, ax: (rand() - 0.5) * 2, ay: (rand() - 0.5) * 2, ar: (rand() - 0.5) * 2, as: (rand() - 0.5) * 2 })) : [];
+  const jolts: { t: number; dx: number; dy: number; r: number; s: number }[] = [];
+  if (shake) for (let jt = 800 + rand() * 2000; jt < seconds * 1000; jt += 1500 + rand() * 3500) jolts.push({ t: jt, dx: (rand() - 0.5) * 0.12, dy: (rand() - 0.5) * 0.12, r: (rand() - 0.5) * 0.1, s: (rand() - 0.5) * 0.12 });
+  const cameraAt = (time: number) => {
+    let tx = 0, ty = 0, r = 0, z = 0;
+    for (const w of waves) {
+      const v = Math.sin((2 * Math.PI * w.f * time) / 1000 + w.p);
+      tx += 0.006 * w.ax * v; ty += 0.006 * w.ay * v; r += 0.006 * w.ar * v; z += 0.006 * w.as * v;
+    }
+    for (const j of jolts) {
+      const dt = time - j.t;
+      if (dt < 0 || dt > 900) continue;
+      const k = dt < 60 ? dt / 60 : Math.exp(-(dt - 60) / 250); // shoved within 2 frames, settles back
+      tx += j.dx * k; ty += j.dy * k; r += j.r * k; z += j.s * k;
+    }
+    return { tx: tx * shake, ty: ty * shake, r: r * shake, z: z * shake };
+  };
+
   const frames: (PoseFrame | { t: number; missing: true })[] = [];
   let prev: Pose | null = null;
   let last: PoseFrame | null = null;
@@ -477,6 +503,7 @@ export function synthesize(options: SynthOptions = {}): { frames: (PoseFrame | {
     // Apparent shoulder width (image height units): MediaPipe's jitter scales with how big the person looks.
     const sw = Math.hypot((project(pose.lShoulder).x - project(pose.rShoulder).x) * (W / H), project(pose.lShoulder).y - project(pose.rShoulder).y) || 0.1;
     const glitch = noise > 0 && rand() < glitchRate ? [gauss() * 0.15 * sw, gauss() * 0.15 * sw] : null;
+    const camMove = shake ? cameraAt(time) : null;
 
     const image: Landmark[] = [];
     const world: Landmark[] = [];
@@ -504,14 +531,23 @@ export function synthesize(options: SynthOptions = {}): { frames: (PoseFrame | {
         y += lostBias[m][1] * sw * 3 + gauss() * 0.15 * sw;
       }
       if (glitch) (x += glitch[0] * (H / W)), (y += glitch[1]);
+      if (camMove) {
+        // Roll and zoom about the image center (in square pixels), then shift.
+        const cx = (x - 0.5) * (W / H), cy = y - 0.5, k = 1 + camMove.z, c = Math.cos(camMove.r), sn = Math.sin(camMove.r);
+        x = 0.5 + ((cx * c - cy * sn) * k + camMove.tx) * (H / W);
+        y = 0.5 + (cx * sn + cy * c) * k + camMove.ty;
+      }
       image.push({ x, y, z: 0, visibility: Math.max(0, Math.min(1, vis)) });
       // World landmarks: hip-centered, camera-aligned, y down, closer to the camera = more negative z.
       // Depth is the weak spot: hands and elbows coming at the camera barely register.
       const rel: V = [pos[0] - hip[0], pos[1] - hip[1], pos[2] - hip[2]];
       const gain = noise === 0 ? 1 : ARM_JOINTS.has(src) || joint !== src ? depthGain : 0.8;
+      // A camera roll turns MediaPipe's world frame too.
+      const roll = camMove?.r ?? 0;
+      const wx = dot(rel, right), wy = -dot(rel, up);
       world.push({
-        x: dot(rel, right) + gauss() * 0.01 * noise,
-        y: -dot(rel, up) + gauss() * 0.01 * noise,
+        x: wx * Math.cos(roll) - wy * Math.sin(roll) + gauss() * 0.01 * noise,
+        y: wx * Math.sin(roll) + wy * Math.cos(roll) + gauss() * 0.01 * noise,
         z: dot(rel, fwd) * gain + (gauss() * 0.015 + zDrift) * noise,
         visibility: Math.max(0, Math.min(1, vis)),
       });

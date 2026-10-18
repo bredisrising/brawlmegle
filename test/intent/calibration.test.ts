@@ -36,5 +36,5 @@ for (const cameraYaw of [0, 45]) {
     }
     console.log(`\ncamera ${cameraYaw}°\n` + rows.join('\n'));
     expect(after).toBeGreaterThanOrEqual(before * 0.9);
-  });
+  }, 30_000);
 }

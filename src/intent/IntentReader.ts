@@ -37,6 +37,7 @@ const EXT_WEIGHT = 0.6;
 /** Elbow angles from one camera wobble; ignore the first ~15° of opening. */
 const EXT_DEADBAND = 0.1;
 const LIMB_NAMES = Object.keys(LIMBS) as LimbName[];
+const PARTNER: Record<LimbName, LimbName> = { armL: 'armR', armR: 'armL', legL: 'legR', legR: 'legL' };
 
 /**
  * Tip and middle joint relative to the limb root, plus (arms) how open the elbow is, scaled by EXT_WEIGHT, and
@@ -87,8 +88,6 @@ type LimbState = {
   risingAt: number;
   /** Current tip travel from the anchor (to compare the two hands). */
   travel: Vec3;
-  /** Last time the hand loaded up (dipped or cocked out): what follows is a strike, not a guard coming up. */
-  loadedAt: number;
   // Debug readouts
   disp: number;
   out: number;
@@ -126,6 +125,8 @@ export class IntentReader {
   /** Usual head and shoulder-center positions, relative to the slow-moving home (so a whole-torso lean shows). */
   private headRest: { x: number; y: number } | null = null;
   private shoulderRest: { x: number; y: number } | null = null;
+  /** Usual position of the feet (full-body framing): a moving camera moves them too, a duck or a slip doesn't. */
+  private feetRest: { x: number; y: number } | null = null;
   private lastCore: Record<'jump' | 'duck' | 'dodge', number> = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
   /** A head move must hold for two frames in a row: one-frame tracking glitches throw the whole skeleton around. */
   private pendingCore: Record<'jump' | 'duck' | 'dodge', number> = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
@@ -173,6 +174,7 @@ export class IntentReader {
     this.lastArmStrike = { armL: -Infinity, armR: -Infinity };
     this.headRest = null;
     this.shoulderRest = null;
+    this.feetRest = null;
     this.guardSince = null;
     this.guardUp = false;
   }
@@ -202,8 +204,33 @@ export class IntentReader {
 
     const intents: Intent[] = [];
     for (const name of LIMB_NAMES) this.updateLimb(name, body, intents);
+    this.bothArmsTogether(body.t, intents);
     this.updateCore(body, intents);
     return { commands: toCommands(this.player, intents), stance: this.stance, intents, body, debug: this.debug };
+  }
+
+  /**
+   * A strike this frame while the other hand (or leg) made the same move at the same time (both just struck, or
+   * the other is mid wind-up going the same way) is the body or the camera moving, not two punches: twisting or
+   * ducking with the guard up, a camera jolt, both knees coming up in a jump. Checked after all limbs are up to
+   * date, so the comparison isn't a frame stale.
+   */
+  private bothArmsTogether(t: number, out: Intent[]) {
+    for (const name of LIMB_NAMES) {
+      const i = out.findIndex((x) => x.kind === 'strike' && x.limb === name);
+      if (i < 0) continue;
+      const other = PARTNER[name];
+      const otherNow = out.some((x) => x.kind === 'strike' && x.limb === other);
+      if (!movedTogether(this.limbs[name].peak, this.limbs[other], t, otherNow)) continue;
+      out.splice(i, 1, { kind: 'cancel', limb: name, t, reason: 'both hands moved' });
+      this.limbs[name].phase = 'idle';
+      if (otherNow) {
+        const j = out.findIndex((x) => x.kind === 'strike' && x.limb === other);
+        out.splice(j, 1, { kind: 'cancel', limb: other, t, reason: 'both hands moved' });
+        this.limbs[other].phase = 'idle';
+        return;
+      }
+    }
   }
 
   private updateLimb(name: LimbName, body: Body, out: Intent[]) {
@@ -282,7 +309,6 @@ export class IntentReader {
       } else if (def.kind === 'arm' && windingUp(def, tTip)) {
         // Loading up (dropping for an uppercut, cocking out for a hook): the strike will start from here.
         s.anchor = clonePair(now);
-        s.loadedAt = t;
       } else if (retracting && t - s.rearmedAt < 400) {
         // Coming back from the last strike: the next one starts from wherever the retraction turns around
         // (fast combos never get back to guard).
@@ -290,7 +316,10 @@ export class IntentReader {
       }
       // A hand dropping fast (back to the lap, or lowering the guard) can't be starting a punch.
       const dropping = def.kind === 'arm' && vel.tip.y < -1.2;
-      if (visible && !dropping && outward > cfg.onsetSpeed && disp > cfg.onsetDist && (strikeLike(def, tTip, tMid, disp) || extensionStrike(def, tTip, tExt, disp))) {
+      // An arm already up in the air (elbow at shoulder height, hand above it: waving, a hand on the head) isn't
+      // throwing a punch, whatever it does next. Punches start from a guard, elbow down.
+      const raised = def.kind === 'arm' && s.anchor.mid.y > -0.15 && s.anchor.tip.y - s.anchor.mid.y > 0.25;
+      if (visible && !dropping && !raised && outward > cfg.onsetSpeed && disp > cfg.onsetDist && (strikeLike(def, tTip, tMid, disp) || extensionStrike(def, tTip, tExt, disp))) {
         Object.assign(s, { phase: 'onset', since: t, grewAt: t, faceBeforeOnset: s.nearFaceAt, peakDisp: disp, peakSpeed: outward, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: legs ? 0 : body.elbow[side], anchorTip: { x: tipPt.p.x - tTip.x, y: tipPt.p.y - tTip.y, z: tipPt.p.z } });
         out.push({ kind: 'anticipate', limb: name, t });
       }
@@ -306,9 +335,12 @@ export class IntentReader {
       // whether it's an uppercut or just the guard coming up.
       const shoulderY = (body.points[LM.lShoulder].p.y + body.points[LM.rShoulder].p.y) / 2;
       const fromLow = s.anchorTip.y < shoulderY - 0.8;
-      // Holding a block, small adjustments aren't punches: it takes a bigger motion to strike out of the shell.
-      const needed = def.kind === 'arm' && this.guardUp ? cfg.strikeDist * 1.0 : cfg.strikeDist;
-      const farEnough = def.kind === 'arm' && !fromLow && s.peakDisp >= needed && t - s.since >= (cfg.confirmMs ?? 60);
+      // Same bar with the guard up: people fight from their guard, and a punch out of it is still a punch.
+      const needed = cfg.strikeDist;
+      // A hand going up with the elbow coming up to the shoulder may be heading over the head (a scratch, a wave):
+      // wait for it to peak to see where it ends. Uppercuts keep the elbow down and don't wait.
+      const raising = def.kind === 'arm' && tTip.y > 0.6 * len(tTip) && midPt.p.y > root.p.y - 0.15;
+      const farEnough = def.kind === 'arm' && !fromLow && !raising && s.peakDisp >= needed && t - s.since >= (cfg.confirmMs ?? 60);
       // Peaked: the reach hasn't grown for 60 ms. (Not "the speed dropped": the fast signal wobbles mid-punch,
       // and judging then cuts the punch short.)
       const slowing = t - s.grewAt >= 60;
@@ -317,13 +349,11 @@ export class IntentReader {
       // Legs must also lift (knee or foot) above where they usually sit, so stepping isn't kicking.
       const lift = Math.max(s.peak.y, s.peakMidRise);
       // Punches don't travel down: an arm straightening as the hand drops (back to the lap) isn't a strike.
-      const goingDown = def.kind === 'arm' && tTip.y < -0.15 && tTip.y < -0.5 * len(tTip);
+      const goingDown = def.kind === 'arm' && s.peak.y < -0.15 && s.peak.y < -0.5 * len(s.peak);
       const reason = s.peakDisp < needed || (def.kind === 'leg' && lift < this.config.legRise) ? 'too small'
         : goingDown ? 'going down'
-        : def.kind === 'arm' && (raisingGuard(body, s.anchorTip, tipPt.p, this.config.guard.radius)
-          || handToFace(body, s.peak, tipPt.p, this.config.guard.radius, s.since - s.faceBeforeOnset > 600 && s.since - s.loadedAt > 300)) ? 'raising guard'
-        : def.kind === 'arm' && bothHandsUp(body, name, tTip, s.since - s.faceBeforeOnset > 600 && t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 250) ? 'both hands up'
-        : def.kind === 'arm' && movedTogether(s.peak, this.limbs[name === 'armL' ? 'armR' : 'armL'], t) ? 'both hands moved'
+        : def.kind === 'arm' && raisingGuard(body, name, s.anchorTip, tipPt.p, this.config.guard.radius, t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 400) ? 'raising guard'
+        : def.kind === 'arm' && bothHandsUp(body, name, s.peak, s.since - s.faceBeforeOnset > 600 && t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 250) ? 'both hands up'
         : def.kind === 'arm' && raisedOverHead(body, s.peakTip, s.peak, midPt.p, root.p) ? 'not a punch'
         : null;
       if (reason) {
@@ -391,13 +421,22 @@ export class IntentReader {
     const quiet = Math.hypot(headV.x, headV.y) < 0.6 && Math.abs(body.root.vy) < 0.4;
     if (!this.headRest) this.headRest = { ...head };
     if (!this.shoulderRest) this.shoulderRest = { ...shoulders };
+    // Feet, when the whole body is in view: a handheld or bumped camera shifts them along with everything else.
+    const la = body.points[LM.lAnkle];
+    const ra = body.points[LM.rAnkle];
+    const feetSeen = body.fullBodyFor > 1000 && la.visibility > 0.5 && ra.visibility > 0.5;
+    const feet = feetSeen ? { x: (la.p.x + ra.p.x) / 2 + body.root.x, y: (la.p.y + ra.p.y) / 2 + body.root.y } : null;
+    if (!feet) this.feetRest = null;
+    else if (!this.feetRest) this.feetRest = { ...feet };
     if (quiet) {
       const k = 1 - Math.exp(-body.dt / cfg.restSeconds);
       this.headRest.x += k * (head.x - this.headRest.x);
       this.headRest.y += k * (head.y - this.headRest.y);
       this.shoulderRest.x += k * (shoulders.x - this.shoulderRest.x);
       this.shoulderRest.y += k * (shoulders.y - this.shoulderRest.y);
+      if (feet && this.feetRest) (this.feetRest.x += k * (feet.x - this.feetRest.x)), (this.feetRest.y += k * (feet.y - this.feetRest.y));
     }
+    const feetShift = feet && this.feetRest ? { x: feet.x - this.feetRest.x, y: feet.y - this.feetRest.y } : { x: 0, y: 0 };
     // Throwing a punch twists the torso and dips the head: a right punch swings the head to the player's left,
     // a left punch to the right. Around a punch, a head move has to be much bigger to count.
     for (const n of ['armL', 'armR'] as const) if (this.limbs[n].phase === 'onset') this.lastArmStrike[n] = t;
@@ -411,7 +450,7 @@ export class IntentReader {
     };
 
     // Duck: the head drops, by bending the knees (hips drop) or the waist (head drops toward the hips).
-    const headDrop = this.headRest.y - head.y;
+    const headDrop = this.headRest.y - head.y + feetShift.y;
     const dropSpeed = -headV.y;
     const duckK = punching ? 1.6 : 1;
     const dropping = headDrop > cfg.duck.drop * duckK;
@@ -422,20 +461,24 @@ export class IntentReader {
 
     // Jump: the hips rise above their usual height, and the head with them (a real hop, not a bounce on the toes).
     // Needs visible hips: when sitting, "hips" are estimated from the shoulders and every bob would count.
-    const up = body.fullBodyFor > 1000 && body.root.y > cfg.jump.rise && -headDrop > cfg.jump.rise * 0.7;
+    // (Judged against the room, not the feet: in a jump the feet leave the floor too.)
+    const up = body.fullBodyFor > 1000 && body.root.y > cfg.jump.rise && head.y - this.headRest.y > cfg.jump.rise * 0.7;
     if (held('jump', up && body.root.vy > cfg.jump.speed, up) && t - this.lastCore.jump > cfg.coreCooldownMs) {
       this.lastCore.jump = t;
       out.push({ kind: 'jump', t, power: clamp(body.root.y / (cfg.jump.rise * 3), 0.3, 1) });
     }
 
     // Dodge: the head leans sideways, and the shoulders go with it (turning or tilting just the head isn't a slip).
-    const lean = head.x - this.headRest.x;
-    const shoulderLean = shoulders.x - this.shoulderRest.x;
+    const lean = head.x - this.headRest.x - feetShift.x;
+    const shoulderLean = shoulders.x - this.shoulderRest.x - feetShift.x;
     // The side a punch throws the head to needs the most, as long as that arm is still out.
     const thrower = lean > 0 ? 'armR' : 'armL';
     const dodgeK = this.limbs[thrower].phase !== 'idle' ? 3 : since(thrower) < 500 ? 2.5 : punching ? 1.6 : 1;
     // Not while ducking: a duck usually tilts the head too.
-    const leaning = Math.abs(lean) > cfg.dodge.shift * dodgeK && shoulderLean * Math.sign(lean) > 0.2 * Math.abs(lean) && headDrop < cfg.duck.drop * 0.6;
+    // The head leads: in a slip or a seated lean the head travels further than the shoulders. When everything
+    // shifts the same amount, it's the camera moving (or a step), not a slip.
+    const leaning = Math.abs(lean) > cfg.dodge.shift * dodgeK && shoulderLean * Math.sign(lean) > 0.2 * Math.abs(lean)
+      && (lean - shoulderLean) * Math.sign(lean) > 0.15 * Math.abs(lean) && headDrop < cfg.duck.drop * 0.6;
     const leaningFast = leaning && Math.sign(headV.x) === Math.sign(lean) && Math.abs(headV.x) > cfg.dodge.speed;
     if (held('dodge', leaningFast, leaning && headV.x * Math.sign(lean) > -cfg.dodge.speed) && t - this.lastCore.dodge > cfg.coreCooldownMs) {
       this.lastCore.dodge = t;
@@ -573,8 +616,8 @@ function raisedOverHead(body: Body, end: Vec3, travel: Vec3, elbow: Vec3, should
  * Both hands moving the same way at the same time is the body (or the tracking) moving, not two punches:
  * ducking or twisting with the guard up, or MediaPipe jumping the whole skeleton for a frame.
  */
-function movedTogether(travel: Vec3, other: LimbState, t: number) {
-  const busy = other.phase === 'onset' || (other.phase === 'recover' && t - other.since < 100);
+function movedTogether(travel: Vec3, other: LimbState, t: number, otherStruckNow = false) {
+  const busy = otherStruckNow || other.phase === 'onset' || (other.phase === 'recover' && t - other.since < 100);
   if (!busy) return false;
   const o = other.phase === 'onset' ? other.travel : other.peak;
   const a = Math.hypot(travel.x, travel.y);
@@ -588,24 +631,18 @@ function movedTogether(travel: Vec3, other: LimbState, t: number) {
  * your guard up, not an uppercut. Real uppercuts start from guard height.
  */
 
-/**
- * A hand that hasn't been up by the face for a while and now rises into the face zone is coming up to guard
- * (or to block), not throwing an uppercut: uppercuts are thrown from guard, after a short dip at most.
- */
-function handToFace(body: Body, travel: Vec3, end: Vec3, radius: number, wasDown: boolean) {
-  if (!wasDown || travel.y < 0.12 || travel.y < 0.5 * len(travel)) return false;
-  const nose = body.points[LM.nose].p;
-  return Math.hypot(end.x - nose.x, end.y - nose.y) < radius * 1.2;
-}
-
-function raisingGuard(body: Body, start: Vec3, end: Vec3, radius: number) {
+function raisingGuard(body: Body, limb: LimbName, start: Vec3, end: Vec3, radius: number, otherRose: boolean) {
   const nose = body.points[LM.nose].p;
   const shoulderY = (body.points[LM.lShoulder].p.y + body.points[LM.rShoulder].p.y) / 2;
   // Lap level, not just a low guard: plenty of people punch (and uppercut) from below the shoulders.
   const startedLow = start.y < shoulderY - 0.8;
   // Ends by the face, or anywhere around shoulder height (some people hold their hands lower).
   const endsUp = Math.hypot(end.x - nose.x, end.y - nose.y) < radius * 1.2 || end.y > shoulderY - 0.25;
-  return startedLow && endsUp;
+  // A guard is two hands: this one joins the other by the face, or both came up together. One hand shooting up
+  // from the lap on its own is a punch (seated players rest their hands in their lap between punches).
+  const other = body.points[limb === 'armL' ? LM.rWrist : LM.lWrist].p;
+  const otherUp = Math.hypot(other.x - nose.x, other.y - nose.y) < radius * 1.2;
+  return startedLow && endsUp && (otherUp || otherRose);
 }
 
 function classify(kind: 'arm' | 'leg', dir: Vec3, out: number, tip: Vec3, mid: Vec3, midOut: number, travel: Vec3, midRise: number, ext = 0, elbow = 180): StrikeStyle {
@@ -641,7 +678,7 @@ function windupOf(s: LimbState, dir: Vec3) {
 function newLimb(): LimbState {
   return {
     phase: 'idle', rest: null, anchor: null, since: 0, grewAt: 0, peakDisp: 0, peakSpeed: 0,
-    peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, peakMidTravel: 0, peakMidOut: 0, anchorTip: { x: 0, y: 0, z: 0 }, peakElbow: 0, history: [], typicalSpeed: 4, extended: null, lastRestDisp: 0, rearmedAt: -Infinity, nearFaceAt: -Infinity, faceBeforeOnset: -Infinity, risingAt: -Infinity, travel: { x: 0, y: 0, z: 0 }, loadedAt: -Infinity, disp: 0, out: 0,
+    peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, peakMidTravel: 0, peakMidOut: 0, anchorTip: { x: 0, y: 0, z: 0 }, peakElbow: 0, history: [], typicalSpeed: 4, extended: null, lastRestDisp: 0, rearmedAt: -Infinity, nearFaceAt: -Infinity, faceBeforeOnset: -Infinity, risingAt: -Infinity, travel: { x: 0, y: 0, z: 0 }, disp: 0, out: 0,
   };
 }
 

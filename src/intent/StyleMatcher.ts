@@ -53,7 +53,9 @@ export class StyleMatcher {
     if (!match || match.style === ruleStyle) return ruleStyle;
     // A couple of examples are too few to overrule the rules: one sloppy example would flip every strike like it.
     if (this.templates.filter((t) => t.style === match.style).length < 3) return ruleStyle;
-    const ruleDistance = this.nearestByStyle(features).get(ruleStyle) ?? Infinity;
+    // No examples of what the rules say: nothing to compare against, so the rules stand.
+    const ruleDistance = this.nearestByStyle(features).get(ruleStyle);
+    if (ruleDistance === undefined) return ruleStyle;
     return match.distance < 0.7 * ruleDistance ? match.style : ruleStyle;
   }
 
