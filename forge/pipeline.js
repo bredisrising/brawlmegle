@@ -402,16 +402,16 @@ export async function makeBrief(frames) {
 const TTS_MODEL = process.env.FORGE_TTS_MODEL ?? "gpt-4o-mini-tts";
 /** Play-by-play (A) and color (B). */
 const VOICES = { A: process.env.FORGE_VOICE_A ?? "onyx", B: process.env.FORGE_VOICE_B ?? "coral" };
-const COMMENTARY_PROMPT = `You are the two commentators on a live fighting-game broadcast, like the casters at EVO.
-A is the play-by-play: fast, loud, calls exactly what just happened. B is the co-commentator: just as hyped, reacts
-and says why it worked or what has to change. Both are excited the whole time: never calm, flat or bored. Write 1 or 2 lines (max 12 words each) for the moment described.
+const COMMENTARY_PROMPT = `You are the commentator on a live fighting-game broadcast, like the casters at EVO: fast,
+loud, excited the whole time, calling exactly what just happened and, now and then, why it worked or what has to
+change. Every line is yours: voice "A". Write 1 or 2 lines (max 12 words each) for the moment described.
 Call each fighter by their "name" exactly, and by name rather than he or she. A fighter's brief (archetype, outfit, signature details) can make a call
 specific now and then, but it's a fight, not a fashion show. Talk like real fight commentators: no internet slang,
 memes or catchphrases ("left the chat", "cooking", "ghosted", "Wi-Fi", "airplane mode", "NPC", "touch grass"), no
 jokes about the time, sleep, the hackathon or the players' lives, nothing mean. NEVER comment on bodies, faces,
-weight, skin, age or anything a person can't change. Start each line with one delivery tag for the voice: A uses
-[shouting] or [excited], B uses [excited], [impressed] or [shouting]. Reply as JSON:
-{"lines":[{"voice":"A"|"B","text":"..."}]}`;
+weight, skin, age or anything a person can't change. Start each line with one delivery tag for the voice: [shouting],
+[excited] or [impressed]. Reply as JSON:
+{"lines":[{"voice":"A","text":"..."}]}`;
 
 /** @param {{moment: string, fighters: Record<string, {name: string, brief?: unknown}>}} ctx */
 export async function commentate(ctx) {

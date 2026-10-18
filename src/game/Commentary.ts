@@ -2,8 +2,8 @@ import { config } from '../config';
 import { useGameStore } from './store';
 
 /**
- * The commentators (SPEC "Commentators"), voiced like a fight broadcast: A calls the play, B (just as hyped) says why
- * it worked. Big moments get a template line whose voice was fetched before the round (so it plays the instant the
+ * The commentator (SPEC "Commentators"), voiced like a fight broadcast: one hyped play-by-play voice (A; B, a second
+ * voice, is kept in the types and the server but not used). Big moments get a template line whose voice was fetched before the round (so it plays the instant the
  * hit lands); the round intro, the finish and a few live moments get lines a fast LLM writes on the forge server
  * from both fighters' names and forge briefs, voiced before they're queued. Every line is captioned; voices come from
  * the server's TTS (cached there by text), falling back to the browser's voice. One line at a time: a queue keeps
@@ -67,7 +67,8 @@ export class Commentary {
       });
       if (!res.ok) return [];
       const body = (await res.json()) as { lines?: Line[] };
-      return (body.lines ?? []).filter((l) => (l.voice === 'A' || l.voice === 'B') && typeof l.text === 'string');
+      // One commentator: whatever the server wrote, it's his line.
+      return (body.lines ?? []).filter((l) => typeof l?.text === 'string').map((l) => ({ voice: 'A' as const, text: l.text }));
     } catch {
       return [];
     }
@@ -169,31 +170,31 @@ export const TEMPLATES = {
   first: [
     { voice: 'A', text: '[shouting] {a} draws first blood!' },
     { voice: 'A', text: '[excited] And {a} lands the opening shot!' },
-    { voice: 'B', text: '[excited] Big first hit from {a}! That sets the tone!' },
+    { voice: 'A', text: '[excited] Big first hit from {a}! That sets the tone!' },
   ],
   counter: [
     { voice: 'A', text: '[shouting] Counter hit! {a} saw it coming!' },
     { voice: 'A', text: '[shouting] Oh! {a} punishes that clean!' },
-    { voice: 'B', text: '[impressed] What a read by {a}! Caught {d} mid-swing!' },
+    { voice: 'A', text: '[impressed] What a read by {a}! Caught {d} mid-swing!' },
   ],
   combo: [
     { voice: 'A', text: '[shouting] {a} is putting it together!' },
     { voice: 'A', text: '[shouting] {a} will not let up!' },
-    { voice: 'B', text: '[shouting] {d} has to break that rhythm, right now!' },
+    { voice: 'A', text: '[shouting] {d} has to break that rhythm, right now!' },
   ],
   guardBreak: [
     { voice: 'A', text: '[shouting] Guard break! {a} goes right through it!' },
     { voice: 'A', text: '[shouting] {a} smashes through the guard!' },
-    { voice: 'B', text: "[excited] You can't just block against {a}! The leg goes right through!" },
+    { voice: 'A', text: "[excited] You can't just block against {a}! The leg goes right through!" },
   ],
   danger: [
     { voice: 'A', text: '[excited] {d} is in serious trouble!' },
-    { voice: 'B', text: '[shouting] One more clean hit and {d} is done!' },
+    { voice: 'A', text: '[shouting] One more clean hit and {d} is done!' },
   ],
   ko: [
     { voice: 'A', text: '[shouting] K.O.! {w} wins it!' },
     { voice: 'A', text: '[shouting] Down goes {d}! {w} takes it!' },
-    { voice: 'B', text: "[impressed] That's how you close it out! {w} with the finish!" },
+    { voice: 'A', text: "[impressed] That's how you close it out! {w} with the finish!" },
   ],
   time: [{ voice: 'A', text: '[shouting] Time! {w} takes it on points!' }],
   draw: [{ voice: 'A', text: "[shouting] Time! We've got a draw!" }],
