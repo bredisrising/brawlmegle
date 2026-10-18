@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const { makeModelLocal } = await import("../pipeline.js");
+const { optimizeFighter } = await import("../optimize.js");
 for (const dir of process.argv.slice(2)) {
   const file = (f) => path.join(dir, f);
   const model = [file("model.orig.glb"), file("model.glb")].find((f) => fs.existsSync(f));
@@ -26,8 +27,11 @@ for (const dir of process.argv.slice(2)) {
     fighter.rigged = true;
     fighter.rigEngine = "local";
     delete fighter.modelError;
+    // Like a normal forge: the game gets the optimized GLB (rigged.orig.glb keeps this original).
+    const report = await optimizeFighter(dir, fighter, { force: true, log: (m) => console.log(`  ${m}`) });
     fs.writeFileSync(file("fighter.json"), JSON.stringify(fighter, null, 2));
-    console.log(`${dir}: rigged in ${((Date.now() - start) / 1000).toFixed(1)} s`, out.timings);
+    const mb = (n) => (n / 2 ** 20).toFixed(1);
+    console.log(`${dir}: rigged in ${((Date.now() - start) / 1000).toFixed(1)} s`, out.timings, report.glb ? `${mb(report.glb.before)} -> ${mb(report.glb.after)} MB` : "(not optimized)");
   } catch (err) {
     console.log(`${dir}: failed: ${err.message}`);
   }
