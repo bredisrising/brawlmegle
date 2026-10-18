@@ -1,5 +1,6 @@
 import { createLocalSource, type InputSource } from '../input';
 import { captureScan, forgeBusy } from '../forge/forge';
+import { saveOwner } from '../forge/roster';
 import { FORGE_STEPS, onChange, scanStatus } from '../forge/status';
 import { Peer } from '../net/Peer';
 import { Signaling } from '../net/Signaling';
@@ -263,6 +264,11 @@ export class ClientSession {
         break;
       case 'cam':
         this.mirror?.cam?.(msg.hidden);
+        break;
+      case 'owner':
+        // The fighter forged for this laptop's player: this browser keeps its owner key ("Delete my fighter").
+        saveOwner({ id: msg.fighterId, key: msg.key }, msg.name);
+        if (msg.done) useGameStore.setState({ deleteCode: { fighterId: msg.fighterId, name: msg.name, code: msg.code } });
         break;
       case 'votes':
         this.mirror?.votes?.(msg.votes, msg.nextIn);

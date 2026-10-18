@@ -100,6 +100,11 @@ export interface GameState {
   opponentVideo: MediaStream | null;
   /** This laptop's camera is going to the opponent right now. */
   camSending: boolean;
+  /**
+   * The delete code of the fighter just forged for this laptop's player, shown until they dismiss it ("Got it") so
+   * they can screenshot it (ui/DeleteCode.tsx). Never saved: the forge hands it out once.
+   */
+  deleteCode: { fighterId: string; name: string; code: string } | null;
 }
 
 const CAM_KEY = 'brawlmegle.hideCam';
@@ -169,6 +174,7 @@ export const useGameStore = create<GameState>(() => ({
   opponentCamHidden: false,
   opponentVideo: null,
   camSending: false,
+  deleteCode: null,
 }));
 
 /** The player slot tracked on this laptop: host = p1, client = p2. */

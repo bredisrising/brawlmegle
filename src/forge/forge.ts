@@ -9,8 +9,9 @@ import { scanPoses, type PoseStream, type ScanCaptureOptions, type ScanUpdate } 
  * frames to the host over P2P; only the host talks to the forge server and keeps fighters.
  * API keys live on the forge server, never in the browser.
  *
- *   POST /api/forge      { name, frames: [front, left, right] }  ->  { id }
+ *   POST /api/forge      { name, frames: [front, left, right] }  ->  { id, ownerKey, deleteCode }
  *   GET  /api/forge/:id  ->  ForgedFighter
+ *   POST /api/fighters/:id/delete { key } / POST /api/fighters/delete { code }  ->  { ok, id, name }
  *
  * With config.forgeApi empty, the forge calls are mocked. Without a camera (mock input), so is the scan.
  */
@@ -82,11 +83,23 @@ export async function forgeBusy(api = config.forgeApi): Promise<string | null> {
   }
 }
 
+/**
+ * "Delete my fighter" (forge/owner.js): the forge hands these out once, when it starts. The browser that scanned keeps
+ * the key (roster.ts saveOwner); the code is shown once the forge is done, to screenshot.
+ */
+export type ForgeOwner = { id: string; key: string; code: string };
+
 /** Starts a forge. Returns its id. `api` defaults to config.forgeApi (empty = mock). */
 export async function submitForge(name: string, frames: ScanFrames, api = config.forgeApi, username?: string, timeoutMs = 45_000): Promise<string> {
+  return (await startForge(name, frames, api, username, timeoutMs)).id;
+}
+
+/** submitForge, plus the owner key and delete code (null from an older forge that doesn't issue them). */
+export async function startForge(name: string, frames: ScanFrames, api = config.forgeApi, username?: string, timeoutMs = 45_000): Promise<{ id: string; owner: ForgeOwner | null }> {
   if (!api) {
     await wait(300);
-    return `mock-${Date.now()}`;
+    const id = `mock-${Date.now()}`;
+    return { id, owner: { id, key: 'mock', code: mockCode() } };
   }
   const present = frames.filter(Boolean);
   if (present.length === 0) throw new Error('The scan got no frames: nobody was in view');
@@ -100,7 +113,56 @@ export async function submitForge(name: string, frames: ScanFrames, api = config
     throw new Error(`Couldn't reach the forge: ${err.message}`);
   });
   if (!res.ok) throw new Error(`Forge rejected the scan (${res.status}): ${await errorText(res)}`);
-  return ((await res.json()) as { id: string }).id;
+  const body = (await res.json()) as { id: string; ownerKey?: unknown; deleteCode?: unknown };
+  const owner = typeof body.ownerKey === 'string' && typeof body.deleteCode === 'string' ? { id: body.id, key: body.ownerKey, code: body.deleteCode } : null;
+  return { id: body.id, owner };
+}
+
+/** Crockford base32, as the forge writes delete codes: no I, L, O or U. */
+const CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+/** A made-up code for the mocked forge, so the screens show one. */
+function mockCode() {
+  const chars = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => CODE_ALPHABET[b & 31]).join('');
+  return chars.match(/.{4}/g)!.join('-');
+}
+
+/** What the player typed or pasted, as a delete code reads (XXXX-XXXX-XXXX-XXXX, I/L as 1, O as 0), up to 16 characters. */
+export function formatDeleteCode(raw: string): string {
+  const chars = raw.toUpperCase().replace(/[IL]/g, '1').replace(/O/g, '0').split('').filter((c) => CODE_ALPHABET.includes(c)).join('').slice(0, 16);
+  return chars.match(/.{1,4}/g)?.join('-') ?? '';
+}
+
+export const isDeleteCode = (code: string) => formatDeleteCode(code).replace(/-/g, '').length === 16;
+
+/** How a delete went: `gone` = the forge no longer has that fighter (deleted now, or before). */
+export type DeleteResult = { ok: true; id: string; name: string } | { ok: false; gone: boolean; error: string };
+
+/**
+ * Deletes a fighter for good (photos, sheet, card, 3D model, record, highlights), with the owner key this browser
+ * kept or the delete code from the screenshot. Never throws. With no forge (mock), there's nothing to delete remotely.
+ */
+export async function deleteFighter(by: { id: string; key: string } | { code: string }, api = config.forgeApi): Promise<DeleteResult> {
+  if (!api) {
+    await wait(300);
+    return 'id' in by ? { ok: true, id: by.id, name: '' } : { ok: false, gone: false, error: 'No forge server to delete from' };
+  }
+  const url = 'id' in by ? `${trimSlash(api)}/api/fighters/${encodeURIComponent(by.id)}/delete` : `${trimSlash(api)}/api/fighters/delete`;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forge-key': config.forgeKey },
+      body: JSON.stringify('id' in by ? { key: by.key } : { code: by.code }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (res.ok) {
+      const body = (await res.json()) as { id?: string; name?: string };
+      return { ok: true, id: String(body.id ?? ('id' in by ? by.id : '')), name: String(body.name ?? '') };
+    }
+    return { ok: false, gone: res.status === 404, error: res.status === 429 ? 'Too many tries. Wait a few minutes and try again.' : await errorText(res) };
+  } catch (err) {
+    return { ok: false, gone: false, error: `Couldn't reach the forge: ${(err as Error).message}` };
+  }
 }
 
 const STEPS: readonly NonNullable<ForgedFighter['step']>[] = ['brief', 'sheet', 'model', 'cleanup', 'rig'];
@@ -142,6 +204,8 @@ export type ForgeOptions = {
   signal?: AbortSignal;
   /** Saves the fighter under this username on the server. */
   username?: string;
+  /** The owner key and delete code, as soon as the forge has started (once; not from an older forge server). */
+  onOwner?: (owner: ForgeOwner) => void;
 };
 
 /**
@@ -153,9 +217,10 @@ export async function forgeFighter(
   name: string,
   frames: ScanFrames,
   onProgress?: (fighter: ForgedFighter) => void,
-  { api = config.forgeApi, pollMs = 1500, timeoutMs = 5 * 60_000, requestTimeoutMs = 10_000, signal, username }: ForgeOptions = {},
+  { api = config.forgeApi, pollMs = 1500, timeoutMs = 5 * 60_000, requestTimeoutMs = 10_000, signal, username, onOwner }: ForgeOptions = {},
 ): Promise<ForgedFighter> {
-  const id = await submitForge(name, frames, api, username);
+  const { id, owner } = await startForge(name, frames, api, username);
+  if (owner) onOwner?.(owner);
   const started = Date.now();
   let last: ForgedFighter = { id, name, status: 'scanning' };
   onProgress?.(last);

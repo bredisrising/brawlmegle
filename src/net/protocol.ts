@@ -50,6 +50,9 @@ export type HostMessage =
   | { type: 'events'; events: MirrorEvent[] } // hits, blocks, wind-ups, moves read: the moments that need effects
   | { type: 'fighter'; fighter: ForgedFighter; detail?: string; preview?: ForgePreview } // P2's forge progress (detail: the host's status text, preview: the live forge preview); sent with status 'ready' once P2's fighter is set (scan, masked or pick)
   | { type: 'cam'; hidden: boolean } // the host player's "Hide my camera"
+  // P2's fighter's owner key and delete code (the host forges it, but the fighter is the client player's): sent when
+  // the forge starts, and again with done: true when it's finished, for the client to show the code. The host keeps neither.
+  | { type: 'owner'; fighterId: string; name: string; key: string; code: string; done: boolean }
   // After a K.O.: who wants a rematch (both must), and in a matchmade fight the ms until both go find someone new.
   | { type: 'votes'; votes: Record<PlayerId, boolean>; nextIn: number | null }
   | { type: 'next' }; // matchmade fight: we're both off to find a new opponent (the client searches again)

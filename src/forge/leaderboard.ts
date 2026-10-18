@@ -59,6 +59,14 @@ function writeRecords(records: Record<string, FighterRecord>) {
   }
 }
 
+/** A deleted fighter's cached record (the server's copy goes with the fighter). */
+export function forgetRecord(fighterId: string) {
+  const records = readRecords();
+  if (!(fighterId in records)) return;
+  delete records[fighterId];
+  writeRecords(records);
+}
+
 export function fighterRecord(fighterId: string): FighterRecord {
   return readRecords()[fighterId] ?? emptyRecord();
 }

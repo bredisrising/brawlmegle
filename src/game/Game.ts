@@ -15,9 +15,9 @@ import { IntentReader } from '../intent/IntentReader';
 import type { Intent } from '../intent/intents';
 import { InputHub, createLocalSource, preloadLocalInput, type InputSource } from '../input';
 import { MockSource } from '../input/sources/MockSource';
-import { captureScan, forgeBusy, forgeFighter, type ScanFrames } from '../forge/forge';
+import { captureScan, forgeBusy, forgeFighter, type ForgeOwner, type ScanFrames } from '../forge/forge';
 import { forgePreview, forgeStatus, onChange, samePreview, scanStatus } from '../forge/status';
-import { fetchServerFighters, maskedFighter, saveFighter } from '../forge/roster';
+import { fetchServerFighters, maskedFighter, saveFighter, saveOwner } from '../forge/roster';
 import { preloadModel } from '../forge/models';
 import { recordMatch } from '../forge/leaderboard';
 import { config } from '../config';
@@ -695,11 +695,17 @@ export class Game {
           const forge = forgePreview(f);
           if (!samePreview(forge, current.forge)) updatePlayer(id, { forge });
         };
-        const forging = forgeFighter(name, frames, (f) => (show(forgeStatus(f)), preview(f)), { username: choice.username, signal });
+        // Frames from the other laptop: the fighter is that player's, so its owner key goes back to them.
+        const remote = scan !== undefined;
+        let owner: ForgeOwner | null = null;
+        const onOwner = (o: ForgeOwner) => ((owner = o), this.handOwner(o, name, remote, false));
+        const ownerDone = () => owner && this.handOwner(owner, name, remote, true);
+        const forging = forgeFighter(name, frames, (f) => (show(forgeStatus(f)), preview(f)), { username: choice.username, signal, onOwner });
         const skipped = new Promise<null>((resolve) => (this.skipForge[id] = () => resolve(null)));
         const done = await Promise.race([forging, skipped]);
         delete this.skipForge[id];
         if (done) {
+          ownerDone();
           fighter = done;
           if (done.status === 'ready' && done.glbUrl) revealGlb = done.glbUrl;
           if (fighter.status === 'ready') saveFighter(fighter); // they said yes to "save fighter to memory card"
@@ -708,7 +714,7 @@ export class Game {
         } else {
           // Fight now as a stand-in; the forged fighter materializes in when it's ready (even mid-round).
           fighter = { id: `stand-in-${id}`, name, status: 'ready', glbUrl: `${import.meta.env.BASE_URL}models/default.glb` };
-          forging.then((f) => this.arriveLate(id, gen, f)).catch((err) => console.warn('background forge failed, keeping the stand-in:', err));
+          forging.then((f) => (ownerDone(), this.arriveLate(id, gen, f))).catch((err) => console.warn('background forge failed, keeping the stand-in:', err));
         }
       } else if (choice.kind === 'masked') {
         fighter = maskedFighter(name);
@@ -753,6 +759,17 @@ export class Game {
       const { role } = useGameStore.getState();
       if (id === localPlayerId(role)) useGameStore.setState({ screen: 'avatar' });
     }
+  }
+
+  /**
+   * "Delete my fighter": the laptop of the player who was scanned keeps the owner key (this one, or the client over
+   * P2P; the host never keeps a guest's), and once the forge is done (ready or not: the photos are on the server
+   * either way) shows the delete code to screenshot.
+   */
+  private handOwner(owner: ForgeOwner, name: string, remote: boolean, done: boolean) {
+    if (remote) return this.hostSession?.send({ type: 'owner', fighterId: owner.id, name, key: owner.key, code: owner.code, done });
+    if (!done) saveOwner(owner, name);
+    else useGameStore.setState({ deleteCode: { fighterId: owner.id, name, code: owner.code } });
   }
 
   /** Show the fighter's model. A GLB that won't load (gone, unreachable, corrupt) still fights, as the default model. */
