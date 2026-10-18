@@ -1,0 +1,24 @@
+{
+  "voice": "dHd5gvgSOzSfduK4CvEg",
+  "clips": {
+    "fight": "fight.mp3",
+    "ko": "ko.mp3",
+    "perfect": "perfect.mp3",
+    "counter": "counter.mp3",
+    "combo": "combo.mp3",
+    "great": "great.mp3",
+    "incredible": "incredible.mp3",
+    "fireball": "fireball.mp3",
+    "first": "first.mp3",
+    "time": "time.mp3",
+    "draw": "draw.mp3",
+    "ready": "ready.mp3",
+    "round": "round.mp3",
+    "win": "win.mp3",
+    "danger": "danger.mp3",
+    "crowd-cheer": "crowd-cheer.mp3",
+    "crowd-ooh": "crowd-ooh.mp3",
+    "crowd-roar": "crowd-roar.mp3",
+    "crowd-murmur": "crowd-murmur.mp3"
+  }
+}
