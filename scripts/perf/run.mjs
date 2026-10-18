@@ -125,6 +125,7 @@ try {
   await page.getByRole("button", { name: /Practice/ }).first().click();
   await page.getByRole("button", { name: /Load fighter/ }).click();
   await page.locator(`[data-fighter="${FIGHTER}"]`).click();
+  await page.evaluate(() => window.__brawl.perf.reset());
   const t0 = Date.now();
   await page.waitForFunction(() => {
     const s = window.__brawl.store.getState();
@@ -132,6 +133,38 @@ try {
   }, null, { timeout: 180_000, polling: 250 });
   result.toFightMs = Date.now() - t0;
   log(`fighting after ${result.toFightMs} ms`);
+  // Frames from picking a fighter to the fight (both fighters loading and spawning in): the worst ones are load hitches.
+  result.loadPerf = await page.evaluate(() => window.__brawl.perf.report());
+  log(`load window: max frame ${result.loadPerf.interval.max?.toFixed(0)} ms, p99 ${result.loadPerf.interval.p99?.toFixed(0)}, hitches ${result.loadPerf.hitches}`);
+  // GPU memory, roughly: every texture the scene's materials use (with mipmaps) and the composer's render targets.
+  result.gpuMemory = await page.evaluate(() => {
+    const { game } = window.__brawl;
+    const R = game.renderer;
+    const seen = new Set();
+    let textures = 0;
+    R.scene.traverse((o) => {
+      for (const m of [].concat(o.material || [])) {
+        for (const v of Object.values(m)) {
+          if (!v || !v.isTexture || seen.has(v)) continue;
+          seen.add(v);
+          const img = v.image;
+          const w = img?.width || img?.videoWidth || 0, h = img?.height || img?.videoHeight || 0;
+          if (v.isCompressedTexture) continue;
+          textures += w * h * 4 * (v.generateMipmaps !== false ? 4 / 3 : 1);
+        }
+      }
+    });
+    const gl = R.renderer.getContext();
+    const w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+    const rt = R.composer.renderTarget1;
+    // Two HalfFloat targets (8 bytes/px) with their MSAA buffers and depth, plus the bloom chain (~1/3 of a target).
+    const samples = rt.samples || 0;
+    const targets = 2 * w * h * (8 + 4) * (1 + samples) + (w * h * 8) / 3;
+    let shadow = 0;
+    R.scene.traverse((o) => { if (o.isDirectionalLight && o.castShadow) shadow += o.shadow.mapSize.x * o.shadow.mapSize.y * 4; });
+    return { texturesMB: +(textures / 1e6).toFixed(0), targetsMB: +(targets / 1e6).toFixed(0), shadowMB: +(shadow / 1e6).toFixed(0), textureCount: seen.size };
+  });
+  log(`gpu memory ~ textures ${result.gpuMemory.texturesMB} MB (${result.gpuMemory.textureCount}), render targets ${result.gpuMemory.targetsMB} MB, shadow ${result.gpuMemory.shadowMB} MB`);
   // Keep the round going: HP and the clock topped up (rarely, so it barely touches the store).
   await page.evaluate(() => {
     const { game, store } = window.__brawl;
