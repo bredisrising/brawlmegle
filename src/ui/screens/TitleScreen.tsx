@@ -83,9 +83,9 @@ export function TitleScreen() {
           <div className="reel-area hidden min-w-0 flex-1 items-end self-stretch md:flex">
             <HighlightReel paused={mode === 'leaderboard'} />
           </div>
-          <div className="flex w-full flex-col items-start gap-5 md:w-md md:shrink-0 md:items-end">
+          <div className="flex w-full flex-col items-start gap-5 md:w-[31rem] md:shrink-0 md:items-end">
             {mode === 'pick' ? (
-              <nav className="flex w-full max-w-md flex-col gap-[clamp(0.3rem,1vh,0.5rem)]">
+              <nav className="flex w-full max-w-[31rem] flex-col gap-[clamp(0.3rem,1vh,0.5rem)]">
                 <MenuItem primary index="01" label="Find a fight" hint="Fight a random opponent online" color="hover:bg-paper" bar="bg-ink" disabled={busy} onClick={() => game.findFight()} delay={100} />
                 <MenuItem index="02" label="Play a friend" hint="Make a room or join one with a code" color="hover:bg-p2" bar="bg-p2" disabled={busy} onClick={() => setMode('friend')} delay={180} />
                 <MenuItem index="03" label="Practice vs CPU" hint="Fight the computer on this screen" color="hover:bg-hp" bar="bg-hp" disabled={busy} onClick={() => run(() => game.practice())} delay={260} />
@@ -93,11 +93,11 @@ export function TitleScreen() {
                 <MenuItem index="05" label="Leaders" hint="See every fighter's record" color="hover:bg-paper" bar="bg-paper" disabled={busy} onClick={() => setMode('leaderboard')} delay={420} />
               </nav>
             ) : mode === 'friend' ? (
-              <div className="animate-rise flex w-full max-w-md flex-col gap-[clamp(0.3rem,1vh,0.5rem)]">
+              <div className="animate-rise flex w-full max-w-[31rem] flex-col gap-[clamp(0.3rem,1vh,0.5rem)]">
                 <p className="font-cond text-sm font-bold uppercase tracking-[0.3em] text-paper/60">Play a friend</p>
                 <MenuItem index="A" label="Create a room" hint="Get a code to send to your friend" color="hover:bg-p1" bar="bg-p1" disabled={busy} onClick={() => run(() => game.host())} delay={0} />
                 <MenuItem index="B" label="Join with a code" hint="Type the code your friend sent you" color="hover:bg-p2" bar="bg-p2" disabled={busy} onClick={() => setMode('join')} delay={60} />
-                <MenuItem index="C" label="Watch a room" hint="Show a room's fight on this screen, no camera" color="hover:bg-paper" bar="bg-paper" disabled={busy} onClick={() => setMode('watch')} delay={120} />
+                <MenuItem index="C" label="Watch a room" hint="Show a fight here, like a TV" color="hover:bg-paper" bar="bg-paper" disabled={busy} onClick={() => setMode('watch')} delay={120} />
                 <TextButton className="mt-1 self-start" onClick={() => setMode('pick')}>← Back</TextButton>
               </div>
             ) : mode === 'join' || mode === 'watch' ? (
@@ -235,7 +235,7 @@ function MenuItem(props: { index: string; label: string; hint: string; color: st
   // The primary action is filled in, so it's the obvious first click; its hint always shows (it says what it does).
   const fill = primary ? 'bg-p1 text-ink' : 'bg-ink-3';
   const muted = primary ? 'text-ink/60' : 'text-paper/45';
-  const hintColor = primary ? 'text-ink/75' : 'text-paper/50 [@media(max-height:680px)]:hidden';
+  const hintColor = primary ? 'text-ink/75' : 'text-paper/50 [@media(max-height:620px)]:hidden';
   return (
     <button
       disabled={disabled}

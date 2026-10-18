@@ -29,15 +29,13 @@ function noPageErrors(page) {
   assert.deepEqual(page.log.errors, [], "uncaught page errors");
 }
 
-await test("title: loads with Find a fight, Play a friend and the tools links", async () => {
+await test("title: loads with Find a fight and Play a friend", async () => {
   const page = await open(browser, URL_);
   note(`load event after ${page.log.loadMs} ms`);
   const t = await text(page);
   assert.match(t, /BRAWL\s*EGLE/i);
   await page.getByRole("button", { name: /Find a fight/ }).waitFor();
   await page.getByRole("button", { name: /Play a friend/ }).waitFor();
-  assert.equal(await page.getByRole("link", { name: "Move tester" }).getAttribute("href"), "/tuner/");
-  assert.equal(await page.getByRole("link", { name: "Scan test" }).getAttribute("href"), "/scan/");
   assert.match(await page.title(), /\S/, "page has no <title>");
   await shot(page, "title");
   noPageErrors(page);
@@ -45,11 +43,10 @@ await test("title: loads with Find a fight, Play a friend and the tools links", 
   await page.context().close();
 });
 
-await test("title: tools links open the tuner and scan pages, and browser back returns", async () => {
+await test("tools: the tuner and scan pages still load (no links on the title any more), and browser back returns", async () => {
   const page = await open(browser, URL_);
-  for (const [name, path, heading] of [["Move tester", "/tuner/", /Start camera/], ["Scan test", "/scan/", /360° scan/]]) {
-    await page.getByRole("link", { name }).click();
-    await page.waitForURL(`**${path}`);
+  for (const [path, heading] of [["/tuner/", /Start camera/], ["/scan/", /360° scan/]]) {
+    await page.goto(`${BASE}${path}`);
     assert.match(await text(page), heading);
     await page.goBack();
     await page.getByRole("button", { name: /Find a fight/ }).waitFor();

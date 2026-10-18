@@ -99,12 +99,12 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
 
           <h2
             className={`max-w-full break-words font-display text-3xl uppercase leading-[0.9] tracking-tighter ${
-              player.status === 'forging' && player.forge ? 'sm:text-4xl lg:text-5xl' : 'sm:text-7xl lg:text-8xl'
+              player.status === 'forging' && player.forge ? 'sm:text-4xl lg:text-5xl' : 'sm:text-7xl lg:text-8xl [@media(max-height:720px)]:sm:!text-6xl'
             } ${
               right ? 'animate-in-r' : 'animate-in-l'
             } [animation-delay:80ms]`}
           >
-            {busy ? player.name : `Player ${right ? 2 : 1}`}
+            {busy ? player.name : quick && remote && !watching ? 'Opponent' : `Player ${right ? 2 : 1}`}
           </h2>
 
           {busy && (
@@ -198,7 +198,7 @@ function QuickSearch({ right, found, searching }: { right: boolean; found: boole
         <p className="font-cond text-2xl font-bold uppercase tracking-[0.12em] text-hp">Opponent found! Getting their fighter ready</p>
       ) : searching ? (
         <>
-          <p data-testid="searching" className="flex items-center gap-3 font-display text-3xl uppercase tracking-tight sm:text-4xl">
+          <p data-testid="searching" className="flex items-center gap-3 whitespace-nowrap font-display text-2xl uppercase tracking-tight sm:text-3xl">
             <Radar />
             Looking for an opponent<span className="animate-blink">…</span>
           </p>

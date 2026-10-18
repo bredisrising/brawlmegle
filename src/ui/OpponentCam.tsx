@@ -4,7 +4,7 @@ import { setCamHidden, useGameStore } from '../game/store';
 import { ACCENT } from './accent';
 
 /**
- * The opponent's camera, Omegle style: a framed picture on their side of the screen, under their health bar, in their
+ * The opponent's camera, Omegle style: a framed picture in the bottom-right corner, in their
  * color. "Hide my camera" (here in the lobby and on the K.O. screen, and in the Esc menu) stops it both ways, and the
  * frame says who hid. While this laptop's camera goes out, a LIVE line says so.
  */
@@ -26,15 +26,16 @@ export function OpponentCam() {
   if (screen !== 'game' && screen !== 'client') return null;
   const view = camView({ camHidden, opponentCamHidden, opponentVideo, camSending });
   const accent = ACCENT[opponent];
-  const right = opponent === 'p2' || screen === 'client';
+  // Bottom right (above the menu chips), whoever the opponent is: clear of the HUD, the combo counter (28% down, on
+  // the attacker's side), this laptop's own camera (bottom left) and the fighters. The client's waiting screen: top right.
   // The toggle sits on the frame outside the round; mid-round it's in the Esc menu (no stray clicks mid-punch).
   const toggle = phase === 'lobby' || phase === 'ko';
-  const place = screen === 'client' ? 'right-6 top-6 sm:right-10' : `top-[5.75rem] sm:top-[8.25rem] ${right ? 'right-3 sm:right-8' : 'left-3 sm:left-8'}`;
+  const place = screen === 'client' ? 'right-6 top-6 flex-col sm:right-10' : 'bottom-[5.5rem] right-3 flex-col-reverse sm:right-4';
 
   return (
     <div
       data-testid="opponent-cam"
-      className={`pointer-events-none fixed z-30 flex w-[clamp(9rem,15vw,14rem)] flex-col gap-1 ${right ? 'items-end' : 'items-start'} ${place} animate-rise`}
+      className={`pointer-events-none fixed z-30 flex w-[clamp(9rem,15vw,14rem)] items-end gap-1 ${place} animate-rise`}
     >
       <div className={`cut w-full ${accent.bg} p-[3px] [--cut:10px]`}>
         <div className="cut relative aspect-[4/3] overflow-hidden bg-ink [--cut:8px]">
@@ -48,19 +49,19 @@ export function OpponentCam() {
               </span>
             </div>
           )}
-          <span className={`absolute top-0 ${right ? 'right-0' : 'left-0'} ${accent.bg} px-2 py-0.5 font-display text-xs text-ink`}>{accent.tag}</span>
+          <span className={`absolute top-0 right-0 ${accent.bg} px-2 py-0.5 font-display text-xs text-ink`}>{accent.tag}</span>
           {ready && (
-            <span className={`absolute bottom-0 inset-x-0 truncate bg-gradient-to-t from-ink/90 to-transparent px-2 pt-4 pb-1 font-display text-sm uppercase tracking-tight ${right ? 'text-right' : ''}`}>
+            <span className={`absolute bottom-0 inset-x-0 truncate bg-gradient-to-t from-ink/90 to-transparent px-2 pt-4 pb-1 font-display text-sm uppercase tracking-tight text-right`}>
               {name}
             </span>
           )}
         </div>
       </div>
-      <div className={`flex flex-wrap items-center gap-x-2 gap-y-1 ${right ? 'justify-end' : ''}`}>
+      <div className={`flex flex-wrap items-center gap-x-2 gap-y-1 justify-end`}>
         {view.sending && (
           <span className="flex items-center gap-1.5 bg-ink/85 px-2 py-1 font-cond text-[10px] font-bold uppercase tracking-[0.15em] text-paper/80" title="Your opponent sees a small copy of your camera">
             <span className="animate-blink size-1.5 rounded-full bg-dmg" />
-            Your camera is visible to your opponent
+            Opponent sees your camera
           </span>
         )}
         {toggle && (
