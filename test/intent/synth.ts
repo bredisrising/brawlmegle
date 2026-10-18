@@ -277,7 +277,22 @@ const MOVES: Move[] = [
   knee(true), knee(false), kick(true), kick(false), jump, duck, slip(true), slip(false),
   fidget(true), fidget(false), slowReach(true), walk, bounce, wave(false), scratch(true), twist(true), twist(false), handsDown,
 ];
-const BY_NAME = new Map(MOVES.map((m) => [m.name, m]));
+/** The super: both fists raised up over the head together and held a moment (a power-up pose). Only with `only`. */
+const superPush: Move = {
+  name: 'super', kind: 'negative', ms: 900,
+  pose: (p, amp, R) => {
+    // Up fast, hold, back down.
+    const k = (p < 0.25 ? smooth(p / 0.25) : p < 0.7 ? 1 : 1 - smooth((p - 0.7) / 0.3)) * amp;
+    const up = (l: boolean): Record<string, V> => ({
+      [side('Wrist', l)]: lerp3(R[side('Wrist', l)], [sx(l) * 0.07, 1.9, 0.12], k),
+      [side('Elbow', l)]: lerp3(R[side('Elbow', l)], [sx(l) * 0.2, 1.72, 0.08], k),
+    });
+    return { ...up(true), ...up(false) };
+  },
+};
+/** Moves outside the random mix (they'd change the eval baselines), for scripts that ask for them by name. */
+const EXTRA: Move[] = [superPush];
+const BY_NAME = new Map([...MOVES, ...EXTRA].map((m) => [m.name, m]));
 const COMBOS: string[][] = [
   ['jab', 'cross'], ['jab', 'jab', 'cross'], ['hookL', 'upperR'], ['cross', 'hookL'], ['upperL', 'hookR'],
   ['jab', 'cross', 'hookL'], ['hookR', 'hookL'], ['cross', 'jab'], ['jab', 'jab'],
@@ -379,7 +394,7 @@ export function synthesize(options: SynthOptions = {}): { frames: (PoseFrame | {
     const p = project(restShaped[j]);
     return p.x > 0 && p.x < 1 && p.y > 0 && p.y < 1;
   });
-  const pool = MOVES.filter((m) => (!only || only.includes(m.name)) && !((sitting || !feetVisible) && m.standingOnly))
+  const pool = (only ? [...MOVES, ...EXTRA] : MOVES).filter((m) => (!only || only.includes(m.name)) && !((sitting || !feetVisible) && m.standingOnly))
     .map((m) => (sitting && m === duck ? seatedDuck : m));
 
   // Script: random moves with random gaps, speeds and sizes; some fast combos.

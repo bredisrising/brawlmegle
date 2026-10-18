@@ -205,6 +205,7 @@ export class IntentReader {
     const intents: Intent[] = [];
     for (const name of LIMB_NAMES) this.updateLimb(name, body, intents);
     this.bothArmsTogether(body.t, intents);
+    this.superPush(body, intents);
     this.updateCore(body, intents);
     return { commands: toCommands(this.player, intents), stance: this.stance, intents, body, debug: this.debug };
   }
@@ -222,10 +223,8 @@ export class IntentReader {
       const other = PARTNER[name];
       const otherNow = out.some((x) => x.kind === 'strike' && x.limb === other);
       if (!movedTogether(this.limbs[name].peak, this.limbs[other], t, otherNow)) continue;
-      const special = (name === 'armL' || name === 'armR') && this.isSpecial(name, other);
       out.splice(i, 1, { kind: 'cancel', limb: name, t, reason: 'both hands moved' });
       this.limbs[name].phase = 'idle';
-      if (special) out.push({ kind: 'special', t });
       if (otherNow) {
         const j = out.findIndex((x) => x.kind === 'strike' && x.limb === other);
         out.splice(j, 1, { kind: 'cancel', limb: other, t, reason: 'both hands moved' });
@@ -235,25 +234,38 @@ export class IntentReader {
     }
   }
 
+  /** Since when both fists have been up over the head together (the super's power pose), and if it already fired. */
+  private overheadSince = -1;
+  private overheadFired = false;
+
   /**
-   * Both arms just made the same move: is it the super's push (a Hadouken), rather than the body or camera moving?
-   * The hands end close together, out in front around chest height or above (not dropping), and both arms reached
-   * well out from where they started. The engine ignores it without a full meter, so a rare false one costs nothing.
+   * The super: both fists raised over the head, close together, held for a moment (a power-up pose). Clear to a
+   * webcam from any angle, sitting or standing, and rare by accident mid-fight. Fires once per raise; the
+   * resolver only turns it into a fireball with a full meter, so a stray one costs nothing.
    */
-  private isSpecial(name: LimbName, other: LimbName) {
-    const body = this.body;
-    if (!body) return false;
-    const a = this.limbs[name];
-    const b = this.limbs[other];
-    const tipA = a.peakTip;
-    const tipB = b.phase === 'onset' ? body.points[other === 'armL' ? LM.lWrist : LM.rWrist].p : b.peakTip;
-    const together = Math.hypot(tipA.x - tipB.x, tipA.y - tipB.y) < 0.75;
-    const shoulderY = (body.points[LM.lShoulder].p.y + body.points[LM.rShoulder].p.y) / 2;
-    const chestHigh = (tipA.y + tipB.y) / 2 > shoulderY - 0.9;
-    const travel = a.peak;
-    const notDropping = travel.y > -0.25 * Math.hypot(travel.x, travel.y, travel.z);
-    const far = a.peakDisp > 0.55;
-    return together && chestHigh && notDropping && far;
+  private superPush(body: Body, out: Intent[]) {
+    const nose = body.points[LM.nose].p;
+    const lw = body.points[LM.lWrist];
+    const rw = body.points[LM.rWrist];
+    const le = body.points[LM.lElbow];
+    const re = body.points[LM.rElbow];
+    const up = lw.p.y > nose.y + 0.15 && rw.p.y > nose.y + 0.15;
+    const together = Math.hypot(lw.p.x - rw.p.x, lw.p.y - rw.p.y) < 1.1;
+    // Seated close to a laptop the fists leave the top of the frame: then the elbows (up by the head, hands above
+    // them) have to be seen instead.
+    const seen = Math.min(lw.visibility, rw.visibility) > 0.4
+      || (Math.min(le.visibility, re.visibility) > 0.5 && le.p.y > nose.y - 0.25 && re.p.y > nose.y - 0.25 && lw.p.y > le.p.y && rw.p.y > re.p.y);
+    if (!(up && together && seen)) {
+      // Re-arm once the hands come back down below the face (a guard holds them about there).
+      if (lw.p.y < nose.y && rw.p.y < nose.y) this.overheadFired = false;
+      this.overheadSince = -1;
+      return;
+    }
+    if (this.overheadSince < 0) this.overheadSince = body.t;
+    if (!this.overheadFired && body.t - this.overheadSince >= SUPER_HOLD_MS) {
+      out.push({ kind: 'special', t: body.t });
+      this.overheadFired = true;
+    }
   }
 
   private updateLimb(name: LimbName, body: Body, out: Intent[]) {
@@ -639,6 +651,9 @@ function raisedOverHead(body: Body, end: Vec3, travel: Vec3, elbow: Vec3, should
  * Both hands moving the same way at the same time is the body (or the tracking) moving, not two punches:
  * ducking or twisting with the guard up, or MediaPipe jumping the whole skeleton for a frame.
  */
+/** How long both fists must stay up over the head for the super (ms). */
+const SUPER_HOLD_MS = 250;
+
 function movedTogether(travel: Vec3, other: LimbState, t: number, otherStruckNow = false) {
   const busy = otherStruckNow || other.phase === 'onset' || (other.phase === 'recover' && t - other.since < 100);
   if (!busy) return false;

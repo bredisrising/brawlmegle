@@ -94,7 +94,7 @@ function SuperMeter({ value, right, color }: { value: number; right: boolean; co
       </div>
       {full && (
         <span className="animate-slam whitespace-nowrap bg-paper px-1.5 font-display text-[0.65rem] uppercase leading-tight text-ink sm:text-xs">
-          Super! both hands out
+          Super! fists up high
         </span>
       )}
     </div>
