@@ -103,7 +103,8 @@ After a camera or scan error you land on fighter-select step 01 and have to clic
 ## Performance
 
 Measured in headless Chromium on software GL (SwiftShader) in WSL, so frame rates are a floor, not what a laptop GPU gets.
-- Title: load event ~0.3–1.0 s, DOMContentLoaded under 1 s.
+- Title: load event 0.3–1.3 s; 3 requests, 1.17 MB transferred (almost all one JS bundle). No code splitting, so the title waits on three.js and MediaPipe's JS too.
+- Fight as demo → in the arena: ~4 s (camera + MediaPipe lite + rigged.glb).
 - Forge API: 15–100 ms per GET; `/api/fighters` ~3 KB. Fighter assets: card PNG ~1.4 MB, sheet ~1.4 MB, rigged GLB ~1.2 MB (the card shown on Welcome back is a 1.4 MB PNG; a small JPEG thumbnail would load faster on venue Wi-Fi).
 - Arena with demo's fighter and the camera running: ~1–2 fps here (MediaPipe on the CPU plus three.js on SwiftShader).
 - Console: no uncaught page errors on any screen. Warnings are only SwiftShader's "GPU stall due to ReadPixels". No 4xx/5xx in the network log on the normal flow (the 404s seen were the deliberate bad requests).
