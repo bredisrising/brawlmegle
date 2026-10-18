@@ -21,6 +21,7 @@ import { Walkout } from './ui/Walkout';
 import { GameMenu } from './ui/GameMenu';
 import { Captions } from './ui/Captions';
 import { OpponentCam } from './ui/OpponentCam';
+import { DeleteCodeStrip } from './ui/DeleteCode';
 
 export default function App() {
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -64,6 +65,7 @@ export default function App() {
                 <Walkout />
                 <Captions />
                 <DebugHint />
+                {role !== 'spectator' && <DeleteCodeStrip />}
               </>
             )}
             <DebugEffects />

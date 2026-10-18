@@ -18,6 +18,8 @@ export function KOOverlay() {
   const quick = useGameStore((s) => s.quick);
   const votes = useGameStore((s) => s.votes);
   const nextAt = useGameStore((s) => s.nextAt);
+  // A fresh forge's delete code, not yet dismissed, takes the tips' place (they're back after "Got it").
+  const deleteCode = useGameStore((s) => s.deleteCode !== null);
   // A human on the other laptop (not the CPU, which always says yes).
   const human = useGameStore((s) => s.connection === 'open');
   if (phase !== 'ko') return null;
@@ -73,8 +75,7 @@ export function KOOverlay() {
           {role === 'host' && !quick && <TextButton onClick={() => game.changeFighter()}>Change fighter</TextButton>}
           <TextButton onClick={() => game.toTitle()}>Title</TextButton>
         </div>
-        {role !== 'spectator' && <Tips width="max-w-3xl" className="bg-ink/70 px-3 py-2" />}
-        {role !== 'spectator' && <DeleteCode />}
+        {role !== 'spectator' && (deleteCode ? <DeleteCode layout="row" /> : <Tips width="max-w-3xl" className="bg-ink/70 px-3 py-2" />)}
       </div>
     </div>
   );

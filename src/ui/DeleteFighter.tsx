@@ -58,9 +58,9 @@ export function MyFighters({ fighters, onDeleted }: { fighters: ForgedFighter[];
     onDeleted(id);
   };
   return (
-    <section aria-label="Your fighters" className="shrink-0 border-t-2 border-paper/15 pt-3">
+    <section aria-label="Your fighters" className="w-full shrink-0 border-t-2 border-paper/15 pt-3">
       <p className="font-cond text-xs font-extrabold uppercase tracking-[0.25em] text-paper/50">Scanned in this browser</p>
-      <ul className="mt-2 flex max-h-[min(14rem,28vh)] flex-col gap-2 overflow-y-auto pr-1">
+      <ul className="mt-2 flex max-h-[min(13rem,30vh)] flex-col gap-1.5 overflow-y-auto pr-1">
         {owned.map((o) => (
           <OwnedRow key={o.id} owned={o} fighter={fighters.find((f) => f.id === o.id)} onDeleted={deleted} />
         ))}
@@ -87,9 +87,9 @@ function OwnedRow({ owned, fighter, onDeleted }: { owned: OwnedFighter; fighter?
   };
 
   return (
-    <li data-owned={owned.id} className="flex flex-col gap-3 bg-ink-2 p-3">
+    <li data-owned={owned.id} className="flex flex-col gap-3 bg-ink-2 p-2.5">
       <div className="flex items-center gap-3">
-        <span className="relative block h-14 w-11 shrink-0 overflow-hidden bg-ink-3">
+        <span className="relative block h-12 w-9 shrink-0 overflow-hidden bg-ink-3">
           {fighter?.cardUrl ? (
             <img src={fighter.cardUrl} alt="" className="size-full object-cover object-[50%_8%]" />
           ) : (

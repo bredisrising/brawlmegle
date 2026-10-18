@@ -322,9 +322,11 @@ function RosterStep({ player }: { player: PlayerId }) {
   }
 
   return (
-    <div className="grid min-h-0 flex-1 gap-6 pt-6 md:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] md:gap-10">
+    // "Scanned in this browser" (delete my fighter) sits under the preview on wide screens, so the tiles keep their
+    // room; on phones (no preview) it goes under the tiles.
+    <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] gap-6 pt-6 [grid-template-areas:'list'_'mine'] md:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] md:gap-x-10 md:gap-y-4 md:[grid-template-areas:'preview_list'_'mine_list']">
       {/* Big preview of the highlighted fighter, character-select style. */}
-      <div className="hidden min-h-0 flex-col md:flex">
+      <div className="hidden min-h-0 flex-col [grid-area:preview] md:flex">
         <p className="animate-in-l font-cond text-sm font-bold uppercase tracking-[0.3em] text-paper/50">{accent.tag} · Memory card</p>
         {preview && (
           <div key={preview.id} className="animate-wipe-r relative mt-3 min-h-0 flex-1 overflow-hidden">
@@ -351,7 +353,7 @@ function RosterStep({ player }: { player: PlayerId }) {
         )}
       </div>
 
-      <div className="flex min-h-0 flex-col gap-4">
+      <div className="flex min-h-0 flex-col gap-4 [grid-area:list]">
         <div className="flex items-end justify-between gap-4">
           <h2 className="animate-in-r font-display text-4xl uppercase leading-none tracking-tighter sm:text-6xl">
             Select <span className="text-hp">fighter</span>
@@ -376,8 +378,11 @@ function RosterStep({ player }: { player: PlayerId }) {
             />
           ))}
         </div>
+      </div>
+
+      <div className="flex min-w-0 flex-col items-start gap-3 [grid-area:mine]">
         <MyFighters fighters={fighters} onDeleted={deleted} />
-        <DeleteWithCode className="shrink-0 self-start" onDeleted={deleted} />
+        <DeleteWithCode onDeleted={deleted} />
       </div>
     </div>
   );
