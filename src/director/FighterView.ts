@@ -9,6 +9,7 @@ import { LivePoseMapper } from './livePose';
 import { SkeletonPose } from './skeletonPose';
 import { quality } from './quality';
 import { HIP_HEIGHT, applyAction, stance, type HitInfo, type Motion } from './fightPose';
+import { Ragdoll } from './ragdoll';
 
 /** What the view needs each sim tick. */
 export type ViewInput = {
@@ -81,12 +82,15 @@ export class FighterView {
   /** This tick, the striking arm is following the player's real arm (so no coil-back tell on top). */
   private followingLive = false;
   private tellHand: Hand = 'R';
-  private koTime = 0;
   private wonTime = 0;
   private introTime = 0;
   /** Breathing clock for the beaten-up idle (keeps running). */
   private hurtClock = 0;
   private hit: HitInfo | null = null;
+  /** The last blow that landed, which throws the body when it's the K.O. */
+  private lastBlow: HitInfo | null = null;
+  /** A K.O.'d fighter is a ragdoll, not an animation. */
+  private readonly ragdoll = new Ragdoll();
   /** Called once when a K.O.'d body hits the floor (world point), for the dust. */
   onLand: ((at: THREE.Vector3) => void) | null = null;
   private flash = 0;
@@ -189,8 +193,9 @@ export class FighterView {
 
   /** Back to a fresh fighter (rematch). */
   reset() {
-    this.koTime = this.wonTime = 0;
-    this.hit = null;
+    this.wonTime = 0;
+    this.hit = this.lastBlow = null;
+    this.ragdoll.active = false;
     this.tellAt = -1;
     this.flash = 0;
     this.lastX = null;
@@ -229,11 +234,24 @@ export class FighterView {
     this.slip = approach(this.slip, state.evade === 'slip' ? (state.evadeDir === 'R' ? -1 : 1) : 0, dt, state.evade === 'slip' ? 22 : 9);
     // The tell lasts through the strike's startup (a player's arm keeps following theirs while the engine ramps in).
     if ((state.phase !== 'idle' && state.phase !== 'startup') || this.time - this.tellAt > 0.6) this.tellAt = -1;
-    const wasFalling = this.koTime > 0 && this.koTime < 0.62;
-    this.koTime = state.phase === 'ko' ? this.koTime + dt : 0;
-    if (wasFalling && this.koTime >= 0.62) this.onLand?.(this.worldJoint('neck').setY(0.02));
     this.wonTime = opponentKo && state.phase !== 'ko' ? this.wonTime + dt : 0;
     if (state.phase !== 'hitstun') this.hit = null;
+
+    // K.O.: limp from the pose on screen, thrown by the last blow, drawn every frame (physics doesn't go on twos).
+    if (state.phase === 'ko') {
+      if (!this.ragdoll.active) {
+        this.body.updateMatrix();
+        this.ragdoll.start(this.pose, this.body.matrix, this.lastBlow);
+      }
+      if (this.ragdoll.step(dt)) this.onLand?.(this.worldJoint('neck').setY(0.02));
+      this.ragdoll.write(this.pose, this.body);
+      this.shownPhase = 'ko:';
+      this.show();
+      this.updateReveal(dt);
+      this.updateFlash(dt);
+      return;
+    }
+    this.ragdoll.active = false;
 
     stance(this.target, this.time, this.guardAmt, this.step, this.stepPhase, this.id === 'p1' ? 1 : -1);
     this.followingLive = false;
@@ -244,7 +262,6 @@ export class FighterView {
         state,
         reach: (distance * FIGHT_LINE_SCALE) / FIGHTER_SCALE,
         hit: this.hit,
-        koTime: this.koTime,
         won: this.wonTime,
         duck: this.duck,
         slip: this.slip,
@@ -275,8 +292,13 @@ export class FighterView {
     // Smooth mode eases a little to hide the odd pop (a strike cut off by a hit); stepped mode pops on purpose.
     for (const j of JOINTS) this.pose[j].lerp(this.target[j], stepped ? 1 : 0.6);
     this.body.position.set(0, this.motion.lift, this.motion.lunge);
-    this.body.rotation.x = this.motion.tilt;
+    this.body.rotation.set(this.motion.tilt, 0, 0);
+    this.show();
+    this.updateFlash(dt);
+  }
 
+  /** Put the shown pose on the model (or the placeholder). */
+  private show() {
     this.applyPose(this.pose);
     if (this.skeleton) {
       this.skeleton.apply(this.pose);
@@ -286,7 +308,6 @@ export class FighterView {
     } else {
       this.applyDefaultModelPose(this.pose);
     }
-    this.updateFlash(dt);
   }
 
   /** React to a fight event that hit (or was blocked by) this fighter. `by` is the attacker's state at the time. */
@@ -294,6 +315,7 @@ export class FighterView {
     if (event.type === 'hit' || event.type === 'counter') {
       const strength = Math.min(1.4, Math.max(0.5, (event.damage ?? 5) / 10)) * (event.type === 'counter' ? 1.25 : 1);
       this.hit = { move: event.move, hand: by?.hand, height: by?.height, strength };
+      this.lastBlow = this.hit;
       this.flash = event.type === 'counter' ? 1 : 0.7;
       this.forceStep = true;
     } else if (event.type === 'blocked') {

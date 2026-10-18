@@ -56,8 +56,6 @@ export type ActionInput = {
   /** Center-to-center distance to the opponent, in this fighter's local units. */
   reach: number;
   hit: HitInfo | null;
-  /** Seconds since this fighter was K.O.'d, or since the opponent was (victory), else 0. */
-  koTime: number;
   won: number;
   /** 0..1 smoothed evades (the view eases them in and out). */
   duck: number;
@@ -198,9 +196,7 @@ export function applyAction(pose: Pose, input: ActionInput, motion: Motion): Pos
     lean(pose, -0.035 * r);
     motion.tilt -= 0.05 * r;
   }
-
-  if (state.phase === 'ko') knockedOut(pose, input.koTime, motion);
-  else if (input.won > 0) victory(pose, input.won, input.lead, motion);
+  if (input.won > 0) victory(pose, input.won, input.lead, motion);
   return pose;
 }
 
@@ -368,24 +364,6 @@ function react(pose: Pose, hit: HitInfo, p: number, motion: Motion) {
     lean(pose, -0.1 * r);
     motion.tilt -= 0.17 * r;
   }
-}
-
-/** Knees buckle, then a fall onto the back with a small bounce, arms out. */
-function knockedOut(pose: Pose, t: number, motion: Motion) {
-  const buckle = smooth(t / 0.22);
-  const fallT = clamp01((t - 0.12) / 0.5);
-  // Gravity: accelerate into the floor, then a little bounce.
-  const fall = fallT < 1 ? easeIn(fallT) : 1;
-  const bounce = t > 0.62 ? Math.max(0, Math.sin(((t - 0.62) / 0.25) * Math.PI)) * 0.06 * Math.max(0, 1 - (t - 0.62) * 2) : 0;
-  crouch(pose, 0.09 * buckle * (1 - fall));
-  for (const s of [1, -1] as const) {
-    const [elbow, wrist] = s === 1 ? (['lElbow', 'lWrist'] as const) : (['rElbow', 'rWrist'] as const);
-    pose[wrist].lerp(tA.set(s * 0.32, 0.72, -0.02), fall);
-    pose[elbow].lerp(tA.set(s * 0.22, 0.75, -0.01), fall);
-  }
-  pose.head.z -= 0.03 * fall;
-  motion.tilt = -(Math.PI / 2 - 0.06) * fall + bounce;
-  motion.lift = 0.07 * fall;
 }
 
 /**
