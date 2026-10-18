@@ -8,7 +8,8 @@
     "build": "tsc && vite build",
     "typecheck": "tsc",
     "preview": "vite preview",
-    "test:p2p": "node test/p2p.mjs"
+    "test:p2p": "node test/p2p.mjs",
+    "test:e2e": "node test/e2e/run.mjs"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.1.1",

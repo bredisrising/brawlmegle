@@ -22,6 +22,26 @@ In dev, press `1` / `2` to fake a hit on P1 / P2 (hold Shift for a counter). Tha
 
 To try a basic 3D avatar, select **Host → Choose existing → default**. This built-in low-poly human uses a static boxing guard pose (no rig or animations yet). Its model is `public/models/default.glb`; regenerate it with `node scripts/create-default-avatar.mjs`.
 
+## End-to-end tests
+
+`npm run test:e2e` drives the live site (https://54-149-60-196.sslip.io) in headless Chromium with a fake webcam, like a stranger would: every screen and button, username validation, Welcome back, the roster, camera denied / missing / nobody in view, the forge API with bad input, the matchmaker smoke test, and the hosted tuner and scan pages. It never starts a paid forge unless asked. Results print as `ok`, `FAIL`, or `KNOWN` (a reported issue in `research/e2e-report.md`, which doesn't fail the run unless `E2E_STRICT=1`). Screenshots go to `research/e2e-shots/`.
+
+```sh
+npx playwright install chromium-headless-shell   # once
+(cd matchmaker && npm install)                    # once, for the matchmaker smoke test
+npm run test:e2e                                  # api, matchmaker, ui, camera, tools (~10 min)
+npm run test:e2e -- api ui                        # just some files
+
+# A person on the fake webcam (the scan page then has to capture front/left/right):
+ffmpeg -i turn.mp4 -vf scale=640:480 -pix_fmt yuv420p -r 30 turn.y4m
+E2E_VIDEO=$PWD/turn.y4m npm run test:e2e -- tools
+
+# One real scan + forge through the game (spends OpenAI + Tripo credits):
+E2E_PAID=1 E2E_VIDEO=$PWD/turn.y4m npm run test:e2e -- forge-live
+```
+
+`E2E_BASE` points it at another deployment (e.g. `http://localhost:5173`), `CHROME_PATH` at another Chrome. MediaPipe runs at a few fps on the software GL in headless Chrome, so the suite uses `?pose=lite` and waits patiently.
+
 ## Docs
 
 - [SPEC.md](SPEC.md): the full design.
