@@ -57,6 +57,8 @@ export class Game {
   /** CPU opponents by slot: they play through the same engine commands and stance a player's reader produces. */
   private readonly cpu: Partial<Record<PlayerId, Cpu>> = {};
   private fightTicks = 0;
+  /** Practice mode: the CPU level to bring in for P2 once the local player is ready. */
+  private practiceLevel: CpuLevel | null = null;
   /** Seconds left in the round (the store shows it rounded up). */
   private clock = ROUND_SECONDS;
   private hostSession: HostSession | null = null;
@@ -127,6 +129,12 @@ export class Game {
     useGameStore.setState({ role: 'host', roomCode: code || null, screen: 'avatar' });
   }
 
+  /** Title screen: "Practice". Hosts as usual (a friend can still join), and P2 is a CPU once P1 is ready. */
+  async practice(level: CpuLevel = 'normal') {
+    this.practiceLevel = level;
+    await this.host();
+  }
+
   /** Title screen: "Connect" with a room code. */
   async join(code: string) {
     if (config.signalUrl) {
@@ -165,7 +173,7 @@ export class Game {
   async addCpuPlayer(id: PlayerId, level: CpuLevel = 'normal') {
     updatePlayer(id, { name: 'CPU', status: 'forging', statusDetail: 'Picking a fighter' });
     const opponent = useGameStore.getState().players[opponentOf(id)].name.toLowerCase();
-    const pool = (await fetchServerFighters()).filter((f) => f.glbUrl && f.name.toLowerCase() !== opponent);
+    const pool = (await fetchServerFighters(undefined, 10_000)).filter((f) => f.glbUrl && f.name.toLowerCase() !== opponent);
     const pick = pool[Math.floor(Math.random() * pool.length)];
     const fighter: ForgedFighter = pick ?? { id: 'cpu', name: 'Sparring Bot', status: 'ready', glbUrl: `${import.meta.env.BASE_URL}models/default.glb` };
     this.input.unassign(id);
@@ -249,6 +257,9 @@ export class Game {
       updatePlayer(id, { status: 'ready', statusDetail: '', portraitUrl: fighter.cardUrl ?? null });
       this.fighters[id] = fighter;
       this.sendMatch();
+      // Practice: bring in the CPU as soon as the player is set (unless someone's already in P2).
+      const p2 = useGameStore.getState().players.p2;
+      if (this.practiceLevel && id === 'p1' && p2.status === 'waiting') return void this.addCpuPlayer('p2', this.practiceLevel);
 
       const { players } = useGameStore.getState();
       if (PLAYER_IDS.every((p) => players[p].status === 'ready')) this.startCountdown();
