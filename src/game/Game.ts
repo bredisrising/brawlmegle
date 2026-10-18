@@ -2,6 +2,7 @@ import { Renderer } from '../director/Renderer';
 import * as THREE from 'three';
 import { Effects, type EffectKind } from '../director/Effects';
 import { FighterView } from '../director/FighterView';
+import { Sfx } from '../director/Sfx';
 import { Cpu, type CpuLevel } from '../fight/Cpu';
 import { FightEngine } from '../fight/FightEngine';
 import { Resolver } from '../fight/Resolver';
@@ -64,6 +65,10 @@ export class Game {
   /** Client: the host's latest fight frame, and which fighter models are showing. */
   private mirrored: MirrorFrame | null = null;
   private readonly mirrorShown: Partial<Record<PlayerId, string>> = {};
+  readonly sfx = new Sfx();
+  /** Each fighter's phase last tick, to hear a strike come out (whoosh) on both laptops. */
+  private readonly heardPhase: Partial<Record<PlayerId, string>> = {};
+  private readonly unsubscribe: () => void;
   private accumulator = 0;
   private phaseTimer = 0;
   /** Aborted on dispose: stops in-flight scans and forge polling (HMR / unmount), so no camera is left running. */
@@ -79,6 +84,12 @@ export class Game {
     this.renderer.onFrame(this.update);
     this.renderer.start();
     window.addEventListener('keydown', this.onDebugKey);
+    window.addEventListener('keydown', this.onMuteKey);
+    // Countdown beeps, then the "go" (both laptops: the client's store follows the host's countdown).
+    this.unsubscribe = useGameStore.subscribe((s, prev) => {
+      if (s.countdown === prev.countdown || s.countdown === null) return;
+      this.sfx.play(s.countdown === 0 ? 'go' : 'beep');
+    });
   }
 
   /** Current local camera or mock source, for the development pose monitor. */
@@ -166,6 +177,7 @@ export class Game {
   private spawn(id: PlayerId) {
     this.views[id].setVisible(true);
     this.views[id].materialize();
+    this.sfx.play('spawn');
     this.effects.burst(this.views[id].root.position, 'spawn', PLAYER_COLORS[id]);
   }
 
@@ -258,6 +270,8 @@ export class Game {
   dispose() {
     this.lifetime.abort();
     window.removeEventListener('keydown', this.onDebugKey);
+    window.removeEventListener('keydown', this.onMuteKey);
+    this.unsubscribe();
     this.hostSession?.dispose();
     this.client?.dispose();
     for (const id of PLAYER_IDS) {
@@ -337,6 +351,7 @@ export class Game {
     this.sendFrame(stances, frozen);
     if (frozen) return;
     const distance = this.fight.distance();
+    this.hearStrikes({ p1: this.fight.state('p1'), p2: this.fight.state('p2') });
     for (const id of PLAYER_IDS) {
       this.views[id].update({
         state: this.fight.state(id),
@@ -384,6 +399,7 @@ export class Game {
     const point = this.views[defender].worldJoint(by.height === 'body' || event.move === 'knee' ? 'neck' : 'head');
     if (by.height === 'body' || event.move === 'knee') point.y -= 0.08;
     const heavy = event.type === 'counter' || event.damage >= 10;
+    this.sfx.play(ko ? 'ko' : event.type === 'blocked' ? 'blocked' : event.type === 'counter' ? 'counter' : heavy ? 'heavy' : 'hit');
     this.effects.burst(point, event.type === 'blocked' ? 'blocked' : event.type === 'counter' ? 'counter' : 'hit');
     // Punch: impact frames on the big ones, the camera leaning into the hit.
     if (!ko && event.type === 'counter') {
@@ -488,6 +504,7 @@ export class Game {
     if (m.timeLeft !== timeLeft) useGameStore.setState({ timeLeft: m.timeLeft });
     for (const id of PLAYER_IDS) if (players[id].hp !== m.states[id].hp) updatePlayer(id, { hp: m.states[id].hp });
     if (m.frozen && phase === 'fighting') return;
+    this.hearStrikes(m.states);
     for (const id of PLAYER_IDS) {
       this.views[id].update({
         state: m.states[id],
@@ -499,6 +516,23 @@ export class Game {
       });
     }
   }
+
+  /** A strike coming out: a whoosh, heavier for the big ones. */
+  private hearStrikes(states: Record<PlayerId, Readonly<FighterState>>) {
+    for (const id of PLAYER_IDS) {
+      const s = states[id];
+      if (s.phase === 'active' && this.heardPhase[id] !== 'active') {
+        this.sfx.play('whoosh', s.move === 'jab' ? 0.7 : s.move === 'kick' || s.move === 'uppercut' ? 1.3 : 1);
+      }
+      this.heardPhase[id] = s.phase;
+    }
+  }
+
+  /** M mutes / unmutes the fight sounds. */
+  private onMuteKey = (e: KeyboardEvent) => {
+    if (e.code !== 'KeyM' || e.target instanceof HTMLInputElement) return;
+    this.sfx.muted = !this.sfx.muted;
+  };
 
   /** Dev only: press 1 / 2 to fake a hit on P1 / P2 (Shift = counter) until the fight engine exists. */
   private onDebugKey = (e: KeyboardEvent) => {
