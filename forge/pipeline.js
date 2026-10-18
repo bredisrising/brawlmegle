@@ -1,29 +1,53 @@
-// The forge pipeline: scan frames -> brief -> model sheet -> card art (and later the 3D model, in parallel with the card).
-import { BRIEF_PROMPT, sheetPrompt, cardPrompt } from "./prompts.js";
+// The forge pipeline: scan frames -> brief -> model sheet -> card art, next to (back view ->) 3D model -> rig.
+// Settings below were picked in research/forge-quality.md (2026-10-17); every one can be overridden from the env.
+import { BRIEF_PROMPT, STYLE, sheetPrompt, cardPrompt, backPrompt } from "./prompts.js";
 
 const API = "https://api.openai.com/v1";
 const BRIEF_MODEL = process.env.FORGE_BRIEF_MODEL ?? "gpt-5.4-mini";
-// Picked from a head-to-head on 2026-10-17: sunburst follows the style prompt best (18 s at medium), flare is the
-// fastest (12 s) and fine for the card, which runs next to the 3D step anyway. chatgpt-image-latest came out as
-// 2D pixel art, and gpt-image-2 was slower and smoother.
+// Sunburst follows the style prompt best (about 19 s at medium, even at 1536x2304); flare is the fastest (12 s) and
+// fine for the card, which runs next to the 3D step anyway.
 const IMAGE_MODEL = process.env.FORGE_IMAGE_MODEL ?? "gpt-image-2.5-sunburst";
 const CARD_MODEL = process.env.FORGE_CARD_MODEL ?? "gpt-image-2.5-flare";
 const IMAGE_QUALITY = process.env.FORGE_IMAGE_QUALITY ?? "medium";
 /** "high" keeps faces closer to the photos. Only gpt-image-1 models accept it; gpt-image-2 rejects it. */
 const INPUT_FIDELITY = process.env.FORGE_INPUT_FIDELITY ?? "high";
+// FORGE_STYLE=goldsrc brings back the whole previous forge (low-poly sheet, 30k faces, single image), not just the look.
+const GOLDSRC = STYLE === "goldsrc";
+const flag = (name, fallback) => (process.env[name] ?? (fallback ? "1" : "0")) !== "0";
+/**
+ * Tripo only rebuilds the detail the sheet has, so the detailed style draws it at the biggest non-experimental
+ * 2:3 size (about 3 s slower than 1024x1536). The card is only shown small.
+ */
+const SHEET_SIZE = process.env.FORGE_SHEET_SIZE ?? (GOLDSRC ? "1024x1536" : "1536x2304");
+const CARD_SIZE = "1024x1536";
+/** Draw the back of the sheet too and build the model from front + back (multiview): a real back and hair from behind. */
+const MULTIVIEW = flag("FORGE_MULTIVIEW", !GOLDSRC);
 
-
-// --- Tripo (image -> low-poly 3D model -> Mixamo-rigged GLB) ------------------------------------------
+// --- Tripo (model sheet -> textured 3D model -> Mixamo-rigged GLB) ---------------------------------------
 // https://developers.tripo3d.ai/llms.txt. Output URLs expire after 5 minutes, so models are downloaded at once.
 const TRIPO = "https://openapi.tripo3d.ai/v3";
-// Picked from a side-by-side on 2026-10-17: H v3.1 at 30k faces with detailed textures had the best face and hair
-// detail (40 credits, ~67 s); P1 at 6k faces with fast textures was blurry, P1 at 20k detailed cost 60 credits.
 const TRIPO_MODEL = process.env.FORGE_TRIPO_MODEL ?? "v3.1-20260211";
-const FACE_LIMIT = Number(process.env.FORGE_FACE_LIMIT ?? 30000);
+/** Enough for the Ultra geometry's folds and faces; the rigger and the browser handle it fine. */
+const FACE_LIMIT = Number(process.env.FORGE_FACE_LIMIT ?? (GOLDSRC ? 30000 : 60000));
+/** "detailed" is Tripo's Ultra geometry (+20 credits, about +12 s): crisper faces, ears, folds. "standard" saves both. */
+const GEOMETRY_QUALITY = process.env.FORGE_GEOMETRY_QUALITY ?? (GOLDSRC ? "standard" : "detailed");
+/**
+ * Delight strips the lighting out of the sheet before texturing. Off keeps the sheet's painted shading (folds,
+ * brows, cheekbones), which is most of what made the textures look flat. On is Tripo's default.
+ */
+const DELIGHT = flag("FORGE_DELIGHT", GOLDSRC);
 /** v1.0 is Tripo's humanoid (biped) rigger; v3.0-20260909 is newer and opt-in. */
 const RIG_MODEL = process.env.FORGE_RIG_MODEL ?? "v1.0-20240301";
 
-export const models = { brief: BRIEF_MODEL, sheet: IMAGE_MODEL, card: CARD_MODEL, quality: IMAGE_QUALITY, threeD: process.env.TRIPO_API_KEY ? `tripo ${TRIPO_MODEL}, ${FACE_LIMIT} faces + mixamo rig` : "off (no TRIPO_API_KEY)" };
+export const models = {
+  brief: BRIEF_MODEL,
+  sheet: `${IMAGE_MODEL} ${SHEET_SIZE}, ${STYLE} style`,
+  card: CARD_MODEL,
+  quality: IMAGE_QUALITY,
+  threeD: process.env.TRIPO_API_KEY
+    ? `tripo ${TRIPO_MODEL}${MULTIVIEW ? " multiview" : ""}, ${GEOMETRY_QUALITY} geometry, ${FACE_LIMIT} faces, delight ${DELIGHT ? "on" : "off"} + mixamo rig`
+    : "off (no TRIPO_API_KEY)",
+};
 
 async function tripo(path, init = {}, timeoutMs = 60_000) {
   const res = await fetch(TRIPO + path, {
@@ -68,25 +92,33 @@ async function download(url) {
   return Buffer.from(await res.arrayBuffer());
 }
 
-/**
- * Model sheet -> rigged GLB. Returns { model, rigged } as buffers; `rigged` is null if rigging failed, so the
- * game can still use the static model (or its default fighter).
- */
-export async function makeModel(sheet, onStep) {
+async function upload(png) {
   const form = new FormData();
-  form.append("file", new Blob([sheet], { type: "image/png" }), "sheet.png");
-  const { file_token } = await tripo("/files", { method: "POST", body: form });
+  form.append("file", new Blob([png], { type: "image/png" }), "sheet.png");
+  return (await tripo("/files", { method: "POST", body: form })).file_token;
+}
+
+/**
+ * Model sheet (+ its back view, if any) -> rigged GLB. Returns { model, rigged } as buffers; `rigged` is null if
+ * rigging failed, so the game can still use the static model (or its default fighter).
+ */
+export async function makeModel(sheet, onStep, back = null) {
+  const [front, behind] = await Promise.all([upload(sheet), back ? upload(back) : null]);
 
   onStep("model");
-  const gen = await tripoJson("/generation/image-to-model", {
-    input: file_token,
+  const settings = {
     model: TRIPO_MODEL,
     face_limit: FACE_LIMIT,
+    geometry_quality: GEOMETRY_QUALITY,
     texture: true,
     pbr: true,
     texture_version: "v3.5-20260815",
     texture_quality: "detailed",
-  });
+    delight: DELIGHT,
+  };
+  const gen = behind
+    ? await tripoJson("/generation/multiview-to-model", { inputs: [{ front }, { back: behind }], ...settings })
+    : await tripoJson("/generation/image-to-model", { input: front, ...settings });
   const genOut = await tripoWait(gen.task_id);
   const model = await download(genOut.pbr_model_url ?? genOut.model_url);
 
@@ -145,11 +177,11 @@ export async function makeBrief(frames) {
 }
 
 /** Generates a new image from reference images plus a prompt. Returns PNG bytes. */
-export async function editImage(refs, prompt, model = IMAGE_MODEL) {
+export async function editImage(refs, prompt, model = IMAGE_MODEL, size = SHEET_SIZE) {
   const form = new FormData();
   form.append("model", model);
   form.append("prompt", prompt);
-  form.append("size", "1024x1536");
+  form.append("size", size);
   form.append("quality", IMAGE_QUALITY);
   if (INPUT_FIDELITY && model.startsWith("gpt-image-1")) form.append("input_fidelity", INPUT_FIDELITY);
   refs.forEach((ref, i) => form.append("image[]", new Blob([ref.data], { type: ref.type }), `ref${i}.${ref.type.split("/")[1]}`));
@@ -186,8 +218,9 @@ export async function runForge(job, frames, store) {
     // it fails) glbUrl stays empty and the game uses its default fighter.
     job.step = "model";
     store.save();
+    const sheetRef = [{ data: sheet, type: "image/png" }];
     // The card is decoration: if it fails (moderation, timeout), the fighter still ships without one.
-    const cardJob = timed("card", () => editImage([{ data: sheet, type: "image/png" }], cardPrompt(job.brief), CARD_MODEL))
+    const cardJob = timed("card", () => editImage(sheetRef, cardPrompt(job.brief), CARD_MODEL, CARD_SIZE))
       .then((card) => {
         job.cardUrl = store.write("card.png", card);
         store.save();
@@ -196,8 +229,14 @@ export async function runForge(job, frames, store) {
         job.cardError = String(err.message ?? err);
         console.warn("card step failed:", job.cardError);
       });
+    // The back view only sharpens the model: if it fails, the model is built from the front alone.
+    const backView = () =>
+      timed("back", () => editImage(sheetRef, backPrompt()))
+        .then((back) => (store.write("back.png", back), back))
+        .catch((err) => (console.warn("back view failed, building from the front only:", err.message ?? err), null));
     const modelJob = process.env.TRIPO_API_KEY
-      ? timed("model", () => makeModel(sheet, (step) => ((job.step = step), store.save())))
+      ? (MULTIVIEW ? backView() : Promise.resolve(null))
+          .then((back) => timed("model", () => makeModel(sheet, (step) => ((job.step = step), store.save()), back)))
           .then(({ model, rigged }) => {
             job.modelUrl = store.write("model.glb", model);
             if (rigged) job.glbUrl = store.write("rigged.glb", rigged);
