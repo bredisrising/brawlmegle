@@ -82,7 +82,7 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
         </span>
 
         <div
-          className={`relative flex h-full flex-col justify-center gap-6 pt-28 pb-16 ${
+          className={`relative flex h-full flex-col justify-center ${player.status === 'forging' && player.forge ? 'gap-3' : 'gap-6'} pt-28 pb-16 ${
             right ? 'items-end pr-4 pl-14 text-right sm:pr-14 sm:pl-24' : 'items-start pl-4 pr-14 sm:pl-14 sm:pr-24'
           }`}
         >
@@ -97,7 +97,7 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
 
           <h2
             className={`max-w-full break-words font-display text-3xl uppercase leading-[0.9] tracking-tighter ${
-              player.status === 'forging' && player.forge ? 'sm:text-5xl lg:text-6xl' : 'sm:text-7xl lg:text-8xl'
+              player.status === 'forging' && player.forge ? 'sm:text-4xl lg:text-5xl' : 'sm:text-7xl lg:text-8xl'
             } ${
               right ? 'animate-in-r' : 'animate-in-l'
             } [animation-delay:80ms]`}
@@ -106,9 +106,10 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
           </h2>
 
           {busy && (
-            <div className={`animate-rise flex w-full flex-col gap-4 [animation-delay:160ms] ${right ? 'items-end' : 'items-start'}`}>
+            <div className={`animate-rise flex w-full flex-col ${player.forge ? 'gap-3' : 'gap-4'} [animation-delay:160ms] ${right ? 'items-end' : 'items-start'}`}>
               <ForgeSteps status={player.status} color={accent.bg} />
-              <p className="font-cond text-2xl font-bold uppercase tracking-[0.12em] sm:text-3xl">
+              {/* With the live preview up, its own stage line says what's happening: room for a bigger preview. */}
+              <p className={`font-cond text-2xl font-bold uppercase tracking-[0.12em] sm:text-3xl ${player.forge ? 'hidden' : ''}`}>
                 {player.statusDetail}
                 <span className="animate-blink">_</span>
               </p>

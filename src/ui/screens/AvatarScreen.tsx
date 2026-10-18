@@ -328,7 +328,9 @@ function RosterStep({ player }: { player: PlayerId }) {
             {fighters.length} fighters
           </span>
         </div>
-        <div className="grid min-h-0 grid-cols-2 content-start gap-2 overflow-y-auto pr-1 sm:grid-cols-3 lg:grid-cols-4">
+        {/* auto-rows-max: a row keeps its card's full height and the grid scrolls. With plain auto rows, a grid taller than
+            its box squeezed every row (the cards are overflow-hidden, so they could shrink) and the cards overlapped. */}
+        <div className="grid min-h-0 auto-rows-max grid-cols-2 content-start gap-2 overflow-y-auto pr-1 sm:grid-cols-3 lg:grid-cols-4">
           {fighters.map((f, i) => (
             <RosterTile
               key={f.id}

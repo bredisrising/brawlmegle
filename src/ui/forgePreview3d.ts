@@ -12,8 +12,8 @@ import { loadModel } from '../forge/models';
  */
 
 /** Internal render size (3:4); cards scale it with CSS. */
-export const PREVIEW_W = 288;
-export const PREVIEW_H = 384;
+export const PREVIEW_W = 384;
+export const PREVIEW_H = 512;
 const FPS = 12;
 /** Seconds for one stage to sweep in over the last (bottom to top); the paint goes faster, it's the finale. */
 const SWEEP = 1.2;

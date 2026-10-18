@@ -46,6 +46,13 @@ function useTyped(text: string | undefined, cps = 30): string {
  * then (from the GPU box) a voxel hologram building up, the clay sculpt and the finished fighter with its rig
  * flashing, before it materializes in the arena. Without the GPU box's intermediates (Tripo) it holds the sheet.
  */
+/**
+ * The preview's height: about half the screen's height, and no wider than its half of the screen allows (3:4). The
+ * forging panel drops its other text while the preview shows, so this fits a 1366x657 laptop window.
+ */
+const PREVIEW_SIZE = 'h-[min(50vh,52vw)] sm:h-[min(54vh,40vw)]';
+const PREVIEW_BAR = 'max-w-[calc(min(50vh,52vw)*0.75+8px)] sm:max-w-[calc(min(54vh,40vw)*0.75+8px)]';
+
 export function ForgePreview({
   preview,
   art,
@@ -101,7 +108,8 @@ export function ForgePreview({
   return (
     <div className={`animate-slam flex flex-col gap-2 ${right ? 'items-end origin-right' : 'items-start origin-left'}`}>
       <div className={`cut ${color} p-[4px] [--cut:14px]`}>
-        <div className="cut relative aspect-[3/4] h-[36vh] overflow-hidden bg-ink [--cut:12px]">
+        {/* The show-off piece of the forging screen: as big as the player's half allows (see PREVIEW_SIZE). */}
+        <div className={`cut relative aspect-[3/4] ${PREVIEW_SIZE} overflow-hidden bg-ink [--cut:12px]`}>
           {/* Stage 2: the sheet developing (blurred and scanned while it's a partial), then a corner thumbnail. */}
           {sheet && (
             <img
@@ -144,7 +152,7 @@ export function ForgePreview({
           </span>
         </div>
       </div>
-      <div className="flex w-full max-w-[calc(36vh*0.75+8px)] gap-1">
+      <div className={`flex w-full ${PREVIEW_BAR} gap-1`}>
         {STAGES.map(([s], i) => (
           <span key={s} className={`h-1.5 flex-1 ${i < stage ? 'bg-paper' : i === stage ? `${color} animate-blink` : 'bg-ink-3'}`} />
         ))}
