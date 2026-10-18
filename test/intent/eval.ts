@@ -15,7 +15,15 @@ export type Score = {
   latency: number[];
   /** Motion start -> confirmed strike, ms. */
   commit: number[];
+  /**
+   * Motion start -> when the strike effectively starts in the engine, ms. The resolver hands the engine the
+   * wind-up time already shown (strike time - onset, capped at HEAD_START_MS) as a head start, so a strike
+   * confirmed within that cap of its onset effectively starts at its onset.
+   */
+  effective: number[];
 };
+/** FIGHT.maxHeadStart frames at 60 Hz. */
+export const HEAD_START_MS = 100;
 export type EvalResult = {
   scores: Score[];
   falsePositives: { kind: string; t: number; note: string }[];
@@ -35,7 +43,7 @@ export function evaluate(frames: Parameters<typeof runClip>[0]['frames'], labels
   const scores = new Map<string, Score>();
   const combo = { labels: 0, hits: 0 };
   const score = (name: string) => {
-    if (!scores.has(name)) scores.set(name, { name, labels: 0, hits: 0, styleOk: 0, latency: [], commit: [] });
+    if (!scores.has(name)) scores.set(name, { name, labels: 0, hits: 0, styleOk: 0, latency: [], commit: [], effective: [] });
     return scores.get(name)!;
   };
 
@@ -59,6 +67,7 @@ export function evaluate(frames: Parameters<typeof runClip>[0]['frames'], labels
       const anticipate = intents.find((i) => i.kind === 'anticipate' && i.limb === label.limb && i.t >= label.start - 50 && i.t <= match.t);
       s.latency.push((anticipate?.t ?? match.t) - label.start);
       s.commit.push(match.t - label.start);
+      s.effective.push(Math.max(match.onsetT, match.t - HEAD_START_MS) - label.start);
     } else {
       s.styleOk++;
       s.latency.push(match.t - label.start);
@@ -83,8 +92,8 @@ export type Summary = ReturnType<typeof summarize>;
 export function summarize(all: EvalResult[]) {
   const merged = new Map<string, Score>();
   for (const r of all) for (const s of r.scores) {
-    const m = merged.get(s.name) ?? { name: s.name, labels: 0, hits: 0, styleOk: 0, latency: [], commit: [] };
-    m.labels += s.labels; m.hits += s.hits; m.styleOk += s.styleOk; m.latency.push(...s.latency); m.commit.push(...s.commit);
+    const m = merged.get(s.name) ?? { name: s.name, labels: 0, hits: 0, styleOk: 0, latency: [], commit: [], effective: [] };
+    m.labels += s.labels; m.hits += s.hits; m.styleOk += s.styleOk; m.latency.push(...s.latency); m.commit.push(...s.commit); m.effective.push(...s.effective);
     merged.set(s.name, m);
   }
   const scores = [...merged.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -95,7 +104,9 @@ export function summarize(all: EvalResult[]) {
   const strikes = scores.filter((s) => s.commit.length || /jab|cross|hook|upper|knee|kick/.test(s.name));
   const strikeLabels = strikes.reduce((s, x) => s + x.labels, 0);
   // Latency is for punches: legs need their full rise to tell a knee from a kick, so they're slower by design.
-  const commit = strikes.filter((s) => /jab|cross|hook|upper/.test(s.name)).flatMap((s) => s.commit);
+  const punches = strikes.filter((s) => /jab|cross|hook|upper/.test(s.name));
+  const commit = punches.flatMap((s) => s.commit);
+  const effective = punches.flatMap((s) => s.effective);
   const minutes = all.reduce((s, r) => s + r.ms, 0) / 60000;
   const combo = all.reduce((c, r) => ({ labels: c.labels + r.combo.labels, hits: c.hits + r.combo.hits }), { labels: 0, hits: 0 });
   return {
@@ -109,6 +120,8 @@ export function summarize(all: EvalResult[]) {
     fpPerMin: falsePositives.length / Math.max(1e-6, minutes),
     /** Motion start -> confirmed punch (ms), over every caught punch. */
     latency: { median: quantile(commit, 0.5), p90: quantile(commit, 0.9) },
+    /** Motion start -> the strike effectively starts in the engine (onset, or confirmation minus the head start). */
+    effective: { median: quantile(effective, 0.5), p90: quantile(effective, 0.9) },
     negatives,
   };
 }
@@ -135,7 +148,7 @@ export function report(result: Summary, title: string) {
   for (const fp of result.falsePositives) fpByKind.set(`${fp.kind} (${fp.note})`, (fpByKind.get(`${fp.kind} (${fp.note})`) ?? 0) + 1);
   return [
     `== ${title}: recall ${pct(result.recall)}  strikes ${pct(result.strikeRecall)}  combos ${pct(result.comboRecall)}  precision ${pct(result.precision)}  style ${pct(result.styleAccuracy)}  ` +
-      `false positives ${result.falsePositives.length} (${result.fpPerMin.toFixed(1)}/min)  strike latency ${Math.round(result.latency.median)}/${Math.round(result.latency.p90)} ms (median/p90)`,
+      `false positives ${result.falsePositives.length} (${result.fpPerMin.toFixed(1)}/min)  confirm ${Math.round(result.latency.median)}/${Math.round(result.latency.p90)} ms, effective ${Math.round(result.effective.median)}/${Math.round(result.effective.p90)} ms (median/p90)`,
     ...rows,
     ...(fpByKind.size ? ['  false positives:', ...[...fpByKind.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([k, n]) => `    ${n}× ${k}`)] : []),
   ].join('\n');
