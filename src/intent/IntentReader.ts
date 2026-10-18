@@ -105,8 +105,14 @@ export class IntentReader {
   /** Timestamp of the last frame handed in, and of the one that was current when the player was lost. */
   private lastInputT = NaN;
   private lostFrameT = NaN;
+  /** Usual head and shoulder-center positions, relative to the slow-moving home (so a whole-torso lean shows). */
   private headRest: { x: number; y: number } | null = null;
+  private shoulderRest: { x: number; y: number } | null = null;
   private lastCore: Record<'jump' | 'duck' | 'dodge', number> = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
+  /** A head move must hold for two frames in a row: one-frame tracking glitches throw the whole skeleton around. */
+  private pendingCore: Record<'jump' | 'duck' | 'dodge', number> = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
+  /** Last time each arm threw (or started throwing) a strike. Punching moves the head; that isn't a dodge or a duck. */
+  private lastArmStrike = -Infinity;
   private guardSince: number | null = null;
   private guardUp = false;
   private stance: Stance;
@@ -146,6 +152,7 @@ export class IntentReader {
     // Cooldowns are on the frame clock, which restarts when a peer reloads: stale ones would block for minutes.
     this.lastCore = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
     this.headRest = null;
+    this.shoulderRest = null;
     this.guardSince = null;
     this.guardUp = false;
   }
@@ -324,34 +331,59 @@ export class IntentReader {
     const cfg = this.config;
     const t = body.t;
     const nose = body.points[LM.nose];
-    const quiet = Math.hypot(nose.v.x, nose.v.y) < 0.6 && Math.abs(body.root.vy) < 0.4;
-    if (!this.headRest) this.headRest = { x: nose.p.x, y: nose.p.y };
+    const ls = body.points[LM.lShoulder];
+    const rs = body.points[LM.rShoulder];
+    // Head and shoulders relative to the slow-moving home, not to the hips: sitting, the "hips" are estimated from
+    // the shoulders, and a seated lean moves the shoulders along with the head.
+    const head = { x: nose.p.x + body.root.x, y: nose.p.y + body.root.y };
+    const headV = { x: nose.v.x + body.root.vx, y: nose.v.y + body.root.vy };
+    const shoulders = { x: (ls.p.x + rs.p.x) / 2 + body.root.x, y: (ls.p.y + rs.p.y) / 2 + body.root.y };
+    const quiet = Math.hypot(headV.x, headV.y) < 0.6 && Math.abs(body.root.vy) < 0.4;
+    if (!this.headRest) this.headRest = { ...head };
+    if (!this.shoulderRest) this.shoulderRest = { ...shoulders };
     if (quiet) {
       const k = 1 - Math.exp(-body.dt / cfg.restSeconds);
-      this.headRest.x += k * (nose.p.x - this.headRest.x);
-      this.headRest.y += k * (nose.p.y - this.headRest.y);
+      this.headRest.x += k * (head.x - this.headRest.x);
+      this.headRest.y += k * (head.y - this.headRest.y);
+      this.shoulderRest.x += k * (shoulders.x - this.shoulderRest.x);
+      this.shoulderRest.y += k * (shoulders.y - this.shoulderRest.y);
     }
+    // Throwing a punch twists the torso and dips the head. Right after one, a head move has to be bigger to count.
+    for (const n of ['armL', 'armR'] as const) if (this.limbs[n].phase === 'onset') this.lastArmStrike = t;
+    const punching = t - this.lastArmStrike < 300;
+    /** A head move starts on a frame that passes `start` and counts if the next frame still passes `hold`. */
+    const held = (kind: 'jump' | 'duck' | 'dodge', start: boolean, hold: boolean) => {
+      if (t - this.pendingCore[kind] <= 150 && hold) return true;
+      this.pendingCore[kind] = start ? t : -Infinity;
+      return false;
+    };
 
     // Duck: the head drops, by bending the knees (hips drop) or the waist (head drops toward the hips).
-    const headDrop = this.headRest.y - nose.p.y - body.root.y;
-    const dropSpeed = -(nose.v.y + body.root.vy);
-    if (headDrop > cfg.duck.drop && dropSpeed > cfg.duck.speed && t - this.lastCore.duck > cfg.coreCooldownMs) {
+    const headDrop = this.headRest.y - head.y;
+    const dropSpeed = -headV.y;
+    const duckK = punching ? 1.4 : 1;
+    const dropping = headDrop > cfg.duck.drop * duckK;
+    if (held('duck', dropping && dropSpeed > cfg.duck.speed, dropping && dropSpeed > -cfg.duck.speed) && t - this.lastCore.duck > cfg.coreCooldownMs) {
       this.lastCore.duck = t;
       out.push({ kind: 'duck', t });
     }
 
-    // Jump: the hips rise above their usual height. A little bounce counts; nobody has to leave the floor.
+    // Jump: the hips rise above their usual height, and the head with them (a real hop, not a bounce on the toes).
     // Needs visible hips: when sitting, "hips" are estimated from the shoulders and every bob would count.
-    if (body.fullBodyFor > 1000 && body.root.y > cfg.jump.rise && body.root.vy > cfg.jump.speed && t - this.lastCore.jump > cfg.coreCooldownMs) {
+    const up = body.fullBodyFor > 1000 && body.root.y > cfg.jump.rise && -headDrop > cfg.jump.rise * 0.7;
+    if (held('jump', up && body.root.vy > cfg.jump.speed, up) && t - this.lastCore.jump > cfg.coreCooldownMs) {
       this.lastCore.jump = t;
       out.push({ kind: 'jump', t, power: clamp(body.root.y / (cfg.jump.rise * 3), 0.3, 1) });
     }
 
-    // Dodge: the head leans sideways relative to the hips.
-    const lean = nose.p.x - this.headRest.x;
+    // Dodge: the head leans sideways, and the shoulders go with it (turning or tilting just the head isn't a slip).
+    const lean = head.x - this.headRest.x;
+    const shoulderLean = shoulders.x - this.shoulderRest.x;
+    const dodgeK = punching ? 1.6 : 1;
     // Not while ducking: a duck usually tilts the head too.
-    if (Math.abs(lean) > cfg.dodge.shift && Math.sign(nose.v.x) === Math.sign(lean) && Math.abs(nose.v.x) > cfg.dodge.speed
-      && headDrop < cfg.duck.drop * 0.6 && t - this.lastCore.dodge > cfg.coreCooldownMs) {
+    const leaning = Math.abs(lean) > cfg.dodge.shift * dodgeK && shoulderLean * Math.sign(lean) > 0.2 * Math.abs(lean) && headDrop < cfg.duck.drop * 0.6;
+    const leaningFast = leaning && Math.sign(headV.x) === Math.sign(lean) && Math.abs(headV.x) > cfg.dodge.speed;
+    if (held('dodge', leaningFast, leaning && headV.x * Math.sign(lean) > -cfg.dodge.speed) && t - this.lastCore.dodge > cfg.coreCooldownMs) {
       this.lastCore.dodge = t;
       out.push({ kind: 'dodge', t, dir: lean > 0 ? 'L' : 'R' });
     }

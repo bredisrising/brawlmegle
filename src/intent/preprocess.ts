@@ -85,7 +85,7 @@ export type Body = {
   points: BodyPoint[]; // 33, indexed like MediaPipe
   /** Hip center relative to its slow-moving home, in body units (y up). Jumps and ducks show up here. */
   root: { x: number; y: number; vx: number; vy: number };
-  /** Current torso size / home torso size. Above 1 = closer to the camera than usual. */
+  /** Current torso size / usual torso size (over a few seconds). Above 1 = closer to the camera than usual. */
   scale: number;
   /** Whether hips are visible (full-body framing) or the body unit falls back to shoulder width. */
   fullBody: boolean;
@@ -112,6 +112,8 @@ export class PosePreprocessor {
   private prevRaw: Raw[] | null = null;
   private lastGood: number[] = new Array(33).fill(-Infinity);
   private unitHome = 0;
+  /** The usual body size over a few seconds: leaning in or out shows as `scale` against it (stepping in/out). */
+  private sizeHome = 0;
   private worldUnitHome = 0;
   private home: { x: number; y: number } | null = null;
   /** Full-body (hips) mode with hysteresis, so hips at the edge of the frame don't flip it every frame. */
@@ -151,6 +153,7 @@ export class PosePreprocessor {
     this.prevRaw = null;
     this.lastGood.fill(-Infinity);
     this.unitHome = 0;
+    this.sizeHome = 0;
     this.worldUnitHome = 0;
     this.home = null;
     this.fullBodyMode = false;
@@ -210,6 +213,7 @@ export class PosePreprocessor {
     else if (this.fullBodyMode && hipVis < 0.35) this.fullBodyMode = false;
     if (wasFull !== this.fullBodyMode) {
       this.unitHome = 0;
+      this.sizeHome = 0;
       this.worldUnitHome = 0;
       this.home = null;
     }
@@ -220,6 +224,7 @@ export class PosePreprocessor {
     const ku = dt > 0 ? 1 - Math.exp(-dt / (this.config.unitSeconds ?? 0.4)) : 1;
     const sane = !this.unitHome || Math.abs(Math.log(unit.size / this.unitHome)) < 0.25;
     if (sane) this.unitHome = this.unitHome ? this.unitHome + ku * (unit.size - this.unitHome) : unit.size;
+    if (sane) this.sizeHome = this.sizeHome ? this.sizeHome + k * (unit.size - this.sizeHome) : unit.size;
     this.worldUnitHome = this.worldUnitHome ? this.worldUnitHome + ku * (worldUnit - this.worldUnitHome) : worldUnit;
 
     const hip = unit.center;
@@ -276,7 +281,7 @@ export class PosePreprocessor {
     };
 
     const body: Body = {
-      t: frame.t, dt, points, root, scale: unit.size / U, fullBody: unit.fullBody,
+      t: frame.t, dt, points, root, scale: unit.size / (this.sizeHome || U), fullBody: unit.fullBody,
       fullBodyFor: this.fullBodyMode ? frame.t - this.fullBodySince : 0, elbow,
     };
     this.prev = body;

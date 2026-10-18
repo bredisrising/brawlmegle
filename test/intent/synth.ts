@@ -346,6 +346,9 @@ export function synthesize(options: SynthOptions = {}): { frames: (PoseFrame | {
   const gauss = () => Math.sqrt(-2 * Math.log(rand() + 1e-12)) * Math.cos(2 * Math.PI * rand());
   const R = restPose(stance);
   const depthGain = options.depthGain ?? 0.1 + rand() * 0.25;
+  // How much this person turns the torso and moves the head when punching (people vary a lot).
+  const twist = rand() * 0.35;
+  const headShift = rand() * 0.07;
 
   // Camera: a pinhole at `distance`, rotated `yaw` around the player, aimed at `lookAt`. 4:3, 640x480.
   const W = 640, H = 480;
@@ -374,7 +377,9 @@ export function synthesize(options: SynthOptions = {}): { frames: (PoseFrame | {
     .map((m) => (sitting && m === duck ? seatedDuck : m));
 
   // Script: random moves with random gaps, speeds and sizes; some fast combos.
-  type Item = { move: Move; start: number; ms: number; amp: number };
+  /** `aim`: where this strike ends relative to the scripted target (people punch a little high, low, wide). */
+  type Item = { move: Move; start: number; ms: number; amp: number; aim: V };
+  const aimOf = (): V => [(rand() - 0.5) * 0.1, -0.04 + rand() * 0.14, 0];
   const script: Item[] = [];
   const labels: Label[] = [];
   let t = 1500;
@@ -387,7 +392,7 @@ export function synthesize(options: SynthOptions = {}): { frames: (PoseFrame | {
         const speed = 1 + rand() * 0.35; // combos are thrown fast
         const amp = 0.7 + rand() * 0.4;
         const ms = move.ms / speed;
-        script.push({ move, start, ms, amp });
+        script.push({ move, start, ms, amp, aim: aimOf() });
         labels.push({ kind: move.kind, name: move.name, limb: move.limb, style: move.style, start, end: start + ms, combo: true });
         end = Math.max(end, start + ms);
         start += 150 + rand() * 100;
@@ -399,7 +404,7 @@ export function synthesize(options: SynthOptions = {}): { frames: (PoseFrame | {
     const speed = 0.75 + rand() * 0.6; // slow and fast people
     const amp = 0.65 + rand() * 0.5; // small and big motions
     const ms = move.ms / speed;
-    script.push({ move, start: t, ms, amp });
+    script.push({ move, start: t, ms, amp, aim: aimOf() });
     labels.push({ kind: move.kind, name: move.name, limb: move.limb, style: move.style, start: t, end: t + ms });
     t += ms + 350 + rand() * 900;
   }
@@ -437,11 +442,29 @@ export function synthesize(options: SynthOptions = {}): { frames: (PoseFrame | {
       if (time < s.start || time > s.start + s.ms) continue;
       const p = (time - s.start) / s.ms;
       const w = Math.min(1, p / 0.25);
+      const arm = s.move.limb?.startsWith('arm') ? s.move.limb[3].toLowerCase() : null;
+      const k = arm ? outBack(p) * s.amp : 0;
       for (const [j, v] of Object.entries(s.move.pose(p, s.amp, R))) {
         if (!v) continue;
-        const target: V = [v[0] + sway, v[1], v[2]];
+        const aim = arm && j[0] === arm ? (j.endsWith('Wrist') ? 1 : j.endsWith('Elbow') ? 0.5 : 0) * k : 0;
+        const target: V = [v[0] + sway + s.aim[0] * (arm === 'l' ? 1 : -1) * aim, v[1] + s.aim[1] * aim, v[2]];
         pose[j] = owner[j] !== undefined ? lerp3(pose[j], target, w) : target;
         owner[j] = s.start;
+      }
+    }
+    // Real punches turn the torso (the punching shoulder goes forward) and push the head toward the other side.
+    // The other arm rides along in its guard. This is what makes heads look like they slip and guards look like they punch.
+    for (const s of script) {
+      if (time < s.start || time > s.start + s.ms || !s.move.limb?.startsWith('arm')) continue;
+      const l = s.move.limb === 'armL';
+      const k = outBack((time - s.start) / s.ms) * s.amp;
+      const a = (l ? -1 : 1) * twist * k;
+      const other = l ? 'r' : 'l';
+      for (const [j, v] of Object.entries(pose)) {
+        if (LEG_JOINTS.has(j) || (ARM_JOINTS.has(j) && j[0] !== other)) continue;
+        const h = Math.max(0, Math.min(1, (R[j][1] - 0.95) / 0.47));
+        const turned = rotY(v, a * (j.endsWith('Hip') ? 0.5 : 1));
+        pose[j] = add(turned, [(l ? -1 : 1) * headShift * k * h * h, 0, 0.03 * k * h]);
       }
     }
     pose = shapeBody(pose, body);
