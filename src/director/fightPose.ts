@@ -65,6 +65,13 @@ export type ActionInput = {
   /** 0..1 progress of a wind-up tell before an attack ('anticipate'), and its hand. */
   tell: number;
   tellHand: Hand;
+  /** Seconds into the round-start countdown (the ready taunt), or 0. */
+  intro: number;
+  /** 0..1: how beaten up they are (low HP): slumped, guard sagging, breathing hard. */
+  hurt: number;
+  lead: 1 | -1;
+  /** The view's running clock (s), for breathing. */
+  clock: number;
 };
 
 const tA = new Vector3();
@@ -160,6 +167,8 @@ export function applyAction(pose: Pose, input: ActionInput, motion: Motion): Pos
   motion.lift = 0;
   const { state } = input;
 
+  if (input.hurt > 0 && state.phase !== 'ko') beatUp(pose, input.hurt, input.clock);
+  if (input.intro > 0 && state.phase === 'idle') ready(pose, input.intro, input.lead);
   if (input.duck > 0) {
     crouch(pose, 0.13 * input.duck);
     lean(pose, 0.05 * input.duck);
@@ -188,7 +197,7 @@ export function applyAction(pose: Pose, input: ActionInput, motion: Motion): Pos
   }
 
   if (state.phase === 'ko') knockedOut(pose, input.koTime, motion);
-  else if (input.won > 0) victory(pose, input.won);
+  else if (input.won > 0) victory(pose, input.won, input.lead, motion);
   return pose;
 }
 
@@ -343,16 +352,52 @@ function knockedOut(pose: Pose, t: number, motion: Motion) {
   motion.lift = 0.07 * fall;
 }
 
-/** Arms up over the K.O.'d opponent, bouncing. */
-function victory(pose: Pose, t: number) {
-  const k = smooth((t - 0.6) / 0.4);
+/**
+ * Winning over a K.O.'d opponent, fighting-game style: turn to the camera, rear fist punched at the sky, lead fist
+ * pulled to the hip, chin up, a little bounce, and the odd fist pump.
+ */
+function victory(pose: Pose, t: number, lead: 1 | -1, motion: Motion) {
+  const k = smooth((t - 0.6) / 0.35);
   if (k <= 0) return;
-  const bob = 0.02 * Math.sin(t * 2 * Math.PI * 2.2);
+  // Open up to the camera: turn further the way the blade already turns the chest (toward the camera).
+  twist(pose, -lead * 0.5 * k);
+  lean(pose, -0.03 * k);
+  const pump = Math.max(0, Math.sin(t * 2 * Math.PI * 0.9)) ** 4; // a pump about once a second
+  const [upS, upE, upW] = lead === 1 ? (['rShoulder', 'rElbow', 'rWrist'] as const) : (['lShoulder', 'lElbow', 'lWrist'] as const);
+  const [hipS, hipE, hipW] = lead === 1 ? (['lShoulder', 'lElbow', 'lWrist'] as const) : (['rShoulder', 'rElbow', 'rWrist'] as const);
+  const side = -lead; // the raised (rear) arm's side, +x = left
+  const up = tA.set(pose[upS].x + side * 0.03, 1.12 + 0.03 * pump, pose[upS].z + 0.02).lerp(pose[upW], 1 - k);
+  solve(pose[upS], up, UPPER_ARM, FOREARM, pole.set(side, -0.3, 0.3), pose[upE], pose[upW]);
+  const hip = tB.set(pose[hipS].x + lead * 0.06, 0.55, pose[hipS].z + 0.04).lerp(pose[hipW], 1 - k);
+  solve(pose[hipS], hip, UPPER_ARM, FOREARM, pole.set(lead, 0, -1), pose[hipE], pose[hipW]);
+  pose.head.y += 0.01 * k;
+  pose.head.z -= 0.01 * k;
+  motion.lift += 0.012 * pump * k;
+}
+
+/** Round-start taunt: knock the fists together twice, roll the neck, then settle into the stance. */
+function ready(pose: Pose, t: number, lead: 1 | -1) {
+  const k = t < 2 ? smooth(t / 0.25) : 1 - smooth((t - 2) / 0.4);
+  if (k <= 0) return;
+  const knock = Math.max(0, Math.sin(Math.min(t, 1.2) * 2 * Math.PI * 1.6)) ** 6;
   for (const s of [1, -1] as const) {
     const [shoulder, elbow, wrist] = s === 1 ? (['lShoulder', 'lElbow', 'lWrist'] as const) : (['rShoulder', 'rElbow', 'rWrist'] as const);
-    const target = tA.set(s * 0.15, 1.1 + bob, 0.03).lerp(pose[wrist], 1 - k);
-    solve(pose[shoulder], target, UPPER_ARM, FOREARM, pole.set(s, -0.2, 0), pose[elbow], pose[wrist]);
+    const target = tA.set(s * (0.035 + 0.03 * (1 - knock)), 0.74 + 0.02 * knock, 0.17).lerp(pose[wrist], 1 - k);
+    solve(pose[shoulder], target, UPPER_ARM, FOREARM, pole.set(s, -0.5, -0.2), pose[elbow], pose[wrist]);
   }
+  // Neck roll after the knocks.
+  const roll = t > 1.2 && t < 2 ? Math.sin(((t - 1.2) / 0.8) * Math.PI * 2) : 0;
+  pose.head.x += lead * 0.025 * roll * k;
+  pose.head.y -= 0.008 * Math.abs(roll) * k;
+}
+
+/** Low on health: shoulders sag, guard drops, a hunch, and heavy breathing. */
+function beatUp(pose: Pose, hurt: number, time: number) {
+  const breathe = Math.sin(time * 2 * Math.PI * 1.1);
+  crouch(pose, 0.02 * hurt);
+  lean(pose, 0.025 * hurt);
+  for (const j of ['lWrist', 'rWrist', 'lElbow', 'rElbow'] as const) pose[j].y -= (j.includes('Wrist') ? 0.05 : 0.025) * hurt;
+  for (const j of ['lShoulder', 'rShoulder', 'neck', 'head'] as const) pose[j].y += 0.008 * breathe * hurt;
 }
 
 // ---------------------------------------------------------------------------

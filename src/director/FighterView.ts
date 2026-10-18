@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import type { FightEvent, FighterState, ForgedFighter, Hand, PlayerId, PoseFrame } from '../types';
+import type { FightEvent, FighterState, ForgedFighter, Hand, Phase, PlayerId, PoseFrame } from '../types';
 import { FIGHTER_SCALE, FIGHTER_SPACING, FIGHT_LINE_SCALE, PLAYER_COLORS } from '../game/constants';
 import { config } from '../config';
 import { disposeObject } from './dispose';
@@ -19,6 +19,8 @@ export type ViewInput = {
   /** Center-to-center distance on the fight line (engine meters). */
   distance: number;
   opponentKo: boolean;
+  /** Where the round is (the ready taunt during the countdown). */
+  phase?: Phase;
   dt: number;
 };
 
@@ -74,6 +76,9 @@ export class FighterView {
   private tellHand: Hand = 'R';
   private koTime = 0;
   private wonTime = 0;
+  private introTime = 0;
+  /** Breathing clock for the beaten-up idle (keeps running). */
+  private hurtClock = 0;
   private hit: HitInfo | null = null;
   private flash = 0;
   private readonly motion: Motion = { lunge: 0, tilt: 0, lift: 0 };
@@ -189,8 +194,10 @@ export class FighterView {
   }
 
   /** Called every sim tick with the engine's state and the latest live frame (if any). */
-  update({ state, live, guard, distance, opponentKo, dt }: ViewInput) {
+  update({ state, live, guard, distance, opponentKo, phase, dt }: ViewInput) {
     this.time += dt;
+    this.introTime = phase === 'countdown' ? this.introTime + dt : 0;
+    this.hurtClock += dt;
     this.root.position.x = state.x * FIGHT_LINE_SCALE;
 
     // Walking: feet shuffle with speed along the fight line.
@@ -223,6 +230,10 @@ export class FighterView {
         slip: this.slip,
         tell: this.tellAt < 0 ? 0 : Math.min(1, (this.time - this.tellAt) / 0.15),
         tellHand: this.tellHand,
+        intro: this.introTime,
+        hurt: Math.max(0, Math.min(1, (35 - state.hp) / 30)),
+        lead: this.id === 'p1' ? 1 : -1,
+        clock: this.hurtClock,
       },
       this.motion,
     );

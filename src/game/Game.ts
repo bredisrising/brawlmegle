@@ -364,6 +364,7 @@ export class Game {
         guard: stances[id].guard,
         distance,
         opponentKo: this.fight.state(opponentOf(id)).phase === 'ko',
+        phase: useGameStore.getState().phase,
         dt: SIM_DT,
       });
     }
@@ -517,6 +518,7 @@ export class Game {
         guard: m.guard[id],
         distance: m.distance,
         opponentKo: m.states[opponentOf(id)].phase === 'ko',
+        phase,
         dt: SIM_DT,
       });
     }
