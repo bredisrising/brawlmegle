@@ -192,7 +192,9 @@ async function runHostPeer() {
   });
 
   await test('host Peer: link stats name a same-machine path as local (lan or cable), with a round trip', async () => {
-    const stats = await poll(async () => (await host.linkStats()) ?? undefined, 'link stats');
+    let stats = await host.linkStats();
+    for (let i = 0; !stats && i < 50; i++) stats = await new Promise((r) => setTimeout(r, 100)).then(() => host.linkStats());
+    assert(stats, 'no link stats');
     console.log(`[p2p] link ${JSON.stringify(stats)}`);
     assert(stats.path === 'lan' || stats.path === 'cable', `path ${stats.path}`);
   });
