@@ -184,8 +184,8 @@ describe('forge server', () => {
       expect((await until(id, done)).engine3d).toBe('local');
     });
 
-    it('a box that is still warming up falls back to Tripo right away', async () => {
-      const { forge, until } = await startForge({ ...gpu, MOCK_GPU: 'cold' });
+    it('a box that is still warming up falls back to Tripo once the wait runs out', async () => {
+      const { forge, until } = await startForge({ ...gpu, MOCK_GPU: 'cold', FORGE_3D_WARMUP_WAIT: '0' });
       const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
       const f = await until(id, done);
       expect(f.engine3d).toBe('tripo');

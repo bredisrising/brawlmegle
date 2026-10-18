@@ -117,14 +117,32 @@ export function boxRig(report) {
  * timings and its rig report (`rig`, see boxRig). Throws on any failure, or if it isn't done within FORGE_3D_TIMEOUT, so the caller can fall back to Tripo.
  * With `model` (a GLB), the box only rigs that model (forge/gpu/rescue.mjs).
  */
-export async function makeModelLocal(sheet, onStep, model = null, { onPreview, settings, rigAttempt } = {}) {
-  const deadline = Date.now() + LOCAL_TIMEOUT_MS;
+/** How long a scan waits for a warming GPU box before giving up on it. */
+const WARMUP_WAIT_MS = Number(process.env.FORGE_3D_WARMUP_WAIT ?? 360) * 1000;
+
+export async function makeModelLocal(sheet, onStep, model = null, { onPreview, settings, rigAttempt, face, faceOnly } = {}) {
   // A stopped box doesn't refuse the connection, it just never answers: find out in 3 s, not 20.
-  const health = await (await local("/health", {}, 3_000)).json();
+  let health = await (await local("/health", {}, 3_000)).json();
+  // Warming up (a restart or a deploy, ~4 min): wait for it rather than fail the scan (Tripo, the fallback, may be out
+  // of credits). A box that's broken, not warming, still fails straight away.
+  for (const until = Date.now() + WARMUP_WAIT_MS; !health.ready && !health.error && Date.now() < until; ) {
+    await new Promise((r) => setTimeout(r, 5_000));
+    health = await (await local("/health", {}, 3_000)).json();
+  }
   if (!health.ready) throw new Error(`GPU box not ready: ${health.error ?? "warming up"}`);
+  const deadline = Date.now() + LOCAL_TIMEOUT_MS;
   // rigAttempt > 1: a re-rig after the rig check turned the first one down (a box that knows another way to weight a
   // model can take it as the cue; one that doesn't just rigs it again).
-  const request = { image: sheet.toString("base64"), model: model?.toString("base64"), settings, ...(rigAttempt ? { rigAttempt } : {}) };
+  // face: paint the sheet's face on (true/false; the box's FORGE3D_FACE_PROJECT otherwise). faceOnly: `model` is already
+  // rigged, only paint its face (forge/gpu/face-rescue.mjs).
+  const request = {
+    image: sheet.toString("base64"),
+    model: model?.toString("base64"),
+    settings,
+    ...(rigAttempt ? { rigAttempt } : {}),
+    ...(typeof face === "boolean" ? { face } : {}),
+    ...(faceOnly ? { faceOnly: true } : {}),
+  };
   const { id } = await (await local("/jobs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request) })).json();
   onStep("model");
   const get = async (file, timeoutMs = 60_000) => Buffer.from(await (await local(`/jobs/${id}/${file}`, {}, timeoutMs)).arrayBuffer());
@@ -160,9 +178,10 @@ export async function makeModelLocal(sheet, onStep, model = null, { onPreview, s
       const unrigged = () => get("model.glb");
       const rig = boxRig(job.report);
       if (rig && (rig.path !== "bone-heat" || !rig.ok)) console.warn(`GPU rig ${id.slice(0, 8)}: ${JSON.stringify(rig)}`);
-      if (job.optimized) return { model: null, rigged, optimized: true, timings: job.timings, original: () => get("rigged.orig.glb"), unrigged, rig };
+      const faceStep = job.face ?? null; // the face step's report: { painted, seconds, ... }, null when it didn't run
+      if (job.optimized) return { model: null, rigged, optimized: true, timings: job.timings, original: () => get("rigged.orig.glb"), unrigged, rig, face: faceStep };
       const plain = await get("model.glb");
-      return { model: plain, rigged, timings: job.timings, unrigged: async () => plain, rig };
+      return { model: plain, rigged, timings: job.timings, unrigged: async () => plain, rig, face: faceStep };
     }
   }
 }
@@ -661,6 +680,7 @@ export async function runForge(job, frames, store) {
           job.engine3d = ENGINE_3D;
           job.gpuTimings = out.timings;
           if (out.rig) job.gpuRig = out.rig;
+          if (out.face) job.gpuFace = out.face;
           job.glbOptimized = Boolean(out.optimized);
           original = out.original ?? null;
           return out;
@@ -725,6 +745,7 @@ export async function runForge(job, frames, store) {
                 if (passed !== first) {
                   job.rigEngine = passed.engine;
                   if (passed.rig) job.gpuRig = passed.rig;
+                  if (passed.face) job.gpuFace = passed.face;
                   job.glbOptimized = Boolean(passed.optimized);
                   original = passed.original ?? null;
                 }

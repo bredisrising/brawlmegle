@@ -2,8 +2,11 @@
 Forge 3D service: model sheet in, Mixamo-rigged GLB out, on one GPU box (see README.md).
 
     POST /jobs                 {"image": base64 PNG/JPEG model sheet, "model"?: base64 GLB to rig only,
-                                "rigAttempt"?: 2 for a re-rig the forge's rig check asked for}  ->  202 {"id"}
-    GET  /jobs/<id>            ->  {"status": queued|model|rig|done|failed, "timings", "error", "rigged", "queued"}
+                                "rigAttempt"?: 2 for a re-rig the forge's rig check asked for,
+                                "face"?: true/false to paint the sheet's face on (default: FORGE3D_FACE_PROJECT),
+                                "faceOnly"?: true: "model" is already rigged, only paint its face}  ->  202 {"id"}
+    GET  /jobs/<id>            ->  {"status": queued|model|rig|done|failed, "timings", "error", "rigged", "queued",
+                                    "face": {"painted", "seconds", ...} when the face step ran}
     GET  /jobs/<id>/rigged.glb ->  the rigged model (model.glb: the same model without a skeleton)
     GET  /health               ->  {"ok", "ready", "queued", "settings"}
 
@@ -47,6 +50,9 @@ OPTIMIZER = os.environ.get("FORGE3D_OPTIMIZER", f"{ROOT}/optimizer/optimize-glb.
 # rig fails it, the rigger's next attempt plan is tried (rig_blender.py PLANS), up to LAST_RIG_ATTEMPT.
 RIGCHECK = os.environ.get("FORGE3D_RIGCHECK", f"{ROOT}/optimizer/rigcheck.js")
 LAST_RIG_ATTEMPT = 4
+# Sharper faces (face_project.py): the sheet's own face painted onto the rigged model's texture. Off by default.
+FACE_PROJECT = os.environ.get("FORGE3D_FACE_PROJECT", "0") == "1"
+FACE_MODEL = os.environ.get("FORGE3D_FACE_MODEL", os.path.join(os.path.dirname(POSE_MODEL), "face_landmarker.task"))  # weights.py
 WORK = os.environ.get("FORGE3D_WORK", "/var/lib/forge3d/jobs")
 SETTINGS = {
     "pipeline": os.environ.get("FORGE3D_PIPELINE", "1024_cascade"),
@@ -69,6 +75,8 @@ state = {"ready": False, "error": None}
 generator = None
 landmarker = None
 landmark_lock = threading.Lock()
+face_finder = None  # MediaPipe's face landmarker, loaded once when the face step can run
+face_lock = threading.Lock()
 
 
 def log(*args):
@@ -191,6 +199,30 @@ def rig_until_ok(job):
     return report
 
 
+def paint_face(job):
+    """face_project.py on rigged.glb, in place: the sheet's face onto the texture (UVs, rig and skin untouched).
+    Never fails the job: on any error, or when the faces don't match well enough, rigged.glb stays as it was."""
+    start = time.perf_counter()
+    path = os.path.join(job["dir"], "rigged.glb")
+    try:
+        if face_finder is None:
+            raise RuntimeError("face landmarker not loaded")
+        import face_project
+
+        with open(path, "rb") as f:
+            glb = f.read()
+        with face_lock:
+            out, info = face_project.run(glb, job["sheet"], face=face_finder)
+        if out:
+            write_atomic(path, out)
+        job["face"] = {"painted": bool(out), **{k: info[k] for k in ("skipped", "face", "texture", "front", "iou") if k in info}}
+    except Exception as err:  # noqa: BLE001
+        traceback.print_exc()
+        job["face"] = {"painted": False, "error": str(err)[:300]}
+    job["face"]["seconds"] = job["timings"]["face"] = round(time.perf_counter() - start, 2)
+    log(job["id"][:8], "face:", json.dumps(job["face"]))
+
+
 def optimize(job):
     """rigged.glb -> its optimized version (the original stays as rigged.orig.glb). Keeps the original on failure."""
     if not (os.path.exists(NODE) and os.path.exists(OPTIMIZER)):
@@ -212,16 +244,20 @@ def rig_worker():
         job = rig_q.get()
         try:
             job["status"] = "rig"
-            start = time.time()
-            job["lm_thread"].join()
-            job["report"] = report = rig_until_ok(job)
-            job["timings"]["rig"] = round(time.time() - start, 2)
-            game = report.get("game_check")
-            if not report.get("rig_ok", True) or (game and not game["ok"]):
-                log(job["id"][:8], "RIG CHECK FAILED on every attempt, sending the best:", json.dumps(report["tries"]))
-            elif report.get("rig") != "bone-heat" or len(report["tries"]) > 1:
-                log(job["id"][:8], "rig:", json.dumps(report["tries"]))
+            if not job.get("face_only"):
+                start = time.time()
+                job["lm_thread"].join()
+                job["report"] = report = rig_until_ok(job)
+                job["timings"]["rig"] = round(time.time() - start, 2)
+                game = report.get("game_check")
+                if not report.get("rig_ok", True) or (game and not game["ok"]):
+                    log(job["id"][:8], "RIG CHECK FAILED on every attempt, sending the best:", json.dumps(report["tries"]))
+                elif report.get("rig") != "bone-heat" or len(report["tries"]) > 1:
+                    log(job["id"][:8], "rig:", json.dumps(report["tries"]))
             job["rigged"] = True
+            # After the rig (and its check: the geometry doesn't change), before the optimizer re-encodes the texture.
+            if job.get("face_project"):
+                paint_face(job)
             optimize(job)
             job["status"] = "done"
         except Exception as err:  # noqa: BLE001
@@ -274,6 +310,21 @@ def fake_previews(glb_path):
     return {"voxels": {"coords": coords, "resolution": 32}, "shape": {"vertices": yup, "faces": np.asarray(mesh.faces)}}
 
 
+def load_face():
+    """The face step's landmarker (any failure only turns the face step off)."""
+    global face_finder
+    if not os.path.exists(FACE_MODEL):
+        log("face step off: no", FACE_MODEL)
+        return
+    try:
+        from face_project import FaceFinder
+
+        face_finder = FaceFinder(FACE_MODEL)
+        log("face step", "on" if FACE_PROJECT else "available (FORGE3D_FACE_PROJECT=1 or a job's face: true)")
+    except Exception as err:  # noqa: BLE001
+        log("face step off, its landmarker didn't load:", err)
+
+
 def load():
     global generator, landmarker
     try:
@@ -284,6 +335,7 @@ def load():
             ensure(MODEL_DIR, POSE_MODEL)
             log(f"weights ready in {time.time() - start:.0f}s")
         landmarker = Landmarker(POSE_MODEL)
+        load_face()
         if os.environ.get("FORGE3D_FAKE_GLB"):
             # Dev mode without a GPU: every "generated" model is this GLB (the HTTP, landmark and rig steps are real).
             fake = fake_previews(os.environ["FORGE3D_FAKE_GLB"])
@@ -316,6 +368,18 @@ def load():
             except Exception as err:  # noqa: BLE001  (the crude figure may not rig; that's fine)
                 timings["rig"] = f"failed ({str(err)[:80]})"
             log(f"warm-up {i + 1}: {time.time() - start:.1f}s", timings)
+        if face_finder is not None and os.path.exists(os.path.join(warm_dir, "rigged.glb")):
+            # The face step's first run pays its imports and the landmarker's setup; pay them now. (The crude figure
+            # has no face to find, so this only exercises the code.)
+            start = time.time()
+            try:
+                import face_project
+
+                with open(os.path.join(warm_dir, "rigged.glb"), "rb") as f:
+                    face_project.run(f.read(), sheet, face=face_finder)
+                log(f"face step warm-up: {time.time() - start:.1f}s")
+            except Exception as err:  # noqa: BLE001
+                log("face step warm-up failed (the step stays on, it never fails a job):", err)
         state["ready"] = True
         log("ready")
     except Exception as err:  # noqa: BLE001
@@ -356,7 +420,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(404, {"error": "no such job"})
             if len(parts) == 2:
                 ahead = sum(1 for j in list(jobs.values()) if j["status"] == "queued" and j["created"] < job["created"])
-                fields = ("status", "timings", "error", "rigged", "optimized", "report", "previews")
+                fields = ("status", "timings", "error", "rigged", "optimized", "report", "previews", "face")
                 return self.send(200, {k: job.get(k) for k in fields} | {"queued": ahead})
             if len(parts) == 3 and parts[2] in ("rigged.glb", "rigged.orig.glb", "model.glb", "voxels.bin", "shape.glb"):
                 path = os.path.join(job["dir"], parts[2])
@@ -402,10 +466,22 @@ class Handler(BaseHTTPRequestHandler):
         # Per-job generator settings (A/B tests without a restart): pipeline, steps, faces, texture, remesh.
         if isinstance(body.get("settings"), dict):
             job["settings"] = {k: v for k, v in body["settings"].items() if k in ("pipeline", "steps", "faces", "texture", "remesh")}
+        # The face step: the box's default, or the job's own say (A/B tests, the face rescue).
+        job["face_project"] = body["face"] if isinstance(body.get("face"), bool) else FACE_PROJECT
+        if body.get("faceOnly") is True:
+            if model is None:
+                shutil.rmtree(job_dir, ignore_errors=True)
+                return self.send(400, {"error": "faceOnly needs the rigged model"})
+            job.update(face_only=True, face_project=True)
         with jobs_lock:
             jobs[job_id] = job
         if model is None:
             gpu_q.put(job)
+        elif job.get("face_only"):
+            # Face rescue: the model keeps its rig; only its texture changes (then the optimizer, like a forge).
+            with open(os.path.join(job_dir, "rigged.glb"), "wb") as f:
+                f.write(model)
+            rig_q.put(job)
         else:
             with open(os.path.join(job_dir, "raw.glb"), "wb") as f:
                 f.write(model)

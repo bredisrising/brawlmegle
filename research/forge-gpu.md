@@ -143,6 +143,19 @@ warm-up runs).
    region maps almost 1:1; this is what Tripo's `texture_alignment: original_image` does.
 3. Try Pixal3D (a pixel-aligned TRELLIS.2 fine-tune that can also use a back view) at 1024.
 
+**Done (2026-10-18): number 2, behind `FORGE3D_FACE_PROJECT=1`** (`forge/gpu/face_project.py`, see
+`forge/gpu/README.md`). The sheet's face is painted onto the rigged model's texture: silhouette fit, then a warp from
+MediaPipe face landmarks found on both the sheet and a front drawing of the model (after the silhouette fit TRELLIS's
+face still sat 9-30 px off the sheet's, mostly too low), feathered by facing and a depth test. Tested on ankit,
+phoenix (both), old dylan, bred HQ and the dress and hijab test fighters: eyes, brows, lips and facial hair come out
+like the sheet, with no seam at the side or back and the same in the guard pose. bred HQ's sheet has the head turned
+~20 deg while TRELLIS's head is frontal; its features can't be matched (12.7 px off after the best affine), so it's
+skipped, which is the right call (forcing it warps the face and paints hair onto the jaw). The face had only ~6k
+texels in the 1024 atlas for ~25-30k sheet pixels, so the base color goes to 2048 (upscaled, then painted): the
+game's GLB grows ~3-7% (1.03 -> 1.10 MB), and its GPU memory for that texture 4x. ~1.5 s on the box's CPU plus ~0.5 s
+in the optimizer. Painting the rest of the front too (`--body`) adds some fabric detail but also printed-on seams at
+the shoulders, so it's off. The comparison renders stay local (real faces).
+
 ## Model choice: TRELLIS.2-4B
 
 | | Output | Speed (published) | VRAM | License | Verdict |
@@ -252,7 +265,7 @@ The forge's Gradio client was tested against the real Gradio 6.1 app locally, wi
 
 ## Not done / worth a look
 
-- Faces (see Quality).
+- Faces: the front projection is in (see Quality); turned heads on the sheet still get TRELLIS's face.
 - `512` pipeline: probably ~4 s generate instead of ~10, but softer. Untested on real sheets.
 - A bigger box (g6e.2xlarge, more CPU) or a second one: the rig and bake are partly CPU-bound with 4 vCPUs. Two
   forges in a row already overlap (GPU thread + rig thread).
