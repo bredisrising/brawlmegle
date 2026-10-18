@@ -38,6 +38,10 @@ ROOT = os.environ.get("FORGE3D_ROOT", "/opt/forge3d")
 MODEL_DIR = os.environ.get("FORGE3D_MODEL_DIR", f"{ROOT}/models/TRELLIS.2-4B")
 POSE_MODEL = os.environ.get("FORGE3D_POSE_MODEL", f"{ROOT}/models/pose_landmarker_heavy.task")
 BLENDER = os.environ.get("FORGE3D_BLENDER", f"{ROOT}/blender/blender")
+# The forge's own optimizer (forge/optimize.js: WebP textures + meshopt), run here on the GPU box's faster CPU so the
+# forge box only stores the result. Off when Node or the optimizer isn't installed.
+NODE = os.environ.get("FORGE3D_NODE", f"{ROOT}/node/bin/node")
+OPTIMIZER = os.environ.get("FORGE3D_OPTIMIZER", f"{ROOT}/optimizer/optimize-glb.mjs")
 WORK = os.environ.get("FORGE3D_WORK", "/var/lib/forge3d/jobs")
 SETTINGS = {
     "pipeline": os.environ.get("FORGE3D_PIPELINE", "1024_cascade"),
@@ -76,6 +80,33 @@ def find_landmarks(job):
         json.dump(lm, f)
 
 
+def write_atomic(path, data: bytes):
+    with open(path + ".tmp", "wb") as f:
+        f.write(data)
+    os.replace(path + ".tmp", path)
+
+
+def write_preview(job, kind, data):
+    """The forge streams these to the forging screen: the sparse voxels (stage 1) and the untextured shape."""
+    try:
+        if kind == "voxels":
+            # uint16 resolution, then x, y, z bytes per voxel (TRELLIS axes: z up).
+            coords = data["coords"].astype("uint8")
+            write_atomic(os.path.join(job["dir"], "voxels.bin"), int(data["resolution"]).to_bytes(2, "little") + coords.tobytes())
+            name = "voxels.bin"
+        elif kind == "shape":
+            import trimesh
+
+            glb = trimesh.Trimesh(data["vertices"], data["faces"], process=False).export(file_type="glb")
+            write_atomic(os.path.join(job["dir"], "shape.glb"), glb)
+            name = "shape.glb"
+        else:
+            return
+        job["previews"][name] = round(time.time() - job["created"], 2)
+    except Exception as err:  # noqa: BLE001
+        log(job["id"][:8], f"{kind} preview failed:", err)
+
+
 def gpu_worker():
     while True:
         job = gpu_q.get()
@@ -84,7 +115,8 @@ def gpu_worker():
             start = time.time()
             job["lm_thread"] = threading.Thread(target=find_landmarks, args=(job,), daemon=True)
             job["lm_thread"].start()
-            job["timings"].update(generator(job["sheet"], os.path.join(job["dir"], "raw.glb")))
+            preview = lambda kind, data: write_preview(job, kind, data)  # noqa: E731
+            job["timings"].update(generator(job["sheet"], os.path.join(job["dir"], "raw.glb"), on_preview=preview, **job.get("settings", {})))
             job["timings"]["model"] = round(time.time() - start, 2)
             rig_q.put(job)
         except Exception as err:  # noqa: BLE001
@@ -107,6 +139,22 @@ def rig(job_dir, out_name="rigged.glb"):
     return json.loads(report.group(1))
 
 
+def optimize(job):
+    """rigged.glb -> its optimized version (the original stays as rigged.orig.glb). Keeps the original on failure."""
+    if not (os.path.exists(NODE) and os.path.exists(OPTIMIZER)):
+        return
+    start = time.time()
+    src, dst = os.path.join(job["dir"], "rigged.glb"), os.path.join(job["dir"], "rigged.opt.glb")
+    out = subprocess.run([NODE, OPTIMIZER, src, dst], capture_output=True, text=True, timeout=60)
+    if out.returncode == 0 and os.path.exists(dst):
+        os.replace(src, os.path.join(job["dir"], "rigged.orig.glb"))
+        os.replace(dst, src)
+        job["optimized"] = True
+    else:
+        log(job["id"][:8], "optimize failed, sending the original:", (out.stderr or out.stdout)[-300:])
+    job["timings"]["optimize"] = round(time.time() - start, 2)
+
+
 def rig_worker():
     while True:
         job = rig_q.get()
@@ -117,6 +165,7 @@ def rig_worker():
             job["report"] = rig(job["dir"])
             job["timings"]["rig"] = round(time.time() - start, 2)
             job["rigged"] = True
+            optimize(job)
             job["status"] = "done"
         except Exception as err:  # noqa: BLE001
             traceback.print_exc()
@@ -166,7 +215,7 @@ def load():
         landmarker = Landmarker(POSE_MODEL)
         if os.environ.get("FORGE3D_FAKE_GLB"):
             # Dev mode without a GPU: every "generated" model is this GLB (the HTTP, landmark and rig steps are real).
-            def generator(_sheet, out_path):
+            def generator(_sheet, out_path, on_preview=None, **_settings):
                 time.sleep(float(os.environ.get("FORGE3D_FAKE_SECONDS", 1)))
                 shutil.copy(os.environ["FORGE3D_FAKE_GLB"], out_path)
                 return {"generate": 0.0, "export": 0.0}
@@ -228,13 +277,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(404, {"error": "no such job"})
             if len(parts) == 2:
                 ahead = sum(1 for j in list(jobs.values()) if j["status"] == "queued" and j["created"] < job["created"])
-                return self.send(200, {k: job.get(k) for k in ("status", "timings", "error", "rigged", "report")} | {"queued": ahead})
-            if len(parts) == 3 and parts[2] in ("rigged.glb", "model.glb"):
+                fields = ("status", "timings", "error", "rigged", "optimized", "report", "previews")
+                return self.send(200, {k: job.get(k) for k in fields} | {"queued": ahead})
+            if len(parts) == 3 and parts[2] in ("rigged.glb", "rigged.orig.glb", "model.glb", "voxels.bin", "shape.glb"):
                 path = os.path.join(job["dir"], parts[2])
                 if not os.path.exists(path):
                     return self.send(404, {"error": "not ready"})
                 with open(path, "rb") as f:
-                    return self.send(200, f.read(), "model/gltf-binary")
+                    return self.send(200, f.read(), "application/octet-stream" if parts[2].endswith(".bin") else "model/gltf-binary")
         self.send(404, {"error": "not found"})
 
     def do_POST(self):
@@ -265,7 +315,11 @@ class Handler(BaseHTTPRequestHandler):
         job_dir = os.path.join(WORK, job_id)
         os.makedirs(job_dir)
         sheet.save(os.path.join(job_dir, "sheet.png"))
-        job = {"id": job_id, "dir": job_dir, "sheet": sheet, "status": "queued", "created": time.time(), "timings": {}, "rigged": False}
+        job = {"id": job_id, "dir": job_dir, "sheet": sheet, "status": "queued", "created": time.time(), "timings": {}, "rigged": False,
+               "previews": {}, "optimized": False}
+        # Per-job generator settings (A/B tests without a restart): pipeline, steps, faces, texture, remesh.
+        if isinstance(body.get("settings"), dict):
+            job["settings"] = {k: v for k, v in body["settings"].items() if k in ("pipeline", "steps", "faces", "texture", "remesh")}
         with jobs_lock:
             jobs[job_id] = job
         if model is None:

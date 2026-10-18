@@ -60,6 +60,11 @@ class TimmDinoV3FeatureExtractor:
         return self.extract_features(image)
 
 
+def _to_y_up(v):
+    """TRELLIS works z-up in a [-0.5, 0.5] cube; the GLB (and the game) is y-up. Same turn as o_voxel's to_glb."""
+    return torch.stack([v[:, 0], v[:, 2], -v[:, 1]], dim=1)
+
+
 class Generator:
     def __init__(self, model_dir: str, pipeline_type: str = "1024_cascade", steps: int = 12, faces: int = 60000, texture: int = 2048):
         import trellis2.modules.image_feature_extractor as fe
@@ -75,26 +80,77 @@ class Generator:
         if getattr(self.pipe.rembg_model, "model", None) is not None:
             self.pipe.rembg_model.model.float()
         self.pipe.cuda()
-        self.pipeline_type = pipeline_type
-        self.steps = steps
-        self.faces = faces
-        self.texture = texture
+        self.settings = {"pipeline": pipeline_type, "steps": steps, "faces": faces, "texture": texture,
+                         "remesh": os.environ.get("FORGE3D_REMESH", "1") == "1"}
+
+    def _hooks(self, on_preview):
+        """Wraps the pipeline's stages for this run: reports the sparse voxels and the untextured shape as soon as
+        they exist, and decodes the shape once (early) instead of again in decode_latent."""
+        pipe = self.pipe
+        originals = {name: getattr(pipe, name) for name in ("sample_sparse_structure", "sample_shape_slat", "sample_shape_slat_cascade", "decode_shape_slat")}
+        early = {}
+
+        def sparse(*args, **kwargs):
+            coords = originals["sample_sparse_structure"](*args, **kwargs)
+            res = args[1] if len(args) > 1 else kwargs.get("resolution")
+            on_preview("voxels", {"coords": coords[:, 1:].to(torch.uint8 if res <= 256 else torch.int16).cpu().numpy(), "resolution": res})
+            return coords
+
+        def shape_ready(slat, res):
+            meshes, subs = originals["decode_shape_slat"](slat, res)
+            early["key"], early["value"] = id(slat), (meshes, subs)
+            try:
+                from trellis2.representations import Mesh
+
+                m = meshes[0]
+                small = Mesh(m.vertices.clone(), m.faces.clone())
+                small.simplify(int(os.environ.get("FORGE3D_PREVIEW_FACES", 12000)))
+                on_preview("shape", {"vertices": _to_y_up(small.vertices.float()).cpu().numpy(), "faces": small.faces.int().cpu().numpy()})
+            except Exception as err:  # noqa: BLE001  (a preview never breaks the model)
+                print("shape preview failed:", err, flush=True)
+
+        def shape(*args, **kwargs):
+            slat = originals["sample_shape_slat"](*args, **kwargs)
+            flow = args[1] if len(args) > 1 else kwargs.get("flow_model")
+            shape_ready(slat, 1024 if flow is pipe.models.get("shape_slat_flow_model_1024") else 512)
+            return slat
+
+        def cascade(*args, **kwargs):
+            slat, res = originals["sample_shape_slat_cascade"](*args, **kwargs)
+            shape_ready(slat, res)
+            return slat, res
+
+        def decode_shape(slat, resolution):
+            if early.get("key") == id(slat):
+                return early.pop("value")
+            return originals["decode_shape_slat"](slat, resolution)
+
+        for name, fn in (("sample_sparse_structure", sparse), ("sample_shape_slat", shape), ("sample_shape_slat_cascade", cascade), ("decode_shape_slat", decode_shape)):
+            setattr(pipe, name, fn)
+        return lambda: [delattr(pipe, name) for name in originals if name in pipe.__dict__]
 
     @torch.inference_mode()
-    def __call__(self, image: Image.Image, out_path: str, seed: int = 42) -> dict:
+    def __call__(self, image: Image.Image, out_path: str, seed: int = 42, on_preview=None, **overrides) -> dict:
+        """Sheet -> textured GLB at out_path. `on_preview(kind, data)` gets "voxels" and "shape" as they appear.
+        `overrides` (pipeline, steps, faces, texture, remesh) change one run, for experiments."""
         import o_voxel
 
+        s = {**self.settings, **{k: v for k, v in overrides.items() if v is not None}}
         timings = {}
         t = time.time()
-        sampler = {"steps": self.steps}
-        mesh = self.pipe.run(
-            image,
-            seed=seed,
-            pipeline_type=self.pipeline_type,
-            sparse_structure_sampler_params=sampler,
-            shape_slat_sampler_params=sampler,
-            tex_slat_sampler_params=sampler,
-        )[0]
+        sampler = {"steps": int(s["steps"])}
+        restore = self._hooks(on_preview) if on_preview else (lambda: None)
+        try:
+            mesh = self.pipe.run(
+                image,
+                seed=seed,
+                pipeline_type=s["pipeline"],
+                sparse_structure_sampler_params=sampler,
+                shape_slat_sampler_params=sampler,
+                tex_slat_sampler_params=sampler,
+            )[0]
+        finally:
+            restore()
         torch.cuda.synchronize()
         timings["generate"] = round(time.time() - t, 2)
         t = time.time()
@@ -107,12 +163,15 @@ class Generator:
             attr_layout=mesh.layout,
             voxel_size=mesh.voxel_size,
             aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
-            decimation_target=self.faces,
-            texture_size=self.texture,
-            remesh=True,
+            decimation_target=int(s["faces"]),
+            texture_size=int(s["texture"]),
+            remesh=bool(s["remesh"]),
             remesh_band=1,
             remesh_project=0,
         )
+        torch.cuda.synchronize()
+        timings["bake"] = round(time.time() - t, 2)
+        t = time.time()
         glb.export(out_path, extension_webp=False)
         timings["export"] = round(time.time() - t, 2)
         del mesh
