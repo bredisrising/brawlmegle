@@ -7,6 +7,7 @@ import { PROTOCOL_VERSION, type ClientMessage, type HostMessage, type MatchPlaye
 import { config } from '../config';
 import type { ForgedFighter, PlayerId, PoseFrame } from '../types';
 import type { FighterChoice } from './Game';
+import { VideoClip } from './MatchRecorder';
 import { localPlayerId, updatePlayer, useGameStore } from './store';
 
 const PLAYER = localPlayerId('client');
@@ -36,6 +37,8 @@ export class ClientSession {
   private setup: ClientMessage[] = [];
   private confirmed = false;
   private disposed = false;
+  /** `?video=1`: this laptop's camera during each round, saved locally (see MatchRecorder). */
+  private readonly clip = new VideoClip();
   /** This laptop's latest camera frame (P2's own pose, blended into its fighter on this screen). */
   lastFrame: PoseFrame | null = null;
 
@@ -159,6 +162,9 @@ export class ClientSession {
         break;
       case 'phase': {
         const { screen, players } = useGameStore.getState();
+        const cam = this.source as { video?: HTMLVideoElement } | null;
+        if (msg.phase === 'fighting') this.clip.start((cam?.video?.srcObject as MediaStream | null) ?? null);
+        if (msg.phase === 'ko' || msg.phase === 'lobby') this.clip.stop('p2');
         useGameStore.setState({
           phase: msg.phase,
           countdown: msg.countdown,

@@ -124,6 +124,36 @@ export class MatchRecorder {
   }
 }
 
+/**
+ * Just this laptop's camera, low resolution, saved to Downloads when stopped (`?video=1`): the client laptop uses it
+ * so both players' rounds can be checked against what the game read.
+ */
+export class VideoClip {
+  private rec: { recorder: MediaRecorder; chunks: Blob[]; started: number } | null = null;
+
+  start(stream: MediaStream | null) {
+    if (!stream || this.rec || new URLSearchParams(window.location.search).get('video') !== '1') return;
+    try {
+      const recorder = new MediaRecorder(stream, { mimeType: 'video/webm', videoBitsPerSecond: 400_000 });
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+      recorder.start(1000);
+      this.rec = { recorder, chunks, started: Date.now() };
+    } catch (err) {
+      console.warn('[record] video recording unavailable', err);
+    }
+  }
+
+  stop(tag: string) {
+    const r = this.rec;
+    if (!r) return;
+    this.rec = null;
+    const stamp = new Date(r.started).toISOString().replace(/[:.]/g, '-');
+    r.recorder.onstop = () => download(new Blob(r.chunks, { type: 'video/webm' }), `brawlegle-match-${stamp}-${tag}.webm`);
+    r.recorder.stop();
+  }
+}
+
 function download(blob: Blob, name: string) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
