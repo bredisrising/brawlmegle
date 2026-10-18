@@ -24,7 +24,8 @@ const browser = await chromium.launch({
   headless: true,
   ...(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : { channel: "chrome" }),
   // Headless Chrome hides local IPs behind mDNS names, which may not resolve here.
-  args: ["--disable-features=WebRtcHideLocalIpsWithMdns"],
+  // SwiftShader gives the Game's renderer software WebGL (no GPU in headless).
+  args: ["--disable-features=WebRtcHideLocalIpsWithMdns", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
 });
 
 let failed = true;
