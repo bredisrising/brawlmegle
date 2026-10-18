@@ -57,6 +57,7 @@ export async function launch({ camera = "fake", video = PERSON_VIDEO, args = [] 
 /** New page with a log: console errors/warnings, uncaught errors, failed requests and HTTP >= 400. */
 export async function open(browser, url, { viewport = { width: 1280, height: 800 }, wait = "load" } = {}) {
   const context = await browser.newContext({ viewport, ignoreHTTPSErrors: true });
+  openContexts.add(context);
   const page = await context.newPage();
   page.setDefaultTimeout(30_000); // Playwright's default for actions is no timeout at all
   const log = { console: [], errors: [], failed: [], http: [], url };
@@ -80,6 +81,8 @@ export async function shot(page, name) {
 // ---- runner ---------------------------------------------------------------------------------------------
 
 const results = [];
+/** Contexts opened during the current test: closed after it even when it fails (a leftover WebGL + camera page starves the next tests). */
+const openContexts = new Set();
 
 /**
  * test(name, fn, { known: 'E2E-07' }) marks a test that fails because of a reported, unfixed issue: it prints
@@ -101,6 +104,9 @@ export async function test(name, fn, { known, skip } = {}) {
     const status = known ? "known" : "fail";
     results.push({ name, status, ms: Date.now() - t0, error: err.message });
     console.log(`${known ? "KNOWN" : "FAIL "} ${name} (${Date.now() - t0} ms)${known ? ` [${known}]` : ""}\n      ${String(err.message).split("\n").slice(0, 4).join("\n      ")}`);
+  } finally {
+    for (const c of openContexts) await c.close().catch(() => {});
+    openContexts.clear();
   }
 }
 
@@ -134,3 +140,26 @@ export async function http(url, init = {}) {
 }
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** The page's text as rendered (CSS uppercase applies). */
+export const pageText = (page) => page.locator("body").innerText().catch(() => "");
+
+/** Polls the page text until `test(text)` (a RegExp or function) holds. */
+export async function waitText(page, re, timeout = 30_000) {
+  const ok = typeof re === "function" ? re : (t) => re.test(t);
+  const end = Date.now() + timeout;
+  let last = "";
+  while (Date.now() < end) {
+    last = await pageText(page);
+    if (ok(last)) return last;
+    await sleep(300);
+  }
+  throw new Error(`timed out waiting for ${re}; page says: ${last.replace(/\s+/g, " ").slice(0, 200)}`);
+}
+
+/** The local fighter is in the arena (HUD says READY and nothing is still loading), or setup failed. */
+export const waitArena = (page, timeout = 90_000) =>
+  waitText(page, (t) => /couldn't set up/i.test(t) || (/\bREADY\b/.test(t) && !/SCANNING|FORGING|STARTING CAMERA|TURN SLOWLY/i.test(t)), timeout);
+
+/** "Couldn't set up your fighter: <reason>" from the fighter-select screen, or "". */
+export const setupError = (t) => (t.match(/couldn't set up your fighter[^\n]*/i) ?? [""])[0];

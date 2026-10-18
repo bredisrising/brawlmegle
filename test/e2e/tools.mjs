@@ -24,9 +24,11 @@ await test("tuner: loads, starts the camera and tracks", async () => {
   await page.locator("#camera").click();
   const status = page.locator("#status");
   const t0 = Date.now();
-  await waitFor(async () => !/camera off|starting|loading/i.test(await status.innerText()), 90_000, "camera start");
-  note(`camera up after ${Date.now() - t0} ms: ${(await status.innerText()).replace(/\s+/g, " ").slice(0, 120)}`);
-  await sleep(4000);
+  await waitFor(async () => /fps tracked/i.test(await status.innerText()), 90_000, "camera start");
+  note(`camera up after ${Date.now() - t0} ms`);
+  if (PERSON_VIDEO) await waitFor(async () => /· tracking/.test(await status.innerText()), 60_000, "never tracked the person on camera");
+  note(`status: ${(await status.innerText()).replace(/\s+/g, " ").slice(0, 140)}`);
+  await sleep(2000);
   await shot(page, "tuner");
   assert.deepEqual(page.log.errors, []);
   if (PERSON_VIDEO) {
@@ -51,9 +53,19 @@ await test("tuner: fight panel runs against each CPU level and resets", async ()
   await sleep(20_000);
   const later = await hp();
   const log = await page.locator("#fightLog").innerText();
-  note(`hp after 20 s vs hard CPU: ${later.join(" / ")}; log lines: ${log.split("\n").filter(Boolean).length}`);
+  note(`hp after 20 s vs hard CPU: ${later.join(" / ")}; log lines: ${log.split("\n").filter(Boolean).length}; ${await page.locator("#phases").innerText()}`);
   await shot(page, "tuner-fight");
+  await page.context().close();
   assert.ok(log.trim().length > 0 || later[0] !== start[0], "nothing happened in 20 s against the hard CPU");
+}, { known: "E2E-15" });
+
+await test("tuner: fight panel reset restores HP", async () => {
+  const page = await open(browser, TUNER);
+  await page.locator("#fightReset").click();
+  await sleep(500);
+  const hp = async () => [await page.locator("#hpn1").innerText(), await page.locator("#hpn2").innerText()];
+  const start = await hp();
+  assert.deepEqual(start, ["100", "100"]);
   await page.locator("#fightReset").click();
   await sleep(500);
   assert.deepEqual(await hp(), start, "reset didn't restore HP");

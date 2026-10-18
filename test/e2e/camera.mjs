@@ -1,25 +1,13 @@
 // Camera edge cases: permission denied, no camera at all, and nobody in view during a scan. Each must end in a
 // clear message and a way to try again. The nobody-in-view scan must not reach the (paid) forge.
-import { BASE, assert, done, launch, note, open, shot, sleep, test } from "./lib.mjs";
+import { BASE, assert, done, launch, note, open, setupError, shot, sleep, test, waitArena, waitText } from "./lib.mjs";
 
 const URL_ = `${BASE}/?pose=lite`;
-const text = (page) => page.locator("body").innerText();
-async function waitText(page, re, timeout) {
-  const end = Date.now() + timeout;
-  let last = "";
-  while (Date.now() < end) {
-    last = await text(page).catch(() => "");
-    if (re.test(last)) return last;
-    await sleep(500);
-  }
-  throw new Error(`timed out waiting for ${re}; page says: ${last.replace(/\s+/g, " ").slice(0, 200)}`);
-}
 async function toName(page) {
   await page.getByRole("button", { name: /Host/ }).click();
   await page.locator("button", { hasText: "Type your username" }).click();
   await page.locator("#fighter-name").waitFor();
 }
-const errorLine = (t) => (t.match(/couldn't set up your fighter[^\n]*/i) ?? [""])[0];
 
 /** Pick demo's saved fighter (needs the camera too: it's the controller), expect a clear camera error. */
 async function cameraError(camera, shotName) {
@@ -30,11 +18,12 @@ async function cameraError(camera, shotName) {
     await page.locator("#fighter-name").fill("demo");
     await page.getByText("Welcome back").waitFor({ timeout: 10_000 });
     await page.getByRole("button", { name: /Fight as demo/i }).click();
-    const t = await waitText(page, /couldn't set up|\bREADY\b/i, 60_000);
+    const t = await waitArena(page, 60_000);
+    await sleep(500);
     await shot(page, shotName);
-    const msg = errorLine(t);
-    note(`message: "${msg}"`);
-    assert.ok(msg, "no error shown (did it start without a camera?)");
+    const msg = setupError(t);
+    note(`message: "${msg}"; console: ${page.log.console.join(" | ").slice(0, 160)}`);
+    assert.ok(msg, "no error shown: the fighter loaded without a camera");
     // Recoverable: back on the fighter select, Enter works again.
     await page.locator("button", { hasText: "Type your username" }).click();
     await page.locator("#fighter-name").waitFor();
@@ -66,15 +55,15 @@ await test("nobody in view during the scan: clear message, no forge call, and yo
     await page.getByText("Save fighter to memory card?").waitFor({ timeout: 10_000 });
     const t0 = Date.now();
     await page.getByRole("button", { name: /Yes, scan me/ }).click();
-    await waitText(page, /turn slowly|step into view|front/i, 90_000);
+    await waitText(page, /turn slowly|step into view/i, 90_000);
     note(`scan started after ${Date.now() - t0} ms`);
     await sleep(3000);
     await shot(page, "scan-nobody-during");
     const t = await waitText(page, /couldn't set up/i, 90_000);
-    note(`gave up after ${Date.now() - t0} ms: "${errorLine(t)}"`);
+    note(`gave up after ${Date.now() - t0} ms: "${setupError(t)}"`);
     await shot(page, "scan-nobody-error");
     assert.deepEqual(posts, [], "an empty scan was sent to the forge");
-    assert.match(errorLine(t), /nobody|no one|in view/i);
+    assert.match(setupError(t), /nobody|no one|in view/i);
     await page.locator("button", { hasText: "Type your username" }).click();
     await page.locator("#fighter-name").waitFor();
   } finally {

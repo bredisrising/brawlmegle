@@ -1,23 +1,11 @@
 // The game site like a stranger uses it: every screen and button, username validation, Welcome back, the roster,
 // masked, keyboard shortcuts, refresh, double clicks, back and forth, phone width. Fake camera (Chrome's test
 // pattern, so nobody is in view); nothing here scans or forges.
-import { BASE, assert, done, launch, note, open, shot, sleep, test } from "./lib.mjs";
+import { BASE, assert, done, launch, note, open, pageText as text, shot, sleep, test, waitArena, waitText } from "./lib.mjs";
 
 const URL_ = `${BASE}/?pose=lite`;
 const browser = await launch({ camera: "fake" });
 
-const text = (page) => page.locator("body").innerText();
-/** Polls the page text (as rendered, so CSS uppercase applies) until it matches. */
-async function waitText(page, re, timeout = 30_000) {
-  const end = Date.now() + timeout;
-  let last = "";
-  while (Date.now() < end) {
-    last = await text(page).catch(() => "");
-    if (re.test(last)) return last;
-    await sleep(250);
-  }
-  throw new Error(`timed out waiting for ${re}; page says: ${last.replace(/\s+/g, " ").slice(0, 200)}`);
-}
 const enterCard = (page) => page.locator("button", { hasText: "Type your username" });
 const loadCard = (page) => page.locator("button", { hasText: "house fighter" });
 const back = (page) => page.getByRole("button", { name: /back/i });
@@ -31,10 +19,6 @@ async function toName(page) {
   await host(page);
   await enterCard(page).click();
   await nameInput(page).waitFor();
-}
-/** The arena: the local fighter shows READY (or an error came back). */
-async function waitArena(page, timeout = 90_000) {
-  return waitText(page, /\bREADY\b|couldn't set up/i, timeout);
 }
 /** A real double click at the element's center (the element may unmount after the first click). */
 async function dblclick(page, locator) {
@@ -85,17 +69,19 @@ await test("Host: opens the fighter select with a room code", async () => {
   await page.context().close();
 }, { known: "E2E-08" });
 
-await test("Host: double click opens one room only", async () => {
+await test("Host: double click opens one room and stays on the first fighter-select step", async () => {
   const page = await open(browser, URL_);
   const sockets = [];
   page.on("websocket", (ws) => sockets.push(ws.url()));
   await dblclick(page, page.getByRole("button", { name: /Host/ }));
-  await enterCard(page).waitFor({ timeout: 15_000 });
-  await sleep(1500);
+  await sleep(2000);
+  await shot(page, "host-dblclick");
   assert.ok(sockets.length <= 1, `${sockets.length} signaling sockets`);
   noPageErrors(page);
+  const t = await text(page);
+  assert.match(t, /CHOOSE\s+YOUR FIGHTER/i, `the second click went through to the next screen: ${t.replace(/\s+/g, " ").slice(0, 120)}`);
   await page.context().close();
-});
+}, { known: "E2E-10" });
 
 await test("fighter select: there is a way back to the title screen", async () => {
   const page = await open(browser, URL_);
