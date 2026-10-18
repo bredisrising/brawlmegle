@@ -182,9 +182,31 @@ always a straight-on front A-pose, so a template fit is enough (`rig_blender.py`
 4. **Skin:** Blender bone heat on a watertight 8 mm voxel copy, copied back to the real mesh, max 4 bones per vertex.
    Bone heat failed for every bone until the copy was cleaned: merge doubles, dissolve degenerate faces,
    triangulate, keep the biggest piece. Materials are forced opaque.
+5. **Checked, with fallbacks:** see below.
 
-The same rigger also rescues fighters whose Tripo rig failed. `forge/gpu/rescue.mjs` sends the existing model plus
-its sheet as a rig-only job, then runs the fighter optimizer. That's how havel got rigged.
+The same rigger also rescues fighters whose rig failed. `forge/gpu/rescue.mjs` sends the existing model plus its
+sheet as a rig-only job (or installs a GLB rigged elsewhere with `--glb`), checks it with `forge/rigcheck.js` and
+only then installs it, keeping `*.pre-rescue` backups. That's how havel got rigged, and how dylan, lamdestroyer and
+lampham got fixed.
+
+### Rigs that collapsed onto one bone (fixed)
+
+Three of 14 GPU rigs (dylan HQ, lamdestroyer, lampham) came out with nearly all the weight on one bone: Spine1 owned
+75% of dylan, RightLeg 97% of lamdestroyer, LeftUpLeg 43% of lampham. The joints were fine; the skin wasn't.
+
+- **Cause:** TRELLIS.2's meshes are hollow: a 2-3 mm double-walled shell around an empty inside (every ray through the
+  torso crosses four surfaces, not two). Whether OpenVDB's 8 mm voxel remesh fills that inside depends on the shell.
+  On these three it didn't (dylan's inside reaches the outside through a 12-16 mm gap at the crotch), so the remesh
+  traced the 2-3 mm shell itself, which is thinner than a voxel, and came out as ~1,200-1,300 separate blobs with
+  half the surface area. "Keep the biggest piece" then kept one blob, a 1.8k-3.2k-face patch of chest or thigh (good
+  proxies have 31k-44k faces). Bone heat on that patch reached 3-9 of the 22 bones, and the copy-back gave every
+  vertex the patch's weights. The rigger reported `heat_empty` (13-19 bones) but nothing read it.
+- **Fix (`rig_blender.py`, `rig_check.py`):** the proxy must cover the body and stay in one piece, and the weights
+  must pass a check (each limb's vertices owned by that limb, each body part's share near what its geometry gives it,
+  no bone owning the mesh). Otherwise the next path: bone heat on a solid built by voxel flood fill (the surface
+  thickened by a voxel to close gaps, everything the outside can't reach filled), then envelope weights (nearest bone
+  segment, blended over 3 cm at each joint, smoothed over the surface). The box then runs the game's rig check and
+  tries the next attempt plan if it fails. The 19 rigs that were fine come out byte-identical.
 
 ## The box
 
