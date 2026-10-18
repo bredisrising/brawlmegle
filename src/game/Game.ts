@@ -296,6 +296,10 @@ export class Game {
 
   private update = (dt: number, frozen: boolean) => {
     this.effects.update(dt);
+    // The camera follows whoever's on stage.
+    const shown = PLAYER_IDS.filter((id) => this.views[id].root.visible).map((id) => this.views[id].root.position.x);
+    if (shown.length === 2) this.renderer.track((shown[0] + shown[1]) / 2, Math.abs(shown[0] - shown[1]));
+    else this.renderer.track(0, 0.6); // lobby: keep the stage framed around the panels
     if (frozen) return;
     this.accumulator += dt;
     while (this.accumulator >= SIM_DT) {

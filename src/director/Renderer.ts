@@ -37,6 +37,12 @@ export class Renderer {
   private slowTimer = 0;
   private slowScale = 1;
   private readonly lookNow = new THREE.Vector3();
+  /** Fighting-game camera: follows the fighters' midpoint and pushes in as they close (see track()). */
+  private baseZ = 1.8;
+  private trackX = 0;
+  private trackSpread = 0.5;
+  private camX = 0;
+  private zoom = 1;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -82,6 +88,12 @@ export class Renderer {
 
   shake(amount: number) {
     this.shakeAmount = Math.max(this.shakeAmount, amount);
+  }
+
+  /** Where the fighters are: their midpoint on x and the gap between them (world units). Call every frame. */
+  track(midX: number, spread: number) {
+    this.trackX = midX;
+    this.trackSpread = spread;
   }
 
   /** Impact frame centered on a world point (see ImpactPass). */
@@ -144,6 +156,13 @@ export class Renderer {
   private updateCamera(dt: number) {
     this.shakeAmount = Math.max(0, this.shakeAmount - dt * 0.15);
     const s = this.shakeAmount;
+    // Ease toward the fighters' midpoint, and in when they're close (out when they're far apart).
+    const ease = 1 - Math.exp(-3 * dt);
+    this.camX += (this.trackX - this.camX) * ease;
+    const zoom = 0.86 + 0.3 * THREE.MathUtils.clamp((this.trackSpread - 0.3) / 0.6, 0, 1);
+    this.zoom += (zoom - this.zoom) * ease;
+    this.cameraHome.set(this.camX * 0.85, 0.62, this.baseZ * this.zoom);
+    this.lookTarget.set(this.camX, 0.5, 0);
     this.punchAmount = Math.max(0, this.punchAmount - dt * this.punchDecay * Math.max(0.15, this.punchAmount));
     const p = this.punchAmount;
     this.camera.position.set(
@@ -165,6 +184,6 @@ export class Renderer {
     // Narrow screens (a phone held upright): back the camera off until the fight line fits across.
     const halfWidth = 0.75;
     const z = halfWidth / (Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * this.camera.aspect);
-    this.cameraHome.z = Math.max(1.8, z);
+    this.baseZ = Math.max(1.8, z);
   }
 }
