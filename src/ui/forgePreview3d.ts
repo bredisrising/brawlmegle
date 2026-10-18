@@ -15,8 +15,11 @@ import { loadModel } from '../forge/models';
 export const PREVIEW_W = 288;
 export const PREVIEW_H = 384;
 const FPS = 12;
-/** Seconds for one stage to sweep in over the last (bottom to top). */
+/** Seconds for one stage to sweep in over the last (bottom to top); the paint goes faster, it's the finale. */
 const SWEEP = 1.2;
+const PAINT_SWEEP = 0.7;
+/** The rig flashes right after the paint is on, for this long (s). */
+const RIG_FLASH = 0.8;
 /** Turntable speed, rad/s (stepped by the frame rate). */
 const SPIN = 0.9;
 /**
@@ -255,7 +258,7 @@ class PreviewScene implements ForgePreviewView {
     lines.transparent = true;
     lines.blending = THREE.AdditiveBlending;
     lines.vertexColors = false;
-    lines.color = this.color.clone().lerp(new THREE.Color('#ffffff'), 0.35);
+    lines.color = this.color.clone().lerp(new THREE.Color('#ffffff'), 0.6);
     lines.needsUpdate = true;
     this.bones.visible = false;
     this.final = model;
@@ -289,15 +292,15 @@ class PreviewScene implements ForgePreviewView {
       shader.uniforms.uAlpha.value = this.clay || this.final ? 0.45 : 0.85 + 0.15 * Math.sin(t * 9);
     }
     // h: the sweep line. Before any sweep the hologram shows whole (everything is above -0.6).
-    const k = this.sweepFrom < 0 ? 1 : Math.min(1, (t - this.sweepFrom) / SWEEP);
+    const k = this.sweepFrom < 0 ? 1 : Math.min(1, (t - this.sweepFrom) / (this.final ? PAINT_SWEEP : SWEEP));
     const h = this.sweepFrom < 0 ? -0.6 : -0.6 + k * 1.25;
     if (k >= 1 && this.voxels && this.clay) this.voxels.visible = false; // the clay is all in
     this.keepBelow.constant = h; // the new stage: y <= h
     this.keepAbove.constant = -h; // the old one: y >= h
     if (this.bones) {
-      // The rig flashes once the paint is on: bones blinking over the body for ~0.7 s.
-      const since = t - this.finalAt - SWEEP;
-      this.bones.visible = since > 0 && since < 0.7 && Math.floor(since * FPS) % 2 === 0;
+      // The rig flashes once the paint is on: bones blinking over the body (on two frames, off one).
+      const since = t - this.finalAt - PAINT_SWEEP;
+      this.bones.visible = since > 0 && since < RIG_FLASH && Math.floor(since * FPS) % 3 !== 2;
     }
   }
 

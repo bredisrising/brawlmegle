@@ -57,7 +57,7 @@ const REPLAY_DELAY = 1.2;
 type ReplayFrame = MirrorFrame & { live: Record<PlayerId, PoseFrame | null>; events: MirrorEvent[] };
 /** Roughly head height between the two fighters. */
 /** How long a fresh forge shows itself off in the forging card (textured, then the rig flashes) before it's ready. */
-const REVEAL_MS = 1800;
+const REVEAL_MS = 2200;
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 const ARENA_CENTER = new THREE.Vector3(0, 0.5, 0);

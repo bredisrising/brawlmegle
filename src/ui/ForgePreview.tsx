@@ -16,7 +16,7 @@ const STAGES = [
 
 /** Which stage the preview is at, from what exists so far. */
 function stageOf(p: Preview | null, revealed: boolean): number {
-  if (p?.glbUrl) return revealed ? 6 : 5; // the paint sweeps in and the rig flashes, then it's live
+  if (p?.glbUrl) return revealed ? 5 : 4; // the paint sweeps in, then the rig flashes (live: the arena's materialize)
   if (p?.step === 'rig') return 4; // the box is painting (baking) and rigging
   if (p?.meshUrl) return 3;
   if (p?.voxelsUrl) return 2;
@@ -92,8 +92,8 @@ export function ForgePreview({
   useEffect(() => {
     if (!preview?.glbUrl) return;
     void viewRef.current?.showFinal(preview.glbUrl).catch(() => {});
-    // Paint sweeps in (1.2 s), then the rig flashes.
-    const id = window.setTimeout(() => setRevealed(true), 1200);
+    // The paint sweeps in (0.7 s), then the rig flashes.
+    const id = window.setTimeout(() => setRevealed(true), 700);
     return () => window.clearTimeout(id);
   }, [three, preview?.glbUrl]);
 
