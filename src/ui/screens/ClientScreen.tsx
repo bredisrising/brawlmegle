@@ -2,6 +2,7 @@ import { useGameStore } from '../../game/store';
 import type { Phase } from '../../types';
 import { ACCENT } from '../accent';
 import { ForgeSteps } from '../ForgeSteps';
+import { MoveGuide } from '../MoveGuide';
 
 /** Headline once P2 is ready, following the host's phase. */
 const READY_HEADLINE: Record<Phase, string> = {
@@ -58,10 +59,12 @@ export function ClientScreen() {
               {READY_HEADLINE[phase]}
             </p>
             <p className="font-cond text-xl font-bold uppercase tracking-[0.12em] text-paper/70">
-              Stay in front of this camera and look at the big screen.
+              Stay in front of this camera. The fight shows here as soon as it starts.
             </p>
           </div>
         )}
+
+        {player.status === 'ready' && <MoveGuide inline />}
 
         {player.status === 'waiting' && player.statusDetail && (
           <p className="self-start border-l-4 border-dmg bg-ink-2 px-4 py-2 font-semibold">{player.statusDetail}</p>

@@ -15,6 +15,7 @@ import { AvatarScreen } from './ui/screens/AvatarScreen';
 import { ClientScreen } from './ui/screens/ClientScreen';
 import { PoseDebugOverlay } from './ui/PoseDebugOverlay';
 import { CameraPip } from './ui/CameraPip';
+import { MoveGuide } from './ui/MoveGuide';
 
 export default function App() {
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -50,6 +51,7 @@ export default function App() {
                 <Countdown />
                 <KOOverlay />
                 <HUD />
+                <MoveGuide />
                 <DebugHint />
               </>
             )}
