@@ -1,8 +1,8 @@
 {
   "file": "C:\\Users\\adria\\source\\repos\\brawlegle\\models\\forested_hills.glb",
-  "bytes": 2508512,
+  "bytes": 4234284,
   "meshes": 1,
-  "triangles": 7636,
+  "triangles": 36684,
   "atlas": "C:\\Users\\adria\\source\\repos\\brawlegle\\models\\blender\\baked\\forested_hills\\forested_hills_basecolor.png",
   "resolution": 2048,
   "source_materials": {
@@ -14,14 +14,13 @@
   "extensions": [
     "KHR_materials_specular"
   ],
-  "scope": "EXPORT - Forested Hills only; excludes other assets, source library, cameras and lights",
-  "baked": "Greenery shader color: image texture and color ramp",
+  "scope": "ForestedHills hierarchy only; excludes loose meshes, other assets, source library, cameras and lights",
+  "baked": "Shader color and connected texture/color processing",
   "modifiers_realized_on_copy": true,
   "source_preserved": true,
-  "scattered_trees": 55,
   "roundtrip_validation": {
     "reimported_meshes": 1,
-    "reimported_triangles": 7636,
+    "reimported_triangles": 36684,
     "bounding_box_max_error": 0.0,
     "embedded_textures_load": true
   }

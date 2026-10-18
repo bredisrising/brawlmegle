@@ -53,7 +53,7 @@ def signature(scene, collection):
                  {'name': modifier.name, 'type': modifier.type,
                   'group': modifier.node_group.name if modifier.type == 'NODES' and modifier.node_group else None,
                   'settings': {key: value.name if isinstance(value, bpy.types.ID) else str(value)
-                               for key, value in modifier.items()}}
+                               for key, value in modifier.items()} if modifier.type == 'NODES' else {}}
                  for modifier in obj.modifiers
              ],
              'materials': [m.name if m else None for m in obj.data.materials] if obj.type == 'MESH' else []}
@@ -62,7 +62,8 @@ def signature(scene, collection):
     }
 
 
-def working_copy(source_scene, source_collection, evaluate_modifiers=False, asset_label='Floating Island'):
+def working_copy(source_scene, source_collection, evaluate_modifiers=False, asset_label='Floating Island',
+                 source_objects=None):
     """Copy just the target hierarchy, lights, and all in-memory image buffers."""
     scene = bpy.data.scenes.new(asset_label + ' - Bake Copy')
     scene.world = source_scene.world
@@ -76,7 +77,7 @@ def working_copy(source_scene, source_collection, evaluate_modifiers=False, asse
     objects, materials, images = {}, {}, {}
     source_signature = signature(source_scene, source_collection)
     graph = bpy.context.evaluated_depsgraph_get() if evaluate_modifiers else None
-    for obj in source_collection.all_objects:
+    for obj in source_collection.all_objects if source_objects is None else source_objects:
         if obj.type not in {'MESH', 'EMPTY'}:
             continue
         duplicate = obj.copy()
@@ -161,7 +162,7 @@ def working_copy(source_scene, source_collection, evaluate_modifiers=False, asse
     return scene, coll, created
 
 
-def capture_live_snapshot(asset='island'):
+def capture_live_snapshot(asset='island', root_name=None):
     source_scene = bpy.context.scene
     key = 'hills_export_collection' if asset == 'hills' else 'export_collection'
     collection_name = source_scene.get(key)
@@ -170,10 +171,17 @@ def capture_live_snapshot(asset='island'):
     source_collection = bpy.data.collections.get(collection_name or '')
     if source_collection is None:
         raise RuntimeError('The current file has no requested asset export collection')
+    source_objects = None
+    if root_name:
+        root = source_collection.all_objects.get(root_name)
+        if root is None:
+            raise RuntimeError(f'The export collection has no {root_name} root')
+        source_objects = [root, *root.children_recursive]
     before = signature(source_scene, source_collection)
     label = 'Forested Hills' if asset == 'hills' else 'Floating Island'
     scene, coll, created = working_copy(source_scene, source_collection,
-                                       evaluate_modifiers=asset == 'hills', asset_label=label)
+                                       evaluate_modifiers=asset == 'hills', asset_label=label,
+                                       source_objects=source_objects)
     folder = Path(tempfile.mkdtemp(prefix='brawlegle-' + asset + '-bake-'))
     snapshot = folder / 'source_snapshot.blend'
     try:

@@ -16,14 +16,16 @@ This runs the color bake in a separate Blender process and writes a baked review
 
 ## Edited forested hills: baked export
 
-The edited Forested Hills collection is exported to **`../forested_hills.glb`** in `models`. This live version contains **one hill and 55 scattered trees**, realized into **one mesh / 7,636 triangles**, with one material and one embedded **2048 x 2048** color atlas. The greenery shader's image texture and color ramp are baked. Scene placement is retained. The rocky island, Rainier, source-tree library objects, cameras and lights are excluded.
+**One-click re-export:** in Blender's Text Editor, choose **`reexport_hills.py`** and press **Alt+P** (Run Script). It captures the current, unsaved `ForestedHills` hierarchy, evaluates tree scattering on a copy, bakes the shader colors, reloads the result to verify geometry and embedded textures, and replaces **`../forested_hills.glb`** automatically. Baking runs in a separate hidden Blender process so editing can continue. A popup reports completion or the failure log. The existing export is replaced only after validation passes. Loose meshes outside the `ForestedHills` hierarchy are excluded; parent additional intended scenery to that root.
+
+The current export contains **one hill and 55 scattered trees**, realized into **one mesh / 35,076 triangles**, with one material and one embedded **2048 x 2048** color atlas. The greenery shader's image texture and color ramp are baked. Scene placement is retained. The rocky island, Rainier, source-tree library objects, cameras and lights are excluded.
 
 Only the export copy has its Geometry Nodes modifier evaluated into a mesh. The source scatter controls, tree models, and shader stay editable in Blender. The baked Eevee review copy, atlas, reference render, and GLB reload preview are in **`baked/forested_hills/`**. The GLB was reimported and checked for identical geometry counts, bounding boxes, and working embedded textures.
 
-To bake a later saved version of the hills, run:
+To automate the same export from a saved file, run from this folder:
 
 ```powershell
-blender --background floating_island.blend --python bake_export_island.py -- --asset hills --output ../forested_hills.glb --resolution 2048
+blender --background floating_island.blend --python-exit-code 1 --python reexport_hills.py
 ```
 
 The following sections describe the original generated assets and their default counts. The baked exports above reflect the subsequent Blender edits.
