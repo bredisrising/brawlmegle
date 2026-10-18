@@ -101,15 +101,15 @@ if [ ! -x $ROOT/blender/blender ]; then
 fi
 
 echo "== node + the forge's GLB optimizer"
-# The box optimizes each rigged GLB with the forge's own optimize.js (WebP textures + meshopt), so this needs the
-# whole forge/ folder copied over, not just forge/gpu.
+# The box optimizes each rigged GLB with the forge's own optimize.js (WebP textures + meshopt) and checks it with the
+# forge's rigcheck.js (same packages), so this needs the whole forge/ folder copied over, not just forge/gpu.
 if [ ! -x $ROOT/node/bin/node ]; then
   curl -sSfL https://nodejs.org/dist/$NODE_VERSION/node-$NODE_VERSION-linux-x64.tar.xz | tar -xJ -C $ROOT
   rm -rf $ROOT/node && mv $ROOT/node-$NODE_VERSION-linux-x64 $ROOT/node
 fi
 if [ -f "$SRC/../optimize.js" ]; then
   mkdir -p $ROOT/optimizer
-  cp "$SRC/optimize-glb.mjs" "$SRC/../optimize.js" "$SRC/../package.json" "$SRC/../package-lock.json" $ROOT/optimizer/
+  cp "$SRC/optimize-glb.mjs" "$SRC/../optimize.js" "$SRC/../rigcheck.js" "$SRC/../rigcheck-poses.json" "$SRC/../package.json" "$SRC/../package-lock.json" $ROOT/optimizer/
   (cd $ROOT/optimizer && PATH=$ROOT/node/bin:$PATH npm ci --omit=dev --no-audit --no-fund --silent)
 else
   echo "   forge/optimize.js not found next to forge/gpu: the box sends unoptimized GLBs (the forge optimizes them)"
