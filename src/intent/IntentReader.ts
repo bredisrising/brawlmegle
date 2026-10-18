@@ -88,6 +88,9 @@ type LimbState = {
   risingAt: number;
   /** Current tip travel from the anchor (to compare the two hands). */
   travel: Vec3;
+  /** Both hands' positions (relative to their shoulders) when this strike began, to see what the other did meanwhile. */
+  tipAtOnset: Vec3;
+  otherAtOnset: Vec3;
   // Debug readouts
   disp: number;
   out: number;
@@ -355,6 +358,11 @@ export class IntentReader {
       // throwing a punch, whatever it does next. Punches start from a guard, elbow down.
       const raised = def.kind === 'arm' && s.anchor.mid.y > -0.15 && s.anchor.tip.y - s.anchor.mid.y > 0.25;
       if (visible && !dropping && !raised && outward > cfg.onsetSpeed && disp > cfg.onsetDist && (strikeLike(def, tTip, tMid, disp) || extensionStrike(def, tTip, tExt, disp))) {
+        if (!legs) {
+          const o = body.points[def.side === 1 ? LM.rWrist : LM.lWrist].p, os = body.points[def.side === 1 ? LM.rShoulder : LM.lShoulder].p;
+          s.otherAtOnset = { x: o.x - os.x, y: o.y - os.y, z: 0 };
+          s.tipAtOnset = { x: tipPt.p.x - root.p.x, y: tipPt.p.y - root.p.y, z: 0 };
+        }
         Object.assign(s, { phase: 'onset', since: t, grewAt: t, faceBeforeOnset: s.nearFaceAt, peakDisp: disp, peakSpeed: outward, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: legs ? 0 : body.elbow[side], anchorTip: { x: tipPt.p.x - tTip.x, y: tipPt.p.y - tTip.y, z: tipPt.p.z } });
         out.push({ kind: 'anticipate', limb: name, t });
       }
@@ -390,6 +398,7 @@ export class IntentReader {
         : def.kind === 'arm' && raisingGuard(body, name, s.anchorTip, tipPt.p, this.config.guard.radius, t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 400) ? 'raising guard'
         : def.kind === 'arm' && bothHandsUp(body, name, s.peak, s.since - s.faceBeforeOnset > 600 && t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 250) ? 'both hands up'
         : def.kind === 'arm' && raisedOverHead(body, s.peakTip, s.peak, midPt.p, root.p) ? 'not a punch'
+        : def.kind === 'arm' && otherHandAlong(body, def, s, tipPt.p, root.p) ? 'both hands moved'
         : null;
       if (reason) {
         s.phase = 'idle';
@@ -648,6 +657,19 @@ function raisedOverHead(body: Body, end: Vec3, travel: Vec3, elbow: Vec3, should
 }
 
 /**
+ * Over this strike's own wind-up, the other hand moved the same way by a comparable amount: both hands going up
+ * into a block, or both carried by the body. Real follow-up punches come while the other hand pulls back.
+ */
+function otherHandAlong(body: Body, def: LimbDef, s: LimbState, tip: Vec3, shoulder: Vec3) {
+  const o = body.points[def.side === 1 ? LM.rWrist : LM.lWrist].p, os = body.points[def.side === 1 ? LM.rShoulder : LM.lShoulder].p;
+  const ox = o.x - os.x - s.otherAtOnset.x, oy = o.y - os.y - s.otherAtOnset.y;
+  const mx = tip.x - shoulder.x - s.tipAtOnset.x, my = tip.y - shoulder.y - s.tipAtOnset.y;
+  const a = Math.hypot(mx, my), b = Math.hypot(ox, oy);
+  if (a < 0.05 || b < 0.5 * a) return false;
+  return (mx * ox + my * oy) / (a * b) > 0.8;
+}
+
+/**
  * Both hands moving the same way at the same time is the body (or the tracking) moving, not two punches:
  * ducking or twisting with the guard up, or MediaPipe jumping the whole skeleton for a frame.
  */
@@ -716,7 +738,7 @@ function windupOf(s: LimbState, dir: Vec3) {
 function newLimb(): LimbState {
   return {
     phase: 'idle', rest: null, anchor: null, since: 0, grewAt: 0, peakDisp: 0, peakSpeed: 0,
-    peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, peakMidTravel: 0, peakMidOut: 0, anchorTip: { x: 0, y: 0, z: 0 }, peakElbow: 0, history: [], typicalSpeed: 4, extended: null, lastRestDisp: 0, rearmedAt: -Infinity, nearFaceAt: -Infinity, faceBeforeOnset: -Infinity, risingAt: -Infinity, travel: { x: 0, y: 0, z: 0 }, disp: 0, out: 0,
+    peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, peakMidTravel: 0, peakMidOut: 0, anchorTip: { x: 0, y: 0, z: 0 }, peakElbow: 0, history: [], typicalSpeed: 4, extended: null, lastRestDisp: 0, rearmedAt: -Infinity, nearFaceAt: -Infinity, faceBeforeOnset: -Infinity, risingAt: -Infinity, travel: { x: 0, y: 0, z: 0 }, tipAtOnset: { x: 0, y: 0, z: 0 }, otherAtOnset: { x: 0, y: 0, z: 0 }, disp: 0, out: 0,
   };
 }
 
