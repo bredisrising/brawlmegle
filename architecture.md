@@ -38,6 +38,17 @@ The orchestrator in practice (camera -> on screen, ~180 ms from the first sign o
   recovery (immediately on hit/block, from half recovery on a whiff), so fast combos all come out.
 - test/fight/orchestrator.test.ts runs real guided recordings through all of it and prints what was thrown.
 
+Also in the fight:
+- Super: a meter fills from landing hits (FIGHT.meterOn*); with it full, holding both fists up over the head (the
+  reader's `special` intent) throws a fireball, a projectile the engine flies, that can be blocked or ducked.
+- Commentators (game/Commentary.ts): the host picks the moments (react/callIntro/callFinish in Game.ts): instant
+  template lines for big moments, LLM-written intro and K.O. lines from the forge server (POST /api/commentary, using
+  the fighters' forge briefs), voiced through GET /api/tts (OpenAI TTS, cached) with captions; mirrored as `call` events.
+- K.O. replay: both laptops keep the last ~4 s as drawn and replay the finish slowly from a sweeping camera.
+- Match recording (game/MatchRecorder.ts, menu toggle or `?record=1`): both players' poses, intents and fight events
+  per round, uploaded to /samples for improving the reader (`?video=1` also saves each laptop's camera locally).
+  test/intent/match.test.ts re-reads recorded matches.
+
 Mirror: the host sends the client `match` (who's fighting as what), a `frame` of engine state every tick
 (lossy channel) and `events` (hits, wind-ups, moves read). Game.mirrorTick draws it; the client runs no fight.
 
