@@ -11,7 +11,13 @@ import { FIGHT, MOVES, hitstopFrames, hitstunFrames, type MoveSpec } from './mov
  */
 
 type AttackCommand = Extract<Command, { kind: 'attack' }>;
-type Attack = { move: AttackMove; hand: Hand; spec: MoveSpec; startup: number; scale: number; height: 'head' | 'body'; lunge: number; done: boolean };
+type Attack = {
+  move: AttackMove; hand: Hand; spec: MoveSpec; startup: number; scale: number; height: 'head' | 'body'; lunge: number;
+  /** Resolved against the defender (hit, blocked or evaded). */
+  done: boolean;
+  /** Connected: hit or blocked. A punch that connected chains into the next one straight away. */
+  landed: boolean;
+};
 type Fighter = {
   x: number;
   hp: number;
@@ -22,11 +28,15 @@ type Fighter = {
   /** Frames of hitstun/blockstun left. */
   stun: number;
   evade: { kind: 'slip' | 'duck'; frames: number; dir?: Hand } | null;
-  buffered: { command: AttackCommand; frames: number } | null;
+  /** Attacks thrown while busy, oldest first, each kept for FIGHT.bufferFrames: fast combos all come out. */
+  queue: { command: AttackCommand; frames: number }[];
+  /** Punches chained in a row (see chainable). */
+  chain: number;
   sinceAttack: number; // seconds
 };
 
 const DT = 1 / 60;
+const PUNCHES = new Set<AttackMove>(['jab', 'cross', 'hook', 'uppercut']);
 /** Both fighters as they were when this tick's swings connected. */
 type Moment = { distance: number } & Record<PlayerId, { phase: Fighter['phase']; attack: Attack | null; evade: 'slip' | 'duck' | undefined }>;
 
@@ -97,7 +107,10 @@ export class FightEngine {
     if (f.phase === 'ko') return;
     if (c.kind === 'attack') {
       if (f.phase === 'idle') this.start(c.player, c, events);
-      else f.buffered = { command: c, frames: FIGHT.bufferFrames };
+      else {
+        f.queue.push({ command: c, frames: FIGHT.bufferFrames });
+        if (f.queue.length > FIGHT.queueSize) f.queue.shift();
+      }
     } else if (c.kind === 'defend' && (c.move === 'slip' || c.move === 'duck')) {
       if (f.phase === 'idle' || f.phase === 'recovery') f.evade = { kind: c.move, frames: FIGHT.evadeFrames, dir: c.dir };
     }
@@ -118,13 +131,13 @@ export class FightEngine {
       startup: spec.startup + (gassed ? FIGHT.gassedStartup : 0),
       scale: speed * windup * (gassed ? FIGHT.gassedDamage : 1),
       height: c.height,
-      lunge: Math.max(0, finiteOr(c.lunge ?? 0, 0)),
+      lunge: this.lungeFor(c, spec),
       done: false,
+      landed: false,
     };
     f.phase = 'startup';
     f.frame = 0;
     f.evade = null;
-    f.buffered = null;
     f.stamina = Math.max(0, f.stamina - spec.stamina);
     f.sinceAttack = 0;
     events.push({ t: this.now, type: 'startup', attacker: id, move: c.move });
@@ -136,9 +149,13 @@ export class FightEngine {
     f.sinceAttack += DT;
     if (f.sinceAttack > FIGHT.staminaRegenDelay) f.stamina = Math.min(FIGHT.maxStamina, f.stamina + FIGHT.staminaRegen * DT);
     if (f.evade && --f.evade.frames <= 0) f.evade = null;
-    if (f.buffered) {
-      if (f.phase === 'idle') this.start(id, f.buffered.command, events);
-      else if (--f.buffered.frames <= 0) f.buffered = null;
+    if (f.queue.length) {
+      if (f.phase === 'idle' || this.chainable(f, f.queue[0].command)) {
+        f.chain = f.phase === 'idle' ? 0 : f.chain + 1;
+        this.start(id, f.queue.shift()!.command, events);
+      }
+      for (const q of f.queue) q.frames--;
+      f.queue = f.queue.filter((q) => q.frames > 0);
     }
     f.frame++;
 
@@ -178,6 +195,27 @@ export class FightEngine {
     return { distance: this.distance(), p1: of(this.fighters.p1), p2: of(this.fighters.p2) };
   }
 
+  /**
+   * How far a strike steps in. With autoLunge it's worked out here from the distance when the strike actually starts,
+   * so a queued punch in a combo still reaches after the last one's knockback pushed the opponent back.
+   */
+  private lungeFor(c: AttackCommand, spec: MoveSpec) {
+    if (c.autoLunge) return clamp(this.distance() - spec.range * 0.9, 0, FIGHT.maxLunge);
+    return Math.max(0, finiteOr(c.lunge ?? 0, 0));
+  }
+
+  /**
+   * Chains: a punch in recovery cancels into the next punch, so jab-cross-hook flows at the speed it's thrown. Right
+   * away if the last one connected (hit or blocked), from halfway through recovery on a whiff (so whiffing still
+   * leaves a window to punish), and up to FIGHT.maxChain in a row. Kicks and knees don't chain.
+   */
+  private chainable(f: Fighter, next: AttackCommand) {
+    const a = f.attack;
+    if (f.phase !== 'recovery' || !a || f.chain >= FIGHT.maxChain) return false;
+    if (!PUNCHES.has(a.move) || !PUNCHES.has(next.move)) return false;
+    return a.landed || f.frame >= a.spec.recovery * 0.5;
+  }
+
   /** An active attack meets the defender: evaded, blocked, or a hit (maybe a counter). */
   private resolve(id: PlayerId, stances: Record<PlayerId, Stance>, events: FightEvent[], moment: Moment) {
     const f = this.fighters[id];
@@ -206,6 +244,7 @@ export class FightEngine {
     if (stances[defenderId]?.guard && canBlock) {
       const chip = Math.max(1, Math.round(a.spec.chip * a.scale));
       g.hp = Math.max(0, g.hp - chip);
+      a.landed = true;
       g.phase = 'blockstun';
       g.stun = FIGHT.blockstun;
       g.frame = 0;
@@ -220,8 +259,10 @@ export class FightEngine {
     const counter = before.phase === 'startup' || before.phase === 'recovery' || (evade === 'duck' && a.spec.beatsDuck);
     const damage = Math.round(a.spec.damage * a.scale * (counter ? FIGHT.counterMultiplier : 1));
     g.hp = Math.max(0, g.hp - damage);
+    a.landed = true;
     g.attack = null;
-    g.buffered = null;
+    g.queue = [];
+    g.chain = 0;
     g.evade = null;
     g.phase = 'hitstun';
     g.stun = hitstunFrames(damage);
@@ -283,7 +324,7 @@ export class FightEngine {
 function fresh(x: number): Fighter {
   return {
     x, hp: FIGHT.maxHp, stamina: FIGHT.maxStamina, phase: 'idle', frame: 0,
-    attack: null, stun: 0, evade: null, buffered: null, sinceAttack: 10,
+    attack: null, stun: 0, evade: null, queue: [], chain: 0, sinceAttack: 10,
   };
 }
 

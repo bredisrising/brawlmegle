@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { FightEngine } from '../../src/fight/FightEngine';
 import { Resolver } from '../../src/fight/Resolver';
-import { FIGHT } from '../../src/fight/moves';
+import { FIGHT, MOVES } from '../../src/fight/moves';
 import type { AttackMove, Command, FightEvent, PlayerId, Stance } from '../../src/types';
 import type { Intent } from '../../src/intent/intents';
 
@@ -117,5 +117,66 @@ describe('resolver', () => {
 
   test('an uppercut from far away becomes a straight', () => {
     expect((r.resolve('p1', [strike('armL', 'upper')], engineAt(1.2))[0] as { move: string }).move).toBe('jab');
+  });
+});
+
+describe('combos: fast punches all come out', () => {
+  const starts = (events: FightEvent[], player: PlayerId = 'p1') =>
+    events.filter((ev) => ev.type === 'startup' && ev.attacker === player).map((ev) => ev.move);
+
+  test('jab-cross-hook thrown 150 ms apart all happen, in order', () => {
+    const e = engineAt(0.7);
+    const events = run(e, 120, {
+      0: [attack('p1', 'jab', { hand: 'L', autoLunge: true })],
+      9: [attack('p1', 'cross', { autoLunge: true })],
+      18: [attack('p1', 'hook', { hand: 'L', autoLunge: true })],
+    });
+    expect(starts(events)).toEqual(['jab', 'cross', 'hook']);
+    expect(events.filter((ev) => ev.attacker === 'p1' && (ev.type === 'hit' || ev.type === 'counter')).length).toBe(3);
+  });
+
+  test('a punch that connects chains into the next one without waiting out its recovery', () => {
+    const e = engineAt(0.7);
+    const events: { tick: number; ev: FightEvent }[] = [];
+    for (let i = 0; i < 80; i++) {
+      const cmds = i === 0 ? [attack('p1', 'jab', { hand: 'L' })] : i === 5 ? [attack('p1', 'cross')] : [];
+      for (const ev of e.step(cmds, { p1: stance('p1'), p2: stance('p2', { guard: true }) })) events.push({ tick: i, ev });
+    }
+    const cross = events.find((x) => x.ev.type === 'startup' && x.ev.move === 'cross');
+    // The cross starts as the jab's recovery begins (+ block hit-stop), not after its recovery frames.
+    expect(cross!.tick).toBeLessThan(MOVES.jab.startup + MOVES.jab.active + 3 + 4);
+  });
+
+  test('a whiffed punch can only chain from halfway through its recovery', () => {
+    const e = engineAt(1.3); // far out of range: everything whiffs
+    const events: { tick: number; ev: FightEvent }[] = [];
+    for (let i = 0; i < 80; i++) {
+      const cmds = i === 0 ? [attack('p1', 'cross')] : i === 5 ? [attack('p1', 'jab', { hand: 'L' })] : [];
+      for (const ev of e.step(cmds, { p1: stance('p1'), p2: stance('p2') })) events.push({ tick: i, ev });
+    }
+    const jab = events.find((x) => x.ev.type === 'startup' && x.ev.move === 'jab');
+    // No chain before halfway through the cross's recovery.
+    expect(jab!.tick).toBeGreaterThanOrEqual(MOVES.cross.startup + MOVES.cross.active + MOVES.cross.recovery / 2);
+  });
+
+  test('a stale input expires instead of firing long after the player threw it', () => {
+    // A whiffed uppercut only chains from halfway through its long recovery: a jab thrown on its first frame has
+    // waited past its buffer by then, so it's dropped rather than coming out half a second late.
+    const e = engineAt(1.3);
+    const events = run(e, 90, { 0: [attack('p1', 'uppercut')], 1: [attack('p1', 'jab', { hand: 'L' })] });
+    expect(starts(events)).toEqual(['uppercut']);
+  });
+
+  test('kicks do not chain', () => {
+    const e = engineAt(0.9);
+    const events: { tick: number; ev: FightEvent }[] = [];
+    for (let i = 0; i < 90; i++) {
+      const cmds = i === 0 ? [attack('p1', 'kick')] : i === 30 ? [attack('p1', 'jab', { hand: 'L' })] : [];
+      for (const ev of e.step(cmds, { p1: stance('p1'), p2: stance('p2', { guard: true }) })) events.push({ tick: i, ev });
+    }
+    const jab = events.find((x) => x.ev.type === 'startup' && x.ev.move === 'jab');
+    expect(jab).toBeDefined();
+    // The kick's whole recovery (plus block hit-stop) before the jab can start.
+    expect(jab!.tick).toBeGreaterThanOrEqual(MOVES.kick.startup + MOVES.kick.active + MOVES.kick.recovery);
   });
 });

@@ -2,8 +2,8 @@ import type { AttackMove } from '../types';
 
 /**
  * Frame data at 60 fps, fighters 1 m tall. Starting values to tune by playing.
- * Webcam input already costs ~100–150 ms, so startups are slow enough to see coming: a heavyweight
- * slugfest, not a twitch fighter.
+ * The camera and the reader already cost ~100–150 ms before a strike reaches the engine (the director shows the
+ * wind-up from the first sign of it), so startups are short enough to feel like yours and still long enough to read.
  */
 export type MoveSpec = {
   startup: number;
@@ -21,12 +21,12 @@ export type MoveSpec = {
 };
 
 export const MOVES: Record<AttackMove, MoveSpec> = {
-  jab: { startup: 8, active: 3, recovery: 10, damage: 5, range: 0.85, chip: 1, stamina: 6, straight: true, beatsDuck: false },
-  cross: { startup: 13, active: 3, recovery: 18, damage: 10, range: 0.85, chip: 2, stamina: 10, straight: true, beatsDuck: false },
-  hook: { startup: 12, active: 4, recovery: 18, damage: 9, range: 0.7, chip: 2, stamina: 10, straight: false, beatsDuck: false },
-  uppercut: { startup: 15, active: 3, recovery: 22, damage: 13, range: 0.55, chip: 3, stamina: 12, straight: false, beatsDuck: true },
-  knee: { startup: 14, active: 4, recovery: 20, damage: 11, range: 0.55, chip: 2, stamina: 10, straight: false, beatsDuck: true },
-  kick: { startup: 18, active: 4, recovery: 24, damage: 14, range: 1.0, chip: 3, stamina: 14, straight: true, beatsDuck: false },
+  jab: { startup: 6, active: 3, recovery: 10, damage: 5, range: 0.85, chip: 1, stamina: 6, straight: true, beatsDuck: false },
+  cross: { startup: 10, active: 3, recovery: 18, damage: 10, range: 0.85, chip: 2, stamina: 10, straight: true, beatsDuck: false },
+  hook: { startup: 10, active: 4, recovery: 18, damage: 9, range: 0.7, chip: 2, stamina: 10, straight: false, beatsDuck: false },
+  uppercut: { startup: 12, active: 3, recovery: 22, damage: 13, range: 0.55, chip: 3, stamina: 12, straight: false, beatsDuck: true },
+  knee: { startup: 12, active: 4, recovery: 20, damage: 11, range: 0.55, chip: 2, stamina: 10, straight: false, beatsDuck: true },
+  kick: { startup: 15, active: 4, recovery: 24, damage: 14, range: 1.0, chip: 3, stamina: 14, straight: true, beatsDuck: false },
 };
 
 export const FIGHT = {
@@ -44,8 +44,14 @@ export const FIGHT = {
   blockstun: 8,
   /** Slip and duck stay effective this many frames. */
   evadeFrames: 15,
-  /** Commands that arrive during recovery wait this long for the fighter to be free. */
-  bufferFrames: 6,
+  /** Attacks thrown while busy wait this long for the fighter to be free (or to chain), so none get lost. */
+  bufferFrames: 24,
+  /** How many attacks can wait at once (a fast three-punch combo: one swinging, two waiting). */
+  queueSize: 2,
+  /** Punches in a row that can cancel each other's recovery (see FightEngine.chainable). */
+  maxChain: 4,
+  /** Farthest a strike steps in to reach (m). Beyond that it whiffs: spacing still matters. */
+  maxLunge: 0.4,
   /** Fighters can't get closer than this (m). */
   minDistance: 0.35,
   arenaHalfWidth: 1.6,

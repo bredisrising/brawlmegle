@@ -2,7 +2,7 @@ import { opponentOf } from '../types';
 import type { AttackMove, Command, PlayerId } from '../types';
 import type { Intent } from '../intent/intents';
 import type { FightEngine } from './FightEngine';
-import { MOVES } from './moves';
+import { FIGHT, MOVES } from './moves';
 
 /**
  * Intent + fight situation -> the move that actually happens. The player says "right arm, straight, fast";
@@ -12,8 +12,7 @@ import { MOVES } from './moves';
  * Rules are a short list so they're easy to read and extend. Each strike intent becomes one attack command.
  */
 
-/** Furthest a strike will step in to reach (m). Beyond that it whiffs: spacing still matters. */
-const MAX_LUNGE = 0.4;
+const MAX_LUNGE = FIGHT.maxLunge;
 
 export class Resolver {
   resolve(player: PlayerId, intents: Intent[], engine: FightEngine): Command[] {
@@ -81,6 +80,7 @@ export class Resolver {
       speed: intent.speed,
       windup: intent.windup,
       lunge,
+      autoLunge: true,
     };
   }
 }

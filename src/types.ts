@@ -50,6 +50,7 @@ export type Command =
       speed: number; // 0.8–1.3, relative to this player's calibrated max
       windup: number; // 0.8–1.3
       lunge?: number; // meters to step in during startup (the resolver adds it when the strike starts out of range)
+      autoLunge?: boolean; // instead: step in as far as needed when it actually starts (queued combo punches)
     }
   | { kind: 'defend'; player: PlayerId; t: number; move: DefendMove; dir?: Hand };
 
