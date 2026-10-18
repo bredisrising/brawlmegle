@@ -8,7 +8,7 @@ const browser = await launch({ camera: "fake" });
 
 const enterCard = (page) => page.locator("button", { hasText: "Type your username" });
 const loadCard = (page) => page.locator("button", { hasText: "house fighter" });
-const back = (page) => page.getByRole("button", { name: /back/i });
+const back = (page) => page.getByRole("button", { name: /^\W*back$/i }); // not "...comes back, or..." on the Enter card
 const nameInput = (page) => page.locator("#fighter-name");
 
 async function host(page) {

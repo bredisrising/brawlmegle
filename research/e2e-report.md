@@ -4,16 +4,19 @@ Target: https://54-149-60-196.sslip.io (game build from `09d549e`; the host/room
 
 Every issue below has a matching test that prints `KNOWN E2E-xx` until it's fixed (then `FIXED?`).
 
+While this ran, the `bug-review` merge landed on `main` and already fixes E2E-01, 03, 04, 05 and 11 in code. The live site still shows all five, so they need a deploy (forge server + game build); after that the suite should print `FIXED?` for them.
+
 ## Top issues
 
-| # | Severity | Issue |
-|---|---|---|
-| E2E-01 | High | Everyone's raw scan photos can be downloaded by anyone |
-| E2E-02 | High | Anyone can burn the forge credits and lock out the event with the public key (from code, not exercised) |
-| E2E-03 | Medium | Typing a saved username and pressing Enter quickly starts a new scan instead of loading the fighter |
-| E2E-06 | Medium | Camera errors show raw browser text ("Not supported", "Requested device not found") |
-| E2E-07 | Medium | Without a working camera nobody can play at all, not even a saved or masked fighter |
-| E2E-14 | Medium | A busy or capped forge is only discovered after the player has done the whole scan (from code) |
+| # | Severity | Issue | On `main` |
+|---|---|---|---|
+| E2E-01 | High | Everyone's raw scan photos can be downloaded by anyone | fixed, not deployed |
+| E2E-02 | High | Anyone can burn the forge credits and lock out the event with the public key (from code, not exercised) | open (junk frames still pass) |
+| E2E-03 | Medium | Typing a saved username and pressing Enter quickly starts a new scan instead of loading the fighter | fixed, not deployed |
+| E2E-06 | Medium | Camera errors show raw browser text ("Not supported", "Requested device not found") | open |
+| E2E-07 | Medium | Without a working camera nobody can play at all, not even a saved or masked fighter | open |
+| E2E-14 | Medium | A busy or capped forge is only discovered after the player has done the whole scan (from code) | open |
+| E2E-15 | Medium | The tuner's CPU opponent never acts | CPU work in progress |
 
 ## What works
 
@@ -67,8 +70,9 @@ Host shows `ROOM ----` and opens no websocket ("Signaling server not connected y
 After Host, step 01 has no Back; only a page reload gets you to the title (and to Connect or the tools).
 
 ### E2E-10 Low: double-clicking Host clicks through
-The second click of a double click lands on the fighter-select screen that just appeared, under the same spot.
-- Repro: double-click Host.
+The second click of a double click lands on the fighter-select screen that just appeared: the Load fighter card sits under the Host button, so you skip straight into the memory card (`host-dblclick.png`).
+- Repro: double-click Host at 1280×800 → "Select fighter, 8 fighters" instead of "Choose your fighter".
+- Fix idea: ignore clicks on the new screen for ~300 ms, or trigger the menu on `pointerup` only after a fresh `pointerdown`.
 
 ### E2E-11 Low: usernames `.` and `..` are accepted but can never come back
 They pass the username regex, but `fetch('/api/profiles/..')` normalizes to `/api/` (404), so a fighter saved under them is never found. Fix: require a letter or digit.
@@ -85,7 +89,7 @@ The 429s ("forges already running", "forge limit reached") come back from `POST 
 - Fix idea: a cheap `GET /api/forge/status` (or check the 429 conditions) before the scan starts.
 
 ### E2E-15 Medium: the tuner's CPU never acts
-`/tuner/` fight panel with opponent "hard CPU", player standing still: after 20 s HP is still 100 / 100 and the fight log is empty (`tuner-fight.png`). Might just be the CPU work in progress; the test flips to `FIXED?` when the CPU attacks.
+`/tuner/` fight panel with opponent "hard CPU", player standing still: after 20 s HP is still 100 / 100, the fight log is empty, and the panel reads "distance 0.92 m · you: idle · hard cpu: idle" (`tuner-fight.png`); it never walks in. Same with the person clip tracked on camera. Might just be the CPU work in progress; the test flips to `FIXED?` when the CPU attacks.
 
 ### E2E-16 Low: the scan often gets one or two angles and says nothing
 With the person clip and MediaPipe at a few fps, the scan page captured only `left` (14 KB) in its 15 s window: "front — · left 14 KB · right —". The game then forges from whatever it got without telling the player it missed angles. On a slow laptop (`?pose=lite`) this will be common.
