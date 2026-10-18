@@ -36,10 +36,17 @@ from weights import ensure  # noqa: E402
 
 
 def blender():
-    if not os.path.exists(os.environ["FORGE3D_BLENDER"]):
-        url = "https://download.blender.org/release/Blender5.2/blender-5.2.1-linux-x64.tar.xz"
-        with urllib.request.urlopen(url) as res, tarfile.open(fileobj=res, mode="r|xz") as tar:
-            tar.extractall(DATA)
+    if os.path.exists(os.environ["FORGE3D_BLENDER"]):
+        return
+    # download.blender.org answers 403 to cloud addresses; the official mirrors don't.
+    for base in ["https://download.blender.org", "https://mirrors.ocf.berkeley.edu/blender", "https://ftp.nluug.nl/pub/graphics/blender"]:
+        try:
+            with urllib.request.urlopen(f"{base}/release/Blender5.2/blender-5.2.1-linux-x64.tar.xz") as res, tarfile.open(fileobj=res, mode="r|xz") as tar:
+                tar.extractall(DATA)
+            return
+        except Exception as err:  # noqa: BLE001
+            print("Blender download failed from", base, err, flush=True)
+    raise RuntimeError("could not download Blender")
 
 
 start = time.time()

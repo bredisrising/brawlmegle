@@ -14,7 +14,7 @@ CONDA=$ROOT/conda
 ENV=$CONDA/envs/trellis2
 PY=$ENV/bin/python
 TRELLIS_COMMIT=75fbf0183001ed9876c8dbb35de6b68552ee08bd
-BLENDER_URL=https://download.blender.org/release/Blender5.2/blender-5.2.1-linux-x64.tar.xz
+BLENDER_PATH=release/Blender5.2/blender-5.2.1-linux-x64.tar.xz
 mkdir -p $ROOT/models /var/lib/forge3d/jobs
 export DEBIAN_FRONTEND=noninteractive
 
@@ -90,7 +90,11 @@ HF_HOME=$ROOT/hf $PY "$SRC/weights.py" $ROOT/models/TRELLIS.2-4B $ROOT/models/po
 
 if [ ! -x $ROOT/blender/blender ]; then
   echo "== Blender"
-  curl -sSfL $BLENDER_URL | tar -xJ -C $ROOT
+  # download.blender.org answers 403 to AWS addresses; the official mirrors don't.
+  for base in https://download.blender.org https://mirrors.ocf.berkeley.edu/blender https://ftp.nluug.nl/pub/graphics/blender; do
+    curl -sSfL -o /tmp/blender.tar.xz "$base/$BLENDER_PATH" && break
+  done
+  tar -xJf /tmp/blender.tar.xz -C $ROOT && rm /tmp/blender.tar.xz
   rm -rf $ROOT/blender && mv $ROOT/blender-5.2.1-linux-x64 $ROOT/blender
 fi
 

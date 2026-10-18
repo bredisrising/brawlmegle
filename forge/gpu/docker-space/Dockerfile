@@ -35,8 +35,10 @@ RUN git clone --recursive https://github.com/JeffreyXiang/FlexGEMM.git && git -C
     && git -C FlexGEMM submodule update --init --recursive && MAX_JOBS=$(nproc) pip install ./FlexGEMM --no-build-isolation && rm -rf FlexGEMM
 RUN cp -r /opt/TRELLIS.2/o-voxel ./o-voxel && MAX_JOBS=$(nproc) pip install ./o-voxel --no-build-isolation && rm -rf o-voxel
 
-RUN curl -sSfL https://download.blender.org/release/Blender5.2/blender-5.2.1-linux-x64.tar.xz | tar -xJ -C /opt \
-    && mv /opt/blender-5.2.1-linux-x64 /opt/blender
+# download.blender.org answers 403 to cloud addresses; the official mirrors don't.
+RUN for base in https://download.blender.org https://mirrors.ocf.berkeley.edu/blender https://ftp.nluug.nl/pub/graphics/blender; do \
+      curl -sSfL -o /tmp/blender.tar.xz "$base/release/Blender5.2/blender-5.2.1-linux-x64.tar.xz" && break; done \
+    && tar -xJf /tmp/blender.tar.xz -C /opt && rm /tmp/blender.tar.xz && mv /opt/blender-5.2.1-linux-x64 /opt/blender
 
 # Spaces run as uid 1000. /data is the persistent disk when the Space has one (a plain folder otherwise).
 RUN useradd -m -u 1000 user && mkdir -p /data /tmp/forge3d && chown -R user /data /tmp/forge3d
