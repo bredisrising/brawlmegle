@@ -16,6 +16,7 @@ export function GameMenu() {
   const link = useGameStore((s) => s.link);
   const connection = useGameStore((s) => s.connection);
   const replay = useGameStore((s) => s.replay);
+  const walkout = useGameStore((s) => s.walkout);
   const [open, setOpen] = useState(false);
   const [recording, setRecording] = useState(recordingEnabled);
   const [video, setVideo] = useState(videoEnabled);
@@ -27,7 +28,7 @@ export function GameMenu() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
-  if (replay) return null;
+  if (replay || walkout) return null; // cutscenes: nothing over them
 
   const rtt = link?.rttMs;
   const tone = rtt === null || rtt === undefined ? 'text-paper/60' : rtt < 60 ? 'text-hp' : rtt < 120 ? 'text-paper' : 'text-dmg';

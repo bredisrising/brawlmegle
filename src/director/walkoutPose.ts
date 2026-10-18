@@ -93,54 +93,64 @@ export function signature(p: Pose, kind: Signature, t: number, inner: Side) {
   const outer = -inner as Side;
   switch (kind) {
     case 'shadowbox': {
-      // Guard up, bouncing; then a combo thrown down the lens: jab, jab, cross, hook, cross.
-      const g = ramp(t, 0, 0.3);
-      crouch(p, (0.03 + 0.012 * Math.sin(t * 2 * Math.PI * 2.2)) * g);
+      // Guard up, bouncing; a combo thrown across at the other one (side-on to the camera, so it reads): jab, jab,
+      // cross, hook, cross; then it holds, high guard, chin down.
+      const g = ramp(t, 0, 0.25);
+      const hold = ramp(t, 2.0, 0.25);
+      crouch(p, (0.04 + 0.014 * Math.sin(t * 2 * Math.PI * 2.4) * (1 - hold)) * g);
       const throws: [Side, number, 'straight' | 'hook'][] = [
-        [inner, 0.4, 'straight'], [inner, 0.66, 'straight'], [outer, 0.98, 'straight'], [inner, 1.45, 'hook'], [outer, 1.85, 'straight'],
+        [inner, 0.35, 'straight'], [inner, 0.6, 'straight'], [outer, 0.9, 'straight'], [inner, 1.3, 'hook'], [outer, 1.68, 'straight'],
       ];
       let turn = 0;
+      let reachOut = 0;
       for (const s of [1, -1] as const) {
         let out = 0;
         let hook = false;
         for (const [hand, at, style] of throws) {
           if (hand !== s) continue;
-          const k = strike(t, at);
+          const k = strike(t, at, 0.07, 0.07, 0.16);
           if (k > out) {
             out = k;
             hook = style === 'hook';
           }
         }
-        turn += -s * 0.32 * out;
-        const guard = a.set(s * 0.06, 0.82, 0.15).lerp(b.copy(shoulder(p, s)).add(hint.set(s * 0.03, -0.27, 0.03)), 1 - g);
+        // Each punch turns the shoulders into it; the cross (far hand) turns the most.
+        turn += inner * (s === inner ? 0.25 : 0.55) * out;
+        reachOut = Math.max(reachOut, out);
+        const guard = a.set(s * 0.055, 0.84, 0.13).lerp(b.copy(shoulder(p, s)).add(hint.set(s * 0.03, -0.27, 0.03)), 1 - g);
         if (hook) {
-          b.copy(shoulder(p, s)).add(lateral.set(-s * 0.2, 0.02, 0.22));
-          reach(p, s, guard.lerp(b, out), hint.set(s, 0.6, -0.2));
+          b.copy(shoulder(p, s)).add(lateral.set(inner * 0.24, 0.02, 0.2));
+          reach(p, s, guard.lerp(b, out), hint.set(s, 0.8, -0.3));
         } else {
-          b.copy(shoulder(p, s)).add(lateral.set(-s * 0.02, 0.03, ARM * 0.95));
+          b.copy(shoulder(p, s)).add(lateral.set(inner * 0.62, 0.05, 0.55).normalize().multiplyScalar(ARM * 0.97));
           reach(p, s, guard.lerp(b, out), hint.set(s, -1, 0));
         }
       }
       twist(p, turn);
-      p.head.y -= 0.012 * g;
-      p.head.z += 0.012 * g;
+      lean(p, 0.03 * reachOut, inner * 0.02 * reachOut);
+      p.head.y -= 0.015 * g;
+      p.head.z += 0.015 * g;
       return;
     }
     case 'knuckles': {
-      // Hands meet in front, push out to crack the knuckles, then the fist pounds the palm twice; hands down, glare.
-      const meet = span(t, 0.05, 2.05, 0.3);
-      const push = span(t, 0.45, 0.85, 0.15);
-      const crack = Math.sin(clamp01((t - 0.6) / 0.25) * Math.PI) * 0.01;
-      const palm = a.set(inner * 0.025, 0.66, 0.21 + 0.1 * push);
+      // Fingers laced, arms pushed straight out to crack the knuckles; then a fist raised high and smashed into the
+      // open palm, twice; it holds, fist in palm, head down.
+      const meet = ramp(t, 0.05, 0.3);
+      const push = span(t, 0.35, 0.95, 0.18);
+      const crack = Math.sin(clamp01((t - 0.6) / 0.25) * Math.PI) * 0.012;
+      // The palm: in front of the chest (pushed out to arm's length for the stretch).
+      const palm = a.set(inner * 0.03, 0.66 + 0.1 * push, 0.2 + 0.24 * push);
       reach(p, inner, b.copy(shoulder(p, inner)).add(lateral.set(0, -0.27, 0.03)).lerp(palm, meet), hint.set(inner, -1, -0.3));
-      // The pounding fist: up, then down onto the palm at 1.25 and 1.65 s.
-      const lift = span(t, 1.0, 1.9, 0.12);
-      const pound = 1 - Math.max(strike(t, 1.13, 0.07, 0.04, 0.12), strike(t, 1.53, 0.07, 0.04, 0.12));
-      const fist = lateral.set(-inner * 0.03, 0.69 + 0.1 * lift * pound, 0.23 + 0.1 * push);
-      reach(p, outer, b.copy(shoulder(p, outer)).add(hint.set(0, -0.27, 0.03)).lerp(fist, meet), hint.set(outer, -1, -0.3));
-      lean(p, 0.025 * push + 0.015 * meet);
+      // The fist: laced with the palm, then raised above the head and brought down onto it at 1.35 and 1.8 s.
+      const raised = Math.max(span(t, 1.0, 1.32, 0.15), span(t, 1.45, 1.77, 0.15));
+      const fist = lateral.set(-inner * 0.02, 0.69 + 0.1 * push + 0.3 * raised, 0.23 + 0.24 * push - 0.05 * raised);
+      reach(p, outer, b.copy(shoulder(p, outer)).add(hint.set(0, -0.27, 0.03)).lerp(fist, meet), hint.set(outer, -0.5 + raised, -0.4));
+      twist(p, inner * 0.15 * raised);
+      lean(p, 0.03 * push + 0.04 * ramp(t, 1.85, 0.3));
       p.head.x += crack;
-      p.head.y -= 0.012 * ramp(t, 2.0, 0.3);
+      const glare = ramp(t, 1.85, 0.3);
+      p.head.y -= 0.02 * glare;
+      p.head.z += 0.02 * glare;
       return;
     }
     case 'neckroll': {
@@ -167,7 +177,7 @@ export function signature(p: Pose, kind: Signature, t: number, inner: Side) {
     case 'beckon': {
       // Off hand on the hip, chin up; the near hand reaches out at the other one and waves them in: "come on".
       reach(p, outer, a.copy(shoulder(p, outer)).add(b.set(outer * 0.07, -0.25, -0.03)).lerp(lateral.copy(shoulder(p, outer)).add(hint.set(outer * 0.03, -0.27, 0.03)), 1 - ramp(t, 0, 0.3)), hint.set(outer, 0.2, -1));
-      const out = span(t, 0.15, 2.3, 0.35);
+      const out = ramp(t, 0.15, 0.35); // held out to the end: the beckon is the pose
       const flick = Math.max(strike(t, 0.85, 0.1, 0.03, 0.18), strike(t, 1.25, 0.1, 0.03, 0.18), strike(t, 1.65, 0.1, 0.03, 0.18));
       const extended = a.copy(shoulder(p, inner)).add(b.set(inner * 0.16, -0.02, 0.26));
       const curled = lateral.copy(shoulder(p, inner)).add(b.set(inner * 0.11, 0.06, 0.15));
@@ -202,22 +212,26 @@ export function signature(p: Pose, kind: Signature, t: number, inner: Side) {
       return;
     }
     case 'gloves': {
-      // Tug the near glove tight (the other hand on its wrist), then knock the fists together twice.
-      const tug = span(t, 0.1, 1.45, 0.25);
-      const yank = Math.max(strike(t, 0.55, 0.08, 0.04, 0.16), strike(t, 0.9, 0.08, 0.04, 0.16));
-      const knock = ramp(t, 1.45, 0.2);
-      const tap = Math.max(strike(t, 1.75, 0.07, 0.03, 0.12), strike(t, 2.05, 0.07, 0.03, 0.12));
+      // The near forearm held across the chest, the other hand on its wrist yanking the glove tight, twice; then the
+      // fists knock together twice at the chin, and it holds there, chin down.
+      const tug = span(t, 0.1, 1.35, 0.25);
+      const yank = Math.max(strike(t, 0.5, 0.08, 0.05, 0.18), strike(t, 0.9, 0.08, 0.05, 0.18));
+      const knock = ramp(t, 1.35, 0.25);
+      const tap = Math.max(strike(t, 1.7, 0.07, 0.04, 0.14), strike(t, 2.05, 0.07, 0.04, 0.14));
       for (const s of [1, -1] as const) {
         const down = a.copy(shoulder(p, s)).add(b.set(s * 0.05, -0.27, 0.03));
-        // Tugging: the near hand held out at the chest, the far hand on its wrist pulling the cuff.
-        const held = s === inner ? lateral.set(inner * 0.06, 0.66, 0.24 + 0.03 * yank) : lateral.set(inner * 0.0, 0.67, 0.2 - 0.04 * yank);
-        const knocking = hint.set(s * (0.035 + 0.035 * (1 - tap)), 0.73, 0.2);
+        // Tugging: the near fist out across the chest; the far hand on its wrist, pulled back hard on each yank.
+        const held = s === inner
+          ? lateral.set(-inner * 0.08 + inner * 0.05 * yank, 0.7, 0.22)
+          : lateral.set(inner * 0.06 + outer * 0.09 * yank, 0.7, 0.2 - 0.03 * yank);
+        const knocking = hint.set(s * (0.03 + 0.09 * (1 - tap) * (1 - ramp(t, 2.15, 0.15))), 0.8, 0.18);
         const target = down.lerp(held, tug).lerp(knocking, knock);
         reach(p, s, target, b.set(s, -1, -0.3));
       }
-      lean(p, 0.015 * Math.max(tug, knock));
-      p.head.y -= 0.012 * tug;
-      p.head.z += 0.015 * tug;
+      twist(p, outer * 0.12 * tug * (0.5 + yank));
+      lean(p, 0.02 * Math.max(tug, knock));
+      p.head.y -= 0.015 * Math.max(tug, knock);
+      p.head.z += 0.018 * Math.max(tug, knock);
       return;
     }
     case 'flex': {

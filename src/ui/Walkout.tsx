@@ -82,6 +82,24 @@ function WalkoutTitles() {
       ))}
       <Plate id="p1" use={use} beats={B} />
       <Plate id="p2" use={use} beats={B} />
+      {/* A smear across the cuts between shots: a dark motion-blurred band whipping past, covering the cut. */}
+      {(['p2', 'two'] as const).map((beat, i) => (
+        <div
+          key={beat}
+          ref={use<HTMLDivElement>((t, el) => {
+            const at = B()[beat];
+            const k = (t - (at - 0.13)) / 0.26;
+            el.style.visibility = k > 0 && k < 1 ? 'visible' : 'hidden';
+            const dir = i === 0 ? 1 : -1;
+            el.style.transform = `translateX(${dir * (-150 + 300 * k)}vw) skewX(${dir * -24}deg)`;
+          })}
+          className="absolute inset-y-[-10%] left-[-40vw] w-[180vw]"
+          style={{
+            visibility: 'hidden',
+            background: `linear-gradient(90deg, transparent 0%, rgba(8,8,14,0.55) 12%, ${INK} 30%, ${INK} 70%, rgba(8,8,14,0.55) 88%, transparent 100%)`,
+          }}
+        />
+      ))}
       {/* Up from black at the start; the white flash into the fire VS. */}
       <div
         ref={use<HTMLDivElement>((t, el) => void (el.style.opacity = String(kf(t, [[0, 1], [0.45, 0]], linear))))}

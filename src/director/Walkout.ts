@@ -9,7 +9,7 @@ import type { FighterView } from './FighterView';
 import type { Renderer } from './Renderer';
 import type { Sfx } from './Sfx';
 import { JOINTS, copyPose, createPose, type Pose } from './pose';
-import { Fire, Stage, VsSign, type FirePalette } from './walkoutFx';
+import { Fire, FireWall, Stage, VsSign, type FirePalette } from './walkoutFx';
 import { folded, signature, stand, walk } from './walkoutPose';
 import {
   DEFAULT_BEATS, beatsFor, easeInOut, easeOut, kf, linear, signatures, smoothstep, walkoutEnabled, type Beats, type Signature,
@@ -53,8 +53,14 @@ export class Walkout {
   beats: Beats = DEFAULT_BEATS;
   kinds: Record<PlayerId, Signature> = { p1: 'shadowbox', p2: 'flex' };
   private prevT = -1;
+  /** Fast frames seen since the walkout started (-1 once it's running, see frame()). */
+  private settling = -1;
+  private startedAt = 0;
+  private lastFrameAt = 0;
   private readonly stage: Stage;
+  /** Embers for the VS burst (its flame sheets stay out: the wall is the fire). */
   private readonly fire = new Fire(VS_FIRE, config.lowPower);
+  private readonly wall = new FireWall(config.lowPower);
   private readonly sign = new VsSign();
   private music: ReturnType<Announcer['playMusic']> | null = null;
   private track: Track = { url: DEFAULT_TRACK, start: 0, beats: DEFAULT_BEATS, custom: false };
@@ -80,7 +86,7 @@ export class Walkout {
     private readonly onSkip: (() => void) | null,
   ) {
     this.stage = new Stage(config.lowPower);
-    renderer.scene.add(this.stage.group, this.stage.lights, this.fire.group, this.sign.mesh);
+    renderer.scene.add(this.stage.group, this.stage.lights, this.fire.group, this.wall.group, this.sign.mesh);
     // Compile the stage's shaders ahead of time (after the first frames), so the walkout doesn't open on a hitch.
     this.warmTimer = setTimeout(() => this.warm(), 1500);
     this.offFrame = renderer.onFrame((dt) => this.frame(dt));
@@ -107,7 +113,8 @@ export class Walkout {
   /** How long the countdown's first beat lasts (the host's fallback timer; the music normally ends it). */
   get length() {
     if (!walkoutEnabled) return 0;
-    return this.hold === null ? this.track.beats.end : Infinity;
+    // The music's end normally ends it (frame()); this is the backstop, with room for a slow start.
+    return this.hold === null ? this.track.beats.end + 1.5 : Infinity;
   }
 
   dispose() {
@@ -121,6 +128,7 @@ export class Walkout {
     window.removeEventListener('keydown', this.unlock);
     this.stage.dispose();
     this.fire.dispose();
+    this.wall.dispose();
     this.sign.dispose();
   }
 
@@ -158,7 +166,7 @@ export class Walkout {
 
   /** Build the stage's, fire's and VS's GPU programs now, while nothing's happening. */
   private warm() {
-    const shown = [this.stage.group, this.fire.group, this.sign.mesh];
+    const shown = [this.stage.group, this.fire.group, this.wall.group, this.sign.mesh];
     const was = shown.map((o) => o.visible);
     for (const o of shown) o.visible = true;
     try {
@@ -190,11 +198,14 @@ export class Walkout {
     this.place();
     this.sign.draw();
     this.fire.clear();
+    this.wall.amount = this.wall.target = 0;
     this.dim(true);
     this.renderer.direct((camera) => this.shoot(camera));
     useGameStore.setState({ walkout: true });
-    const { url, start } = this.track;
-    this.music = this.announcer.playMusic(url, 0.62, start);
+    // The music (and the clock) wait for the frames to flow: the first frames after the countdown starts can stall
+    // (a fighter that just spawned uploads its textures), and the walkout shouldn't open by skipping its first shot.
+    this.settling = 0;
+    this.startedAt = this.lastFrameAt = performance.now();
     this.announcer.crowd('murmur', 0.3);
   }
 
@@ -216,6 +227,8 @@ export class Walkout {
     }
     this.stage.amount = 0;
     this.fire.target = 0;
+    this.wall.target = 0;
+    for (const id of PLAYER_IDS) this.shade(id, 0);
     this.sign.mesh.visible = false;
     this.dim(false);
     this.renderer.direct(null);
@@ -231,10 +244,10 @@ export class Walkout {
       scene.traverse((o) => {
         if (!(o instanceof THREE.Light) || this.isOurs(o)) return;
         this.dimmed.push([o, o.intensity]);
-        o.intensity *= 0.08;
+        o.intensity *= config.lowPower ? 0.3 : 0.03;
       });
       this.environment = scene.environmentIntensity;
-      scene.environmentIntensity = this.environment * 0.12;
+      scene.environmentIntensity = this.environment * (config.lowPower ? 0.3 : 0.04);
     } else {
       for (const [light, intensity] of this.dimmed) light.intensity = intensity;
       this.dimmed = [];
@@ -270,8 +283,20 @@ export class Walkout {
   /** Every render frame: the clock, where the fighters stand and face, the lights, and the one-off moments. */
   private frame(dt: number) {
     this.fire.update(dt, this.renderer.camera);
+    this.wall.update(dt);
     this.stage.update(dt, this.renderer.camera);
     if (this.t < 0) return;
+    if (this.settling >= 0) {
+      // Hold at the start (under the fade up from black) until two frames in a row come quickly (real time: the
+      // frame dt is clamped), or 0.8 s at most on a machine that's just slow.
+      const now = performance.now();
+      this.settling = now - this.lastFrameAt < 70 ? this.settling + 1 : 0;
+      this.lastFrameAt = now;
+      if (this.settling < 2 && now - this.startedAt < 800 && this.hold === null) return;
+      this.settling = -1;
+      const { url, start } = this.track;
+      this.music = this.announcer.playMusic(url, 0.62, start);
+    }
     this.prevT = this.t;
     // The music is the clock while it plays (the cuts stay on its beats through any frame hitches); else frame time.
     const heard = this.music?.clock();
@@ -280,6 +305,12 @@ export class Walkout {
     this.stage.amount = Math.min(1, this.t / 0.6);
     this.place();
     if (this.crossed(B.p1) || this.crossed(B.p2)) this.announcer.crowd('cheer', 0.22);
+    // The smear between shots (ui/Walkout.tsx draws it) gets a whoosh.
+    if (this.crossed(B.p2 - 0.12) || this.crossed(B.two - 0.12)) this.sfx.play('whoosh', 1.4);
+    // Depth cue: whoever's not in the shot sinks into the dark behind the one who is.
+    const t = this.t;
+    this.shade('p2', Math.min(ramp(t, B.p1 - 0.05, 0.3), 1 - ramp(t, B.p2 - 0.05, 0.15)));
+    this.shade('p1', Math.min(ramp(t, B.p2 - 0.05, 0.3), 1 - ramp(t, B.two - 0.05, 0.15)));
     if (this.crossed(B.vs)) this.burst();
     if (this.t >= B.vs) {
       const u = this.t - B.vs;
@@ -291,17 +322,40 @@ export class Walkout {
     if (this.crossed(B.end) && this.hold === null) this.onSkip?.();
   }
 
+  /**
+   * Sink a fighter into the background: their colors darken and go cold (0 = as they are). Material colors only, so no
+   * shader changes; the originals are kept on the material and put back at 0.
+   */
+  private shade(id: PlayerId, k: number) {
+    if (this.shaded[id] === k) return;
+    this.shaded[id] = k;
+    this.views[id].root.traverse((o) => {
+      if (!(o instanceof THREE.Mesh)) return;
+      for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+        if (!(m instanceof THREE.MeshStandardMaterial)) continue;
+        const base = (m.userData.walkoutColor as THREE.Color | undefined) ?? (m.userData.walkoutColor = m.color.clone());
+        m.color.copy(base).multiply(this.tint.setRGB(1 - 0.72 * k, 1 - 0.7 * k, 1 - 0.6 * k));
+        if (k === 0) delete m.userData.walkoutColor;
+      }
+    });
+  }
+
+  private readonly shaded: Record<PlayerId, number> = { p1: 0, p2: 0 };
+  private readonly tint = new THREE.Color();
+
   /** The fire VS: flash, letters slam in behind the fighters, flames and embers burst up around them. */
   private burst() {
     const mid = (this.views.p1.root.position.x + this.views.p2.root.position.x) / 2;
     this.sign.mesh.position.set(mid, 0.95, -0.75);
     this.sign.mesh.visible = true;
     this.sign.draw();
-    this.fire.group.position.set(mid, 0, -1.35);
-    this.fire.group.scale.setScalar(config.lowPower ? 1.8 : 2.4);
-    this.fire.amount = 1.6;
-    this.fire.target = 1.1;
-    this.fire.burst(config.lowPower ? 40 : 120, 1.8);
+    this.wall.group.position.set(mid, 0, -0.9);
+    this.wall.amount = 1.5;
+    this.wall.target = 1.05;
+    this.fire.group.position.set(mid, 0, -0.9);
+    this.fire.group.scale.setScalar(2);
+    this.fire.amount = this.fire.target = 0;
+    this.fire.burst(config.lowPower ? 50 : 160, 2.2);
     this.renderer.shake(0.03);
     this.sfx.play('heavy');
     this.announcer.crowd('roar', 0.4);
@@ -389,17 +443,17 @@ export class Walkout {
       const s0 = p1 ? B.p1 : B.p2;
       const s1 = p1 ? B.p2 : B.two;
       const k = easeInOut((t - s0) / (s1 - s0));
-      const angle = 0.5 - 0.12 * k;
-      const dist = (1.75 - 0.5 * k) * narrow;
-      camera.position.set(x + f * Math.sin(angle) * dist, 0.36 + 0.14 * k, z + Math.cos(angle) * dist);
-      camera.lookAt(this.look.set(x - f * (0.13 - 0.06 * k), 0.5 + 0.1 * k, z));
-      fov = 28 - 3 * k;
+      const angle = 0.55 - 0.1 * k;
+      const dist = (1.15 - 0.3 * k) * narrow;
+      camera.position.set(x + f * Math.sin(angle) * dist, 0.42 + 0.08 * k, z + Math.cos(angle) * dist);
+      camera.lookAt(this.look.set(x - f * (0.17 - 0.05 * k), 0.57 + 0.04 * k, z));
+      fov = 28 - 2 * k;
     } else if (t < B.vs) {
       // The two-shot: low between them looking up, pulling back toward the fight camera as they square up.
       const k = easeInOut((t - B.two) / (B.vs - B.two));
-      camera.position.set(mid, 0.24 + 0.24 * k, (1.0 + 0.7 * k) * narrow);
-      camera.lookAt(this.look.set(mid, 0.52 - 0.06 * k, 0));
-      fov = 34 + 4 * k;
+      camera.position.set(mid, 0.3 + 0.05 * k, (1.08 - 0.1 * k) * narrow);
+      camera.lookAt(this.look.set(mid, 0.55 + 0.02 * k, 0));
+      fov = 36;
     } else {
       // The fire VS: wide on the stage, a slight drift in.
       const k = easeOut((t - B.vs) / Math.max(0.2, B.end - B.vs));

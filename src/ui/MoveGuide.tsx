@@ -19,6 +19,7 @@ const MOVES: [name: string, how: string][] = [
  */
 export function MoveGuide({ inline = false }: { inline?: boolean }) {
   const phase = useGameStore((s) => s.phase);
+  const walkout = useGameStore((s) => s.walkout);
   // In the lobby, once this laptop's player is ready (before that their own setup panel is in that spot).
   const lobby = useGameStore((s) => s.phase === 'lobby' && s.players[localPlayerId(s.role)].status === 'ready');
   const [open, setOpen] = useState<boolean | null>(null);
@@ -31,6 +32,7 @@ export function MoveGuide({ inline = false }: { inline?: boolean }) {
   }, [lobby]);
   // Re-open for each new lobby, close when a fight starts, unless toggled.
   useEffect(() => setOpen(null), [phase]);
+  if (walkout && !inline) return null; // nothing over the walkout
   const shown = inline || (open ?? lobby);
 
   if (!shown) {

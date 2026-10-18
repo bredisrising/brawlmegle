@@ -270,9 +270,11 @@ export class Fire {
 
 
 /**
- * Night falls on the stage for the walkout: a dark dome around the arena with neon strips along its horizon, a
- * spotlight on each fighter (with a visible beam through the haze), slow beams sweeping the back, haze drifting over the floor and dust motes hanging in the light. The arena's own
- * lights are dimmed while it's up (the director does that). `amount` 0..1 fades it all.
+ * Night falls on the stage for the walkout: a near-black dome close around the stage (it hides the sky and hills), with
+ * neon strips and a row of stage lamps as the only bright things in the dark; a key spotlight on each fighter from high
+ * in front with its beam drawn through the haze, a rim spotlight from behind; slow beams sweeping the back, a little
+ * haze over the floor and dust in the light. The director dims the arena's own lights while it's up. `amount` 0..1
+ * fades it all.
  */
 const DOME_FRAG = /* glsl */ `
 varying vec3 vDir;
@@ -282,17 +284,21 @@ void main() {
   vec3 d = normalize(vDir);
   float az = atan(d.x, d.z);
   float h = d.y;
-  // Near black, a dim violet haze at the horizon.
-  vec3 col = mix(vec3(0.012, 0.012, 0.022), vec3(0.06, 0.035, 0.09), exp(-abs(h - 0.04) * 9.0));
-  // Neon strips: short bars at a few heights around the back, teal and magenta, bright enough to bloom.
+  // Black, with the faintest cold haze at the horizon.
+  vec3 col = mix(vec3(0.004, 0.004, 0.008), vec3(0.018, 0.014, 0.03), exp(-abs(h - 0.03) * 12.0));
+  // Neon strips: short bars at a few heights, teal and magenta, bright enough to bloom.
   float seg = fract(az * 2.2 + 0.3);
-  float bar1 = smoothstep(0.004, 0.0, abs(h - 0.16)) * step(0.15, seg) * step(seg, 0.55);
-  float bar2 = smoothstep(0.004, 0.0, abs(h - 0.27)) * step(0.6, fract(az * 1.7)) * step(fract(az * 1.7), 0.85);
-  float bar3 = smoothstep(0.003, 0.0, abs(h - 0.09)) * step(0.7, fract(az * 3.1 + 0.5));
-  col += vec3(0.1, 1.6, 1.5) * bar1 + vec3(1.7, 0.15, 1.2) * bar2 + vec3(0.2, 1.2, 1.4) * bar3 * 0.7;
-  // Faint crowd glow: a band of noise under the strips, like phone lights and silhouettes.
-  float crowd = smoothstep(0.08, 0.0, abs(h - 0.02)) * (0.4 + 0.6 * noise(vec2(az * 40.0, floor(uTime * 6.0))));
-  col += vec3(0.08, 0.06, 0.1) * crowd;
+  float bar1 = smoothstep(0.005, 0.0, abs(h - 0.16)) * step(0.15, seg) * step(seg, 0.55);
+  float bar2 = smoothstep(0.005, 0.0, abs(h - 0.27)) * step(0.6, fract(az * 1.7)) * step(fract(az * 1.7), 0.85);
+  float bar3 = smoothstep(0.004, 0.0, abs(h - 0.09)) * step(0.7, fract(az * 3.1 + 0.5));
+  col += vec3(0.1, 2.2, 2.0) * bar1 + vec3(2.4, 0.2, 1.6) * bar2 + vec3(0.2, 1.6, 1.9) * bar3 * 0.7;
+  // Stage lamps: a row of hot points up in the rig.
+  vec2 lamp = vec2(fract(az * 4.0) - 0.5, (h - 0.42) * 7.0);
+  col += vec3(4.0, 3.4, 2.6) * smoothstep(0.06, 0.0, length(lamp));
+  // Crowd: a dark band with the odd phone light, under the strips.
+  float crowd = smoothstep(0.06, 0.0, abs(h - 0.015));
+  float phone = step(0.985, noise(vec2(az * 260.0, floor(uTime * 3.0) + floor(h * 300.0))));
+  col += vec3(0.6, 0.65, 0.8) * phone * crowd;
   gl_FragColor = vec4(col * uAmount, 1.0);
 }
 `;
@@ -301,7 +307,7 @@ varying vec3 vDir;
 void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
 `;
 
-/** A cone of light through the haze: brightest near the lamp and along the axis, fading out at the edges. */
+/** A cone of light through the haze: brightest at the lamp and along the axis, fading at the edges and the far end. */
 const BEAM_FRAG = /* glsl */ `
 varying vec2 vUv;
 varying vec3 vNormalV, vViewV;
@@ -309,9 +315,9 @@ uniform vec3 uColor;
 uniform float uAmount, uTime;
 void main() {
   float along = vUv.y; // 1 at the lamp (the tip), 0 at the far end
-  float edge = pow(abs(dot(normalize(vNormalV), normalize(vViewV))), 1.5);
-  float flicker = 0.92 + 0.08 * sin(uTime * 7.0 + along * 5.0);
-  float a = edge * smoothstep(0.0, 0.5, along) * (0.35 + 0.65 * along) * uAmount * flicker;
+  float edge = pow(abs(dot(normalize(vNormalV), normalize(vViewV))), 1.8);
+  float flicker = 0.93 + 0.07 * sin(uTime * 7.0 + along * 5.0);
+  float a = edge * smoothstep(0.0, 0.5, along) * (0.25 + 1.4 * along * along) * uAmount * flicker;
   gl_FragColor = vec4(uColor * a, a);
 }
 `;
@@ -327,6 +333,18 @@ void main() {
 }
 `;
 
+/** A soft round glow (a lamp's flare), additive and HDR so the bloom spreads it. */
+const GLOW_SPRITE_FRAG = /* glsl */ `
+varying vec2 vUv;
+uniform vec3 uColor;
+uniform float uAmount;
+void main() {
+  float d = length(vUv - 0.5) * 2.0;
+  float a = (exp(-d * d * 9.0) + 0.25 * exp(-d * 2.5)) * uAmount;
+  gl_FragColor = vec4(uColor * a, a);
+}
+`;
+
 /** Haze: a soft sheet of drifting smoke. */
 const HAZE_FRAG = /* glsl */ `
 varying vec2 vUv;
@@ -337,7 +355,7 @@ void main() {
   vec2 q = vUv * vec2(3.0, 1.5) + vec2(uTime * 0.05 + uSeed, uSeed);
   float n = fbm(q + fbm(q * 1.5 - uTime * 0.03));
   float fade = smoothstep(0.0, 0.3, vUv.x) * smoothstep(1.0, 0.7, vUv.x) * smoothstep(0.0, 0.25, vUv.y) * smoothstep(1.0, 0.4, vUv.y);
-  float a = smoothstep(0.35, 0.9, n) * fade * uAmount * 0.32;
+  float a = smoothstep(0.4, 0.95, n) * fade * uAmount * 0.16;
   gl_FragColor = vec4(uColor * a, a);
 }
 `;
@@ -346,10 +364,17 @@ export class Stage {
   readonly group = new THREE.Group();
   /** 0 = gone, 1 = up. */
   amount = 0;
-  readonly spots: THREE.SpotLight[] = [];
-  /** The spotlights: always in the scene, at zero when the stage is down (see the constructor). */
+  /**
+   * The spotlights (key in front, rim behind, per fighter): always in the scene, at zero when the stage is down, since
+   * adding or removing a light recompiles every lit material (a long hitch). None in low power: a phone shouldn't pay
+   * for dark lights through the fight, and it gets a milder dim instead (the director).
+   */
   readonly lights = new THREE.Group();
+  readonly spots: THREE.SpotLight[] = [];
+  readonly rims: THREE.SpotLight[] = [];
   private readonly beams: { mesh: THREE.Mesh; material: THREE.ShaderMaterial; sweep: number }[] = [];
+  private readonly lamps: THREE.Mesh[] = [];
+  private readonly lampMaterial: THREE.ShaderMaterial;
   private readonly hazes: { mesh: THREE.Mesh; material: THREE.ShaderMaterial }[] = [];
   private readonly dome: THREE.Mesh;
   private readonly domeMaterial: THREE.ShaderMaterial;
@@ -357,7 +382,8 @@ export class Stage {
   private readonly moteMaterial: THREE.PointsMaterial;
   private readonly geometries: THREE.BufferGeometry[] = [];
   private time = 0;
-  private readonly spotPower = 6.5;
+  private readonly keyPower = 6;
+  private readonly rimPower = 5.5;
 
   constructor(lowPower: boolean) {
     this.group.visible = false;
@@ -367,7 +393,8 @@ export class Stage {
       uniforms: { uTime: { value: 0 }, uAmount: { value: 0 } },
       side: THREE.BackSide,
     });
-    const domeGeometry = new THREE.SphereGeometry(11, 48, 24);
+    // Close around the stage: everything past it (the sky, the hills) goes to black.
+    const domeGeometry = new THREE.SphereGeometry(5.5, 48, 24);
     this.geometries.push(domeGeometry);
     this.dome = new THREE.Mesh(domeGeometry, this.domeMaterial);
     this.group.add(this.dome);
@@ -390,32 +417,49 @@ export class Stage {
       this.beams.push({ mesh, material, sweep });
       return mesh;
     };
+    const lampGeometry = new THREE.PlaneGeometry(1, 1);
+    this.geometries.push(lampGeometry);
+    this.lampMaterial = new THREE.ShaderMaterial({
+      vertexShader: VERT,
+      fragmentShader: GLOW_SPRITE_FRAG,
+      uniforms: { uColor: { value: hdr('#fff0d8', 5) }, uAmount: { value: 0 } },
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
     for (let i = 0; i < 2; i++) {
-      // Key light from high in front, a little to the outside; its beam is drawn too. The lights stay in the scene
-      // (dark) between walkouts: adding or removing a light recompiles every lit material, a long hitch. No shadows
-      // for the same reason (the fighters' rim shader already separates them from the dark).
-      const spot = new THREE.SpotLight('#fff2dc', 0, 7, 0.32, 0.75, 1.1);
-      this.lights.add(spot, spot.target);
-      this.spots.push(spot);
-      beam('#ffe9c8', 0.16, 0);
+      if (!lowPower) {
+        const key = new THREE.SpotLight('#fff1dc', 0, 7, 0.3, 0.6, 1.1);
+        this.lights.add(key, key.target);
+        this.spots.push(key);
+        const rim = new THREE.SpotLight(i === 0 ? '#ff6ab4' : '#6ab8ff', 0, 5, 0.45, 0.5, 1.2);
+        this.lights.add(rim, rim.target);
+        this.rims.push(rim);
+      }
+      beam('#ffe9c8', 0.22, 0);
+      const lamp = new THREE.Mesh(lampGeometry, this.lampMaterial);
+      lamp.scale.setScalar(0.35);
+      lamp.renderOrder = 4;
+      this.group.add(lamp);
+      this.lamps.push(lamp);
     }
-    // Background beams sweeping slowly through the haze.
+    // Background beams sweeping slowly through the dark.
     if (!lowPower) {
-      beam('#5ee8ff', 0.09, 1).position.set(-1.6, 3.4, -3.2);
-      beam('#ff2d95', 0.09, -1).position.set(1.7, 3.4, -3.4);
-      beam('#b9a8ff', 0.07, 0.6).position.set(0.1, 3.6, -4.2);
+      beam('#5ee8ff', 0.12, 1).position.set(-1.6, 3.4, -3.2);
+      beam('#ff2d95', 0.12, -1).position.set(1.7, 3.4, -3.4);
+      beam('#b9a8ff', 0.08, 0.6).position.set(0.1, 3.6, -4.2);
     }
-    // Haze low over the floor, around and behind the fighters.
+    // A little haze low over the floor, behind the fighters.
     const hazeGeometry = new THREE.PlaneGeometry(1, 1);
     this.geometries.push(hazeGeometry);
     const hazeAt: [number, number, number, number, number][] = lowPower
-      ? [[0, 0.3, -0.9, 4, 1.2]]
-      : [[0, 0.3, -0.9, 4.5, 1.3], [-0.9, 0.2, -0.3, 2.4, 0.7], [1.0, 0.25, -0.4, 2.6, 0.8], [0.2, 0.55, -2.0, 6, 2]];
+      ? [[0, 0.3, -1.0, 4, 1.2]]
+      : [[0, 0.3, -1.0, 4.5, 1.3], [0.2, 0.55, -2.2, 6, 2]];
     hazeAt.forEach(([x, y, z, w, h], i) => {
       const material = new THREE.ShaderMaterial({
         vertexShader: VERT,
         fragmentShader: HAZE_FRAG,
-        uniforms: { uTime: { value: 0 }, uAmount: { value: 0 }, uSeed: { value: i * 3.1 }, uColor: { value: new THREE.Color('#8f86b8') } },
+        uniforms: { uTime: { value: 0 }, uAmount: { value: 0 }, uSeed: { value: i * 3.1 }, uColor: { value: new THREE.Color('#6f6a8c') } },
         transparent: true,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
@@ -438,17 +482,25 @@ export class Stage {
     this.group.add(this.motes);
   }
 
-  /** Aim fighter `i`'s spotlight, beam and rim at `at` (their feet). */
+  /** Aim fighter `i`'s key and rim lights, beam and lamp at `at` (their feet). */
   aim(i: number, at: THREE.Vector3) {
-    const spot = this.spots[i];
-    const side = i === 0 ? -1 : 1;
-    spot.position.set(at.x + side * 0.35, 2.3, at.z + 1.0);
-    spot.target.position.set(at.x, 0.35, at.z);
+    const side = i === 0 ? -1 : 1; // the fighter's outside
+    const lamp = this.lamps[i].position.set(at.x + side * 0.45, 2.3, at.z + 0.9);
+    const key = this.spots[i];
+    if (key) {
+      key.position.copy(lamp);
+      key.target.position.set(at.x, 0.5, at.z);
+    }
+    const rim = this.rims[i];
+    if (rim) {
+      rim.position.set(at.x - side * 0.5, 1.4, at.z - 1.3);
+      rim.target.position.set(at.x, 0.55, at.z);
+    }
     const beam = this.beams[i].mesh;
-    beam.position.copy(spot.position);
-    const dir = new THREE.Vector3().subVectors(spot.target.position, spot.position);
-    const len = dir.length() + 0.4;
-    beam.scale.set(Math.tan(0.24) * len, len, Math.tan(0.24) * len);
+    beam.position.copy(lamp);
+    const dir = new THREE.Vector3(at.x, 0.2, at.z).sub(lamp);
+    const len = dir.length() + 0.3;
+    beam.scale.set(Math.tan(0.22) * len, len, Math.tan(0.22) * len);
     beam.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), dir.normalize());
   }
 
@@ -456,11 +508,14 @@ export class Stage {
     this.time += dt;
     const k = this.amount;
     this.group.visible = k > 0.001;
-    for (const s of this.spots) s.intensity = this.spotPower * k;
+    for (const s of this.spots) s.intensity = this.keyPower * k;
+    for (const r of this.rims) r.intensity = this.rimPower * k;
     if (!this.group.visible) return;
     this.dome.position.copy(camera.position).setY(0);
     this.domeMaterial.uniforms.uTime.value = this.time;
     this.domeMaterial.uniforms.uAmount.value = k;
+    this.lampMaterial.uniforms.uAmount.value = k;
+    for (const l of this.lamps) l.quaternion.copy(camera.quaternion);
     for (const b of this.beams) {
       b.material.uniforms.uAmount.value = k;
       b.material.uniforms.uTime.value = this.time;
@@ -482,13 +537,109 @@ export class Stage {
 
   dispose() {
     this.group.removeFromParent();
+    this.lights.removeFromParent();
     for (const g of this.geometries) g.dispose();
     this.domeMaterial.dispose();
+    this.lampMaterial.dispose();
     this.moteMaterial.dispose();
     for (const b of this.beams) b.material.dispose();
     for (const h of this.hazes) h.material.dispose();
-    for (const s of this.spots) s.dispose();
-    this.lights.removeFromParent();
+    for (const s of [...this.spots, ...this.rims]) s.dispose();
+  }
+}
+
+/**
+ * Soft fire for the VS wall: a smooth hot-to-cool gradient (no bands), licking tongues from fbm turbulence, additive and
+ * HDR so it glows through the bloom.
+ */
+const SOFT_FIRE_FRAG = /* glsl */ `
+varying vec2 vUv;
+uniform float uTime, uAmount, uSeed;
+uniform vec3 uHot, uMid, uCool;
+${NOISE}
+void main() {
+  vec2 uv = vUv;
+  vec2 q = vec2(uv.x * 3.0 + uSeed, uv.y * 2.0 - uTime * 1.6);
+  float n = fbm(q + vec2(fbm(q * 1.7 + vec2(uSeed, -uTime * 2.3)) * 1.2, 0.0));
+  float width = smoothstep(0.0, 0.35, uv.x) * smoothstep(1.0, 0.65, uv.x);
+  float body = width * (1.3 - uv.y * 1.5);
+  float f = clamp((body + (n - 0.5) * 1.1) * uAmount, 0.0, 1.6);
+  float a = smoothstep(0.08, 0.6, f) * smoothstep(0.0, 0.08, uv.y);
+  vec3 col = mix(uCool, uMid, smoothstep(0.1, 0.6, f));
+  col = mix(col, uHot, smoothstep(0.55, 1.2, f));
+  gl_FragColor = vec4(col * a, a);
+}
+`;
+
+/** The wall of fire that fills the stage behind the fighters for the VS: overlapping soft sheets in three depths. */
+export class FireWall {
+  readonly group = new THREE.Group();
+  amount = 0;
+  target = 0;
+  private readonly sheets: { mesh: THREE.Mesh; material: THREE.ShaderMaterial; h: number }[] = [];
+  private readonly geometry = new THREE.PlaneGeometry(1, 1).translate(0, 0.5, 0);
+  private time = 0;
+
+  constructor(lowPower: boolean) {
+    this.group.visible = false;
+    // [x, z, width, height, layer]: a tall dark-red back row, an orange middle row, bright low tongues in front.
+    const layers: [number, number, number, number, number][] = [];
+    const across = lowPower ? 4 : 7;
+    for (let i = 0; i < across; i++) {
+      const x = -2.4 + (4.8 * (i + 0.5)) / across;
+      layers.push([x, -0.6, 4.8 / across + 0.7, 2.0 + 0.4 * Math.sin(i * 2.3), 0]);
+      if (!lowPower || i % 2 === 0) layers.push([x + 0.25, -0.25, 4.8 / across + 0.5, 1.35 + 0.3 * Math.cos(i * 1.7), 1]);
+      if (!lowPower) layers.push([x - 0.2, 0.05, 4.8 / across + 0.3, 0.7 + 0.2 * Math.sin(i * 3.1), 2]);
+    }
+    const palette = [
+      { hot: '#ff9a3c', mid: '#d4341a', cool: '#4a0710', glow: 1.0 },
+      { hot: '#ffc35a', mid: '#ff5a1a', cool: '#7a1010', glow: 1.4 },
+      { hot: '#ffe08a', mid: '#ff8a1a', cool: '#a3200f', glow: 1.3 },
+    ];
+    layers.forEach(([x, z, w, h, layer], i) => {
+      const p = palette[layer];
+      const material = new THREE.ShaderMaterial({
+        vertexShader: VERT,
+        fragmentShader: SOFT_FIRE_FRAG,
+        uniforms: {
+          uTime: { value: 0 },
+          uAmount: { value: 0 },
+          uSeed: { value: i * 1.37 },
+          uHot: { value: hdr(p.hot, 0.32 * p.glow) },
+          uMid: { value: hdr(p.mid, 0.22 * p.glow) },
+          uCool: { value: hdr(p.cool, 0.16) },
+        },
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+      });
+      const mesh = new THREE.Mesh(this.geometry, material);
+      mesh.position.set(x, 0, z);
+      mesh.scale.set(w, h, 1);
+      mesh.renderOrder = 5 + layer;
+      this.group.add(mesh);
+      this.sheets.push({ mesh, material, h });
+    });
+  }
+
+  update(dt: number) {
+    this.time += dt;
+    const rate = this.target > this.amount ? 14 : 3;
+    this.amount += (this.target - this.amount) * (1 - Math.exp(-rate * dt));
+    this.group.visible = this.amount > 0.01;
+    if (!this.group.visible) return;
+    for (const s of this.sheets) {
+      s.material.uniforms.uTime.value = this.time;
+      s.material.uniforms.uAmount.value = Math.min(1.5, this.amount);
+      s.mesh.scale.y = s.h * (0.4 + 0.6 * Math.min(1.3, this.amount));
+    }
+  }
+
+  dispose() {
+    this.group.removeFromParent();
+    this.geometry.dispose();
+    for (const s of this.sheets) s.material.dispose();
   }
 }
 
@@ -506,7 +657,7 @@ export class VsSign {
     this.texture = new THREE.CanvasTexture(canvas);
     this.texture.colorSpace = THREE.SRGBColorSpace;
     // HDR tint: the letters bloom like they're burning.
-    this.material = new THREE.MeshBasicMaterial({ map: this.texture, transparent: true, depthWrite: false, color: new THREE.Color(1.5, 1.25, 1.0), toneMapped: true });
+    this.material = new THREE.MeshBasicMaterial({ map: this.texture, transparent: true, depthWrite: false, color: new THREE.Color(1.35, 1.05, 0.8), toneMapped: true });
     this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.8), this.material);
     this.mesh.visible = false;
     this.mesh.renderOrder = 10; // after the fire behind it
@@ -518,18 +669,25 @@ export class VsSign {
     const canvas = this.texture.image as HTMLCanvasElement;
     const g = canvas.getContext('2d');
     if (!g) return;
-    const font = '400 400px "Rubik Wet Paint", "Archivo Black", sans-serif';
+    const font = '400 380px "Rubik Wet Paint", "Archivo Black", sans-serif';
     const ready = typeof document !== 'undefined' && document.fonts?.check?.(font);
     g.clearRect(0, 0, canvas.width, canvas.height);
     g.font = font;
     g.textAlign = 'center';
     g.textBaseline = 'middle';
-    const fill = g.createLinearGradient(0, 80, 0, 440);
-    fill.addColorStop(0, '#fff6c8');
+    // A soft orange glow behind the letters, then a dark keyline, then the hot fill.
+    g.save();
+    g.shadowColor = 'rgba(255, 120, 30, 0.95)';
+    g.shadowBlur = 60;
+    g.fillStyle = '#ff7a1a';
+    g.fillText('VS', 512, 270);
+    g.restore();
+    const fill = g.createLinearGradient(0, 100, 0, 430);
+    fill.addColorStop(0, '#fff8d8');
     fill.addColorStop(0.45, '#ffc21a');
     fill.addColorStop(1, '#ff4a1a');
     g.lineJoin = 'round';
-    g.lineWidth = 26;
+    g.lineWidth = 22;
     g.strokeStyle = '#2a0805';
     g.strokeText('VS', 512, 270);
     g.fillStyle = fill;
