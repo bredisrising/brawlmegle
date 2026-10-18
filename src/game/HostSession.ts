@@ -35,6 +35,13 @@ export type HostHooks = {
   quickJoin?: (code: string) => void;
   /** The client player's "Hide my camera". */
   cam?: (hidden: boolean) => void;
+  /** Room code: P2's player walked away mid-match (tab hidden), or came back. */
+  away?: () => void;
+  back?: () => void;
+  /** Whether the client player's tab is visible. */
+  presence?: (visible: boolean) => void;
+  /** Any message at all from the client (the host's watchdog for a client gone quiet). */
+  heard?: () => void;
 };
 type Deferred<T> = { resolve: (value: T) => void; reject: (err: Error) => void };
 
@@ -182,7 +189,13 @@ export class HostSession {
     this.hooks.left?.();
   }
 
+  /** Let the client go now (it went quiet, or never came back to its tab): its slot frees up as if it had left. */
+  drop() {
+    if (this.peer.connected) this.release();
+  }
+
   private onMessage(msg: ClientMessage) {
+    this.hooks.heard?.();
     switch (msg.type) {
       case 'hello':
         if (msg.version !== PROTOCOL_VERSION) console.warn(`[host] client protocol ${msg.version}, host ${PROTOCOL_VERSION}`);
@@ -206,6 +219,17 @@ export class HostSession {
         break;
       case 'cam':
         this.hooks.cam?.(msg.hidden);
+        break;
+      case 'abandon':
+        // Matchmade: they're gone, same as leaving. Room code: they're still in the room, the fight restarts when they're back.
+        if (this.quick) this.release();
+        else this.hooks.away?.();
+        break;
+      case 'back':
+        this.hooks.back?.();
+        break;
+      case 'presence':
+        this.hooks.presence?.(msg.visible);
         break;
       case 'intents':
         this.hooks.read?.(msg.intents, msg.stance);

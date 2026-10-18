@@ -68,6 +68,16 @@ const NEXT_MS = 4000;
 /** ...measured from here when there's no replay to wait for (a time-out), or the replay never came. */
 const NEXT_AFTER_TIME_MS = 2000;
 const NEXT_REPLAY_BACKSTOP_MS = 12_000;
+/** A tab hidden this long mid-match (switched away, minimized) has left it: the match is called off for both. */
+const AWAY_MS = 2000;
+/**
+ * No word at all from the other laptop for this long mid-match (frozen, asleep): treated like walking away. Not
+ * shorter: a weak laptop can block for a few seconds loading the other fighter or compiling shaders as a round starts.
+ */
+const STALL_MS = 6000;
+/** Matchmade, matched while the other player's tab is hidden: this long for them to come back before moving on. */
+const COME_BACK_MS = 8000;
+const WAITING_TEXT = 'Opponent found, waiting for them to come back…';
 
 /** One id per tab for the matchmaker (it prefers a new opponent over the last one). */
 const playerId = () => (crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
@@ -196,6 +206,33 @@ export class Game {
   private replayEndedAt: number | null = null;
   /** Slots driven by addTestPlayer (dev): nobody there to click Rematch. */
   private readonly testSlots = new Set<PlayerId>();
+  /**
+   * Walking away mid-match. `hiddenAt`: when this tab was hidden (performance.now; hidden tabs throttle timers, so
+   * the time is measured, and checked again when the tab comes back). `benched`: matchmaking, this player left by
+   * hiding the tab, so it doesn't search again (a stranger would get an empty chair) until the tab is back;
+   * `searchWanted` says a search is due then. `leftRoom`: room code, this player walked away and owes a "back".
+   * `away` (host, room code): players who walked away; the fight restarts once none are.
+   */
+  private hiddenAt: number | null = null;
+  private awayTimer = 0;
+  private benched = false;
+  private searchWanted = false;
+  private leftRoom = false;
+  private readonly away = new Set<PlayerId>();
+  /**
+   * Presence: whether the other player's tab is visible (they say so on every change; the client also once a second),
+   * and when this laptop last heard anything from the other one (the watchdog for a laptop gone quiet mid-match).
+   * `benchNote`: what to say when a benched player comes back. `giveUp`: matchmade, waiting for a hidden opponent.
+   */
+  private remoteVisible = true;
+  private lastPeerAt = 0;
+  /** When the watchdog last ran here: after this laptop itself was blocked, its queued messages get read first. */
+  private lastWatch = 0;
+  private benchNote = 'You left the match';
+  private giveUp = 0;
+  private titleBefore: string | null = null;
+  /** Room code client: it called the round off because the host went quiet; it says "back" once the host is heard. */
+  private hostWentQuiet = false;
 
   constructor(container: HTMLElement) {
     this.renderer = new Renderer(container);
@@ -221,6 +258,10 @@ export class Game {
     window.addEventListener('keydown', this.onMuteKey);
     // Countdown beeps, then the "go" (both laptops: the client's store follows the host's countdown).
     this.unsubscribe = useGameStore.subscribe((s, prev) => {
+      // The match is back on: a "waiting for them to come back" notice has done its job.
+      if (s.phase === 'countdown' && prev.phase !== 'countdown' && s.notice?.sticky) useGameStore.setState({ notice: null });
+      // The watchdog starts counting from the start of the match.
+      if (s.phase === 'countdown' && prev.phase !== 'countdown') this.lastPeerAt = performance.now();
       if (prev.phase === 'ko' && s.phase !== 'ko' && (s.votes !== NO_VOTES || s.nextAt !== null)) {
         this.votes = NO_VOTES;
         this.nextAt = null;
@@ -263,6 +304,7 @@ export class Game {
     for (const id of PLAYER_IDS) this.views[id].onLand = (at) => this.effects.burst(at, 'dust');
     // Ping: how the link between the two laptops is doing, every couple of seconds.
     this.linkTimer = setInterval(() => void this.pollLink(), 2000);
+    document.addEventListener('visibilitychange', this.onVisibility);
   }
 
   /** `?perf`: the pose model's timing on the overlay, and the game for scripted measurements (scripts/perf). */
@@ -302,6 +344,9 @@ export class Game {
       rematch: () => this.vote('p2'),
       connected: () => {
         if (!mine()) return;
+        this.remoteVisible = true;
+        this.lastPeerAt = performance.now();
+        session.send({ type: 'presence', visible: document.visibilityState !== 'hidden' });
         if (this.quick) useGameStore.setState({ searching: false });
         this.shareCamera();
         this.cam.connected();
@@ -312,11 +357,22 @@ export class Game {
       watched: () => this.sendMatch(),
       left: () => {
         if (!mine()) return;
+        const { phase, players } = useGameStore.getState();
+        const live = phase === 'countdown' || phase === 'fighting';
+        const name = players.p2.name;
         this.releaseRemote();
+        this.stopWaiting();
         this.cam.connected(); // nobody to hide from: back to defaults
+        if (live) this.notify(this.quick ? 'Your opponent left' : `${name} left the room`);
+        // Matched while this tab was hidden and they gave up waiting: no searching until this player's back.
+        if (this.quick && document.visibilityState === 'hidden') this.bench('You missed a match');
         // Matchmade: the stranger's gone, find the next one.
         if (this.quick) setTimeout(() => mine() && void this.search(), 0);
       },
+      away: () => mine() && this.abandonMatch('p2'),
+      back: () => mine() && this.returned('p2'),
+      presence: (visible) => mine() && this.remotePresence(visible),
+      heard: () => mine() && (this.lastPeerAt = performance.now()),
       quickJoin: (code) => mine() && void this.joinQuick(code),
       cam: (hidden) => mine() && this.cam.remoteHidden(hidden),
       read: (intents, stance) => {
@@ -342,6 +398,12 @@ export class Game {
   private async search() {
     const q = this.quick;
     if (!q || this.client) return;
+    // Left a match by hiding the tab: no searching (a stranger would get an empty chair) until the tab is back.
+    if (this.benched) {
+      this.searchWanted = true;
+      useGameStore.setState({ searching: false });
+      return;
+    }
     const gen = ++q.gen;
     useGameStore.setState({ searching: true, connection: null, roomCode: null });
     const session = this.openHost(q.player);
@@ -381,10 +443,11 @@ export class Game {
     ++q.gen;
     const client = this.client;
     this.client = null;
-    client?.dispose();
+    // A moment for a last message (leave, abandon) to go out before the connection closes.
+    client?.retire();
     this.cam.attach(null, null);
     this.clearMatch();
-    useGameStore.setState({ role: 'host', roomCode: null, connection: null, searching: true, screen: 'game' });
+    useGameStore.setState({ role: 'host', roomCode: null, connection: null, searching: !this.benched, screen: 'game' });
     q.camera ??= createLocalSource();
     // setupPlayer starts the search once P1 is ready again.
     await this.setupPlayer('p1', q.choice, q.camera);
@@ -450,14 +513,303 @@ export class Game {
         this.shareCamera();
         this.cam.attach(peer, (hidden) => client.sendCam(hidden));
         this.cam.connected();
+        this.lastPeerAt = performance.now();
+        client.sendPresence();
+        // Matched while this tab was hidden: say so in the tab's title (and a sound, if this page may play one).
+        if (document.visibilityState === 'hidden') this.flagMatched();
+      },
+      presence: (visible) => mine() && this.remotePresence(visible),
+      heard: () => {
+        if (!mine()) return;
+        this.lastPeerAt = performance.now();
+        if (this.hostWentQuiet) {
+          this.hostWentQuiet = false;
+          client.sendAway(false);
+        }
       },
       cam: (hidden) => mine() && this.cam.remoteHidden(hidden),
       votes: (votes, nextIn) => mine() && useGameStore.setState({ votes, nextAt: nextIn === null ? null : performance.now() + nextIn }),
-      next: () => mine() && void this.rehost(),
-      lost: () => mine() && void this.rehost(),
+      next: () => mine() && (this.opponentLeft(), void this.rehost()),
+      lost: () => mine() && (this.opponentLeft(), void this.rehost()),
+      abandon: (who) => {
+        if (!mine()) return;
+        if (opts.quick) {
+          this.opponentLeft();
+          if (document.visibilityState === 'hidden') this.bench('You missed a match');
+          return void this.rehost();
+        }
+        // Room code: the host called the round off. Stop drawing it; the lobby follows from the host.
+        this.mirrored = null;
+        this.stopReplay();
+        for (const id of PLAYER_IDS) this.views[id].reset();
+        if (who !== localPlayerId('client')) this.notify(`${useGameStore.getState().players[who].name} switched away. The fight restarts when they're back`, true);
+      },
     };
     const client: ClientSession = new ClientSession(code, mirror, opts);
+    // A new host: visible until it says otherwise (its word can arrive before the connection's peer hook runs).
+    this.remoteVisible = true;
     return client;
+  }
+
+  /** A short notice across the screen (ui/Notice.tsx). `sticky`: stays until the match starts again. */
+  private notify(text: string, sticky = false) {
+    useGameStore.setState({ notice: { text, key: performance.now(), sticky } });
+  }
+
+  /** Matchmaking: this tab is hidden and leaves a match (or misses one): no searching until it's back. */
+  private bench(note: string) {
+    this.benched = true;
+    this.benchNote = note;
+  }
+
+  /**
+   * Host: start the round once both players are ready, and both tabs are visible. A hidden tab's game loop doesn't
+   * run (no animation frames), so a countdown started there would never move on: the other player would sit on the
+   * walkout's VS. Until both are back: the hidden tab's title says "Opponent found!", the other player sees why
+   * they're waiting, and (matchmaking) after COME_BACK_MS they move on to someone else.
+   */
+  private tryStart() {
+    const { phase, players } = useGameStore.getState();
+    if (phase !== 'lobby' || this.away.size || !PLAYER_IDS.every((p) => players[p].status === 'ready')) return;
+    const remote = !!this.hostSession?.connected && this.input.source('p2') === this.hostSession.remote && !this.cpu.p2;
+    const hereHidden = document.visibilityState === 'hidden';
+    const thereHidden = remote && !this.remoteVisible;
+    if (hereHidden || thereHidden) return this.startWaiting(hereHidden && remote, thereHidden);
+    this.stopWaiting();
+    this.startCountdown();
+  }
+
+  private startWaiting(hereHidden: boolean, thereHidden: boolean) {
+    if (hereHidden) this.flagMatched();
+    if (!thereHidden || this.giveUp) return;
+    this.notify(this.quick ? WAITING_TEXT : `${useGameStore.getState().players.p2.name} switched away. The fight starts when they're back`, true);
+    if (!this.quick) return;
+    // Matchmade: a stranger who isn't there. Move on after a while (this tab is visible, so its timer runs).
+    const session = this.hostSession;
+    this.giveUp = window.setTimeout(() => {
+      this.giveUp = 0;
+      if (this.hostSession !== session || this.remoteVisible || useGameStore.getState().phase !== 'lobby') return;
+      session?.send({ type: 'abandon', who: 'p2' });
+      setTimeout(() => {
+        if (this.hostSession !== session) return;
+        session?.drop();
+        this.notify("Your opponent didn't come back");
+      }, 150);
+    }, COME_BACK_MS);
+  }
+
+  private stopWaiting() {
+    clearTimeout(this.giveUp);
+    this.giveUp = 0;
+    const { notice } = useGameStore.getState();
+    if (notice?.sticky) useGameStore.setState({ notice: null });
+  }
+
+  /** Matched while this tab is hidden: flag it in the tab's title, and a short sound if this page may play one. */
+  private flagMatched() {
+    if (this.titleBefore !== null) return;
+    this.titleBefore = document.title;
+    document.title = '⚔ Opponent found!';
+    this.sfx.play('spawn');
+  }
+
+  /** The other player's tab became visible or hidden (or the client's once-a-second word that it's still there). */
+  private remotePresence(visible: boolean) {
+    const changed = visible !== this.remoteVisible;
+    this.remoteVisible = visible;
+    if (this.client) return this.hostPresence(visible, changed);
+    if (!visible) return void (changed && this.tryStart());
+    // Back (or still there): a round called off because this player went quiet restarts; a waiting one starts.
+    if (this.away.has('p2') && !this.quick) return this.returned('p2');
+    if (changed) this.tryStart();
+  }
+
+  /** Client: the host player's tab became visible or hidden. */
+  private hostPresence(visible: boolean, changed: boolean) {
+    if (!changed) return;
+    const { phase, players } = useGameStore.getState();
+    if (visible) {
+      clearTimeout(this.giveUp);
+      this.giveUp = 0;
+      if (useGameStore.getState().notice?.sticky) useGameStore.setState({ notice: null });
+      return;
+    }
+    // Mid-match the host's own tab calls it off after a moment (or the watchdog does); before it, this player waits.
+    if (phase !== 'lobby') return;
+    this.notify(this.quick ? WAITING_TEXT : `${players.p1.name} switched away. The fight starts when they're back`, true);
+    if (!this.quick || this.giveUp) return;
+    const client = this.client;
+    this.giveUp = window.setTimeout(() => {
+      this.giveUp = 0;
+      if (this.client !== client || this.remoteVisible || useGameStore.getState().phase !== 'lobby') return;
+      client?.leave();
+      this.notify("Your opponent didn't come back");
+      void this.rehost();
+    }, COME_BACK_MS);
+  }
+
+  /**
+   * Watchdog, mid-match: no word at all from the other laptop for STALL_MS (its tab frozen or asleep, timers and all)
+   * is handled like walking away. Runs from this laptop's frame loop and its link timer.
+   */
+  private watchPeer() {
+    const { phase, players } = useGameStore.getState();
+    if ((phase !== 'countdown' && phase !== 'fighting') || !this.liveMatch()) return;
+    const now = performance.now();
+    const blocked = now - this.lastWatch > 2000;
+    this.lastWatch = now;
+    // This laptop was the one stuck for a while: its own unread messages come first, so check again next time.
+    if (blocked) return;
+    if (now - this.lastPeerAt < STALL_MS) return;
+    this.lastPeerAt = now;
+    console.info('[away] no word from the other laptop mid-match: calling the match off');
+    if (this.client) {
+      if (this.quick) {
+        this.opponentLeft();
+        this.client.leave();
+        return void this.rehost();
+      }
+      // Room code: tell the host (it reads it when it wakes up) and stop drawing the round; "back" once it's heard.
+      this.client.sendAway(true);
+      this.hostWentQuiet = true;
+      this.mirrored = null;
+      this.stopReplay();
+      for (const id of PLAYER_IDS) this.views[id].reset();
+      useGameStore.setState({ phase: 'lobby', countdown: null, timeLeft: null, combo: null, callout: null });
+      this.notify(`${players.p1.name} switched away. The fight restarts when they're back`, true);
+      return;
+    }
+    if (this.quick) this.hostSession?.drop();
+    else this.abandonMatch('p2');
+  }
+
+  /** The other player left mid-match (said so, or the link went). */
+  private opponentLeft() {
+    const { phase } = useGameStore.getState();
+    if (phase === 'countdown' || phase === 'fighting') this.notify('Your opponent left');
+  }
+
+  /**
+   * A match with someone on another laptop is on (walkout, countdown or the round). Not the CPU or Training, and not
+   * a screen that only watches.
+   */
+  private liveMatch() {
+    const { phase, role, connection } = useGameStore.getState();
+    if (phase !== 'countdown' && phase !== 'fighting') return false;
+    if (role === 'client') return !!this.client && connection === 'open';
+    if (role !== 'host' || !this.hostSession?.connected || this.cpu.p2) return false;
+    return this.input.source('p2') === this.hostSession.remote;
+  }
+
+  /** The tab was hidden (switched away, minimized) or came back. */
+  private onVisibility = () => {
+    clearInterval(this.awayTimer);
+    const visible = document.visibilityState !== 'hidden';
+    // Tell the other laptop (this event still fires in a hidden tab, and messages still go out).
+    if (this.client) this.client.sendPresence(visible);
+    else this.hostSession?.send({ type: 'presence', visible });
+    if (!visible) {
+      this.hiddenAt = performance.now();
+      // Timers in a hidden tab run late (about once a second, much less after minutes): the check measures the time.
+      this.awayTimer = window.setInterval(() => this.checkAway(), 500);
+      return;
+    }
+    this.checkAway(); // the timer may not have got its turn
+    this.hiddenAt = null;
+    if (this.titleBefore !== null) {
+      document.title = this.titleBefore;
+      this.titleBefore = null;
+    }
+    this.cameBack();
+    if (!this.client) this.tryStart();
+  };
+
+  private checkAway() {
+    if (this.hiddenAt === null || performance.now() - this.hiddenAt < AWAY_MS) return;
+    clearInterval(this.awayTimer);
+    if (this.liveMatch()) this.walkAway();
+  }
+
+  /**
+   * This player left the match by hiding the tab. It's called off for both, with no result. Matchmade: both go back
+   * to searching, this one only once the tab is back. Room code: both go back to the lobby, keeping the room; the
+   * fight restarts when this player's back.
+   */
+  private walkAway() {
+    const { role } = useGameStore.getState();
+    console.info('[away] the tab was hidden mid-match: calling the match off');
+    if (this.quick) {
+      this.bench('You left the match');
+      if (role === 'client') {
+        this.client?.sendAway(true);
+        void this.rehost();
+        return;
+      }
+      const session = this.hostSession;
+      session?.send({ type: 'abandon', who: 'p1' });
+      setTimeout(() => {
+        if (this.hostSession !== session || this.client) return;
+        this.hostSession = null;
+        session?.dispose();
+        this.cam.attach(null, null);
+        this.releaseRemote();
+        this.searchWanted = true;
+        useGameStore.setState({ searching: false });
+      }, 150);
+      return;
+    }
+    this.leftRoom = true;
+    if (role === 'client') this.client?.sendAway(true);
+    else this.abandonMatch('p1');
+  }
+
+  /** The tab is visible again. If this player walked away from a match, say so and carry on (search, or ready up). */
+  private cameBack() {
+    if (this.benched) {
+      this.benched = false;
+      this.notify(this.benchNote);
+      if (this.searchWanted) {
+        this.searchWanted = false;
+        void this.search();
+      }
+      return;
+    }
+    if (!this.leftRoom) return;
+    this.leftRoom = false;
+    this.notify('You left the match');
+    if (useGameStore.getState().role === 'client') this.client?.sendAway(false);
+    else this.returned('p1');
+  }
+
+  /**
+   * Host, room code: `who` walked away mid-match. The round is called off for both (no result, no highlight, no
+   * recording) and everyone's back in the lobby with their fighters; it restarts once they're back.
+   */
+  private abandonMatch(who: PlayerId) {
+    const { phase, players } = useGameStore.getState();
+    this.away.add(who);
+    if (phase === 'countdown' || phase === 'fighting') {
+      this.recorder.discard();
+      this.stopReplay();
+      this.commentary.hush();
+      this.fight.reset();
+      this.fightTicks = 0;
+      for (const id of PLAYER_IDS) {
+        this.cpu[id]?.reset();
+        this.views[id].reset();
+        updatePlayer(id, { hp: MAX_HP, meter: 0 });
+      }
+      useGameStore.setState({ phase: 'lobby', countdown: null, winner: null, ending: null, timeLeft: null, combo: null, callout: null });
+      this.sendMatch();
+    }
+    this.hostSession?.send({ type: 'abandon', who });
+    if (who !== 'p1') this.notify(`${players[who].name} switched away. The fight restarts when they're back`, true);
+  }
+
+  /** Host, room code: a player who walked away is back. With everyone back, the fight starts again. */
+  private returned(id: PlayerId) {
+    if (!this.away.delete(id) || this.away.size) return;
+    this.tryStart();
   }
 
   /** Title screen: "Practice". Hosts as usual (a friend can still join), and P2 is a CPU once P1 is ready. */
@@ -561,7 +913,7 @@ export class Game {
     this.fighters[id] = fighter;
     this.sendMatch();
     const { players } = useGameStore.getState();
-    if (PLAYER_IDS.every((p) => players[p].status === 'ready')) this.startCountdown();
+    if (PLAYER_IDS.every((p) => players[p].status === 'ready')) this.tryStart();
   }
 
   /**
@@ -746,7 +1098,7 @@ export class Game {
       if (id === 'p1' && p2.status === 'waiting' && !this.quick) this.prepareCpu(name);
 
       const { players } = useGameStore.getState();
-      if (PLAYER_IDS.every((p) => players[p].status === 'ready')) this.startCountdown();
+      if (PLAYER_IDS.every((p) => players[p].status === 'ready')) this.tryStart();
     } catch (err) {
       if (gen !== this.setupGen[id]) return; // superseded: the slot belongs to someone (or no one) else now
       this.input.unassign(id);
@@ -867,6 +1219,9 @@ export class Game {
     this.unsubscribe();
     this.unwatchScreen();
     clearInterval(this.linkTimer);
+    clearInterval(this.awayTimer);
+    clearTimeout(this.giveUp);
+    document.removeEventListener('visibilitychange', this.onVisibility);
     this.hostSession?.dispose();
     this.client?.dispose();
     this.spectator?.dispose();
@@ -893,6 +1248,7 @@ export class Game {
     this.effects.update(dt);
     this.shareCamera();
     this.checkNext();
+    this.watchPeer();
     if (this.replayIn > 0 && !frozen && (this.replayIn -= dt) <= 0) {
       this.replayIn = -1;
       this.startReplay();
@@ -1016,8 +1372,9 @@ export class Game {
   }
 
   private async pollLink() {
-    // Also here: frames stop in a background tab, and the opponent should still get the camera.
+    // Also here: frames stop in a background tab, and the opponent should still get the camera (and the watchdog runs).
     this.shareCamera();
+    this.watchPeer();
     const stats = this.hostSession?.connected ? await this.hostSession.peer.linkStats() : this.client ? await this.client.linkStats() : null;
     const prev = useGameStore.getState().link;
     if (stats?.rttMs !== prev?.rttMs || stats?.path !== prev?.path) useGameStore.setState({ link: stats });
@@ -1036,6 +1393,8 @@ export class Game {
 
   /** Host: P2's player left (went back to the title, or never came back). Free the slot so someone else can join. */
   private releaseRemote() {
+    this.away.delete('p2');
+    if (useGameStore.getState().notice?.sticky) useGameStore.setState({ notice: null });
     const id: PlayerId = 'p2';
     if (this.cpu[id]) return; // the CPU took the slot meanwhile
     ++this.setupGen[id]; // a setup still running for them (scan, forge) no longer applies

@@ -35,6 +35,11 @@ export type ClientMessage =
   | { type: 'skip' } // "fight now": don't wait for P2's forge, use a stand-in until it's done
   | { type: 'leave' } // the player went back to the title (or closed the tab): free P2's slot for someone else
   | { type: 'cam'; hidden: boolean } // "Hide my camera" (either way: if either player hides, neither sees the other)
+  // Walked away mid-match (tab hidden too long): the match is called off, no result. Room code: 'back' once they return.
+  | { type: 'abandon' }
+  | { type: 'back' }
+  // Whether this player's tab is visible: on every change, and (client) once a second as a heartbeat.
+  | { type: 'presence'; visible: boolean }
   // The client reads its own player's moves from its own full-rate camera (the network only carries the result):
   | { type: 'intents'; intents: Intent[]; stance: Stance } // reliable: every frame that produced intents
   | { type: 'stance'; stance: Stance }; // lossy: the continuous stance (guard, lean, tracked) on the other frames
@@ -55,7 +60,9 @@ export type HostMessage =
   | { type: 'owner'; fighterId: string; name: string; key: string; code: string; done: boolean }
   // After a K.O.: who wants a rematch (both must), and in a matchmade fight the ms until both go find someone new.
   | { type: 'votes'; votes: Record<PlayerId, boolean>; nextIn: number | null }
-  | { type: 'next' }; // matchmade fight: we're both off to find a new opponent (the client searches again)
+  | { type: 'next' } // matchmade fight: we're both off to find a new opponent (the client searches again)
+  | { type: 'abandon'; who: PlayerId } // the match was called off, no result: `who` walked away (tab hidden too long)
+  | { type: 'presence'; visible: boolean }; // whether the host player's tab is visible (on connect and every change)
 
 export type MatchPlayer = { name: string; fighter: ForgedFighter | null; hp: number };
 

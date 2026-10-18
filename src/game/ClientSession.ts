@@ -34,6 +34,12 @@ export type ClientMirror = {
   next?(): void;
   /** Matchmade: the link dropped (no rejoin: we go find someone new). */
   lost?(): void;
+  /** The host called the match off: `who` walked away (tab hidden too long). */
+  abandon?(who: PlayerId): void;
+  /** Whether the host player's tab is visible. */
+  presence?(visible: boolean): void;
+  /** Any message at all from the host (the client's watchdog for a host gone quiet). */
+  heard?(): void;
 };
 
 /** "Find a fight" sessions: the camera comes from the Game (it stays on between opponents), and there's no rejoin. */
@@ -55,6 +61,8 @@ export class ClientSession {
   private setup: ClientMessage[] = [];
   private confirmed = false;
   private disposed = false;
+  /** Done with (see retire): the host's messages no longer reach the game or the store. */
+  private retired = false;
   private skipScanNow: (() => void) | null = null;
   /**
    * P2's moves are read here, from this laptop's own camera at full rate, and only the result crosses the network
@@ -80,6 +88,18 @@ export class ClientSession {
   sendCam(hidden: boolean) {
     this.send({ type: 'cam', hidden });
   }
+
+  /** This player walked away mid-match (tab hidden too long), or came back (room code). */
+  sendAway(away: boolean) {
+    this.send({ type: away ? 'abandon' : 'back' });
+  }
+
+  /** Whether this player's tab is visible (also sent once a second: the host's sign of life from this laptop). */
+  sendPresence(visible = document.visibilityState !== 'hidden') {
+    this.send({ type: 'presence', visible });
+  }
+
+  private heartbeat = 0;
 
   /** Link quality to the host (see Peer.linkStats). */
   linkStats() {
@@ -177,8 +197,21 @@ export class ClientSession {
     this.send({ type: 'leave' });
   }
 
+  /**
+   * Done with this host, but a last message (leave, abandon) is still going out: from now on nothing from the host
+   * touches this laptop's game, and the connection closes a moment later.
+   */
+  retire(ms = 300) {
+    this.retired = true;
+    this.stopStream?.();
+    this.stopStream = null;
+    clearInterval(this.heartbeat);
+    setTimeout(() => this.dispose(), ms);
+  }
+
   dispose() {
     window.removeEventListener('pagehide', this.onPageHide);
+    clearInterval(this.heartbeat);
     this.disposed = true;
     this.stopStream?.();
     if (!this.borrowed) this.source?.stop();
@@ -200,6 +233,8 @@ export class ClientSession {
     peer.onClose(this.onDrop);
     peer.send({ type: 'hello', version: PROTOCOL_VERSION });
     this.mirror?.peer?.(peer);
+    clearInterval(this.heartbeat);
+    this.heartbeat = window.setInterval(() => this.sendPresence(), 1000);
     window.addEventListener('pagehide', this.onPageHide);
     return peer;
   }
@@ -227,6 +262,8 @@ export class ClientSession {
   }
 
   private onHostMessage(msg: HostMessage) {
+    if (this.retired) return;
+    this.mirror?.heard?.();
     switch (msg.type) {
       case 'welcome':
         if (msg.player !== PLAYER) console.warn(`[client] host assigned ${msg.player}, expected ${PLAYER}`);
@@ -273,6 +310,12 @@ export class ClientSession {
       case 'votes':
         this.mirror?.votes?.(msg.votes, msg.nextIn);
         break;
+      case 'abandon':
+        this.mirror?.abandon?.(msg.who);
+        break;
+      case 'presence':
+        this.mirror?.presence?.(msg.visible);
+        break;
       case 'next':
         this.mirror?.next?.();
         break;
@@ -306,6 +349,7 @@ export class ClientSession {
   }
 
   private onDrop = () => {
+    if (this.retired) return;
     this.peer = null;
     this.stopStream?.();
     this.stopStream = null;

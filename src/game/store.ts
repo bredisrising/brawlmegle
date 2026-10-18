@@ -105,6 +105,11 @@ export interface GameState {
    * they can screenshot it (ui/DeleteCode.tsx). Never saved: the forge hands it out once.
    */
   deleteCode: { fighterId: string; name: string; code: string } | null;
+  /**
+   * A short message across the screen: "Your opponent left", "You left the match". `sticky` ones stay until the
+   * match starts again (room code: waiting for a player who switched away to come back).
+   */
+  notice: { text: string; key: number; sticky?: boolean } | null;
 }
 
 const CAM_KEY = 'brawlmegle.hideCam';
@@ -175,6 +180,7 @@ export const useGameStore = create<GameState>(() => ({
   opponentVideo: null,
   camSending: false,
   deleteCode: null,
+  notice: null,
 }));
 
 /** The player slot tracked on this laptop: host = p1, client = p2. */

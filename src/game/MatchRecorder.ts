@@ -129,6 +129,18 @@ export class MatchRecorder {
     }
   }
 
+  /** The round was called off (a player walked away): keep nothing. */
+  discard() {
+    if (!this.active) return;
+    this.active = false;
+    const v = this.video;
+    this.video = null;
+    if (!v) return;
+    useGameStore.setState({ recordingVideo: false });
+    v.recorder.onstop = () => v.track?.stop();
+    v.recorder.stop();
+  }
+
   private startVideo(stream: MediaStream) {
     try {
       const { recorder, track } = cameraRecorder(stream);

@@ -22,6 +22,7 @@ import { GameMenu } from './ui/GameMenu';
 import { Captions } from './ui/Captions';
 import { OpponentCam } from './ui/OpponentCam';
 import { DeleteCodeStrip } from './ui/DeleteCode';
+import { Notice } from './ui/Notice';
 
 export default function App() {
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -73,6 +74,7 @@ export default function App() {
           <PoseDebugOverlay />
           <CameraPip />
           <OpponentCam />
+          <Notice />
         </GameContext.Provider>
       )}
     </div>
