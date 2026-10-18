@@ -5,11 +5,13 @@ import { optimizeFighter, optimizeImage } from "./optimize.js";
 
 const API = "https://api.openai.com/v1";
 const BRIEF_MODEL = process.env.FORGE_BRIEF_MODEL ?? "gpt-5.4-mini";
-/** Our GPU box builds the model (FORGE_3D=local or gradio; Tripo is then only the fallback). */
-const ON_GPU = Boolean(process.env.FORGE_3D_URL) && ["local", "gradio"].includes(process.env.FORGE_3D);
-// Sunburst follows the style prompt best for Tripo (about 19 s at 1536x2304). For the GPU box, flare at 1024x1536 draws
-// a sheet TRELLIS turns into an equally good fighter in 12-13 s (research/forge-gpu.md). Flare is also the card's model.
-const IMAGE_MODEL = process.env.FORGE_IMAGE_MODEL ?? (ON_GPU ? "gpt-image-2.5-flare" : "gpt-image-2.5-sunburst");
+/**
+ * Our GPU box builds the model (FORGE_3D=local or gradio; Tripo is then only the fallback). Sunburst follows the style
+ * prompt best for Tripo (about 19 s at 1536x2304). For the GPU box, flare at 1024x1536 draws a sheet TRELLIS turns
+ * into an equally good fighter in 12-13 s (research/forge-gpu.md); FORGE_GPU_SHEET=0 keeps sunburst 1536x2304.
+ */
+const FAST_SHEET = Boolean(process.env.FORGE_3D_URL) && ["local", "gradio"].includes(process.env.FORGE_3D) && (process.env.FORGE_GPU_SHEET ?? "1") !== "0";
+const IMAGE_MODEL = process.env.FORGE_IMAGE_MODEL ?? (FAST_SHEET ? "gpt-image-2.5-flare" : "gpt-image-2.5-sunburst");
 const CARD_MODEL = process.env.FORGE_CARD_MODEL ?? "gpt-image-2.5-flare";
 const IMAGE_QUALITY = process.env.FORGE_IMAGE_QUALITY ?? "medium";
 /** "high" keeps faces closer to the photos. Only gpt-image-1 models accept it; gpt-image-2 rejects it. */
@@ -21,7 +23,7 @@ const flag = (name, fallback) => (process.env[name] ?? (fallback ? "1" : "0")) !
  * Tripo only rebuilds the detail the sheet has, so for Tripo the detailed style draws it at the biggest
  * non-experimental 2:3 size (about 3 s slower than 1024x1536). TRELLIS reads the sheet at 1024 px tall anyway.
  */
-const SHEET_SIZE = process.env.FORGE_SHEET_SIZE ?? (GOLDSRC || ON_GPU ? "1024x1536" : "1536x2304");
+const SHEET_SIZE = process.env.FORGE_SHEET_SIZE ?? (GOLDSRC || FAST_SHEET ? "1024x1536" : "1536x2304");
 const CARD_SIZE = "1024x1536";
 /**
  * Draw the back of the sheet too and build the model from front + back (multiview): a real back and hair from

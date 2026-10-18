@@ -128,4 +128,5 @@ export type ForgePreview = {
   voxelsUrl?: string; // a voxel hologram
   meshUrl?: string; // gray clay
   glbUrl?: string; // textured, then the rig flashes: the finished fighter
+  step?: ForgedFighter['step']; // the forge's own step (the rig step has nothing new to show but its name)
 };

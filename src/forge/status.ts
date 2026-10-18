@@ -54,6 +54,7 @@ export function forgePreview(f: ForgedFighter): ForgePreview {
     sheetFinal: f.sheetUrl ? true : undefined,
     voxelsUrl: f.previewVoxelsUrl,
     meshUrl: f.previewMeshUrl,
+    step: f.step,
   };
   for (const key of Object.keys(preview) as (keyof ForgePreview)[]) if (preview[key] === undefined) delete preview[key];
   return preview;

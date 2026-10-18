@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { loadModel } from '../forge/models';
 
 /**
@@ -34,6 +35,8 @@ export interface ForgePreviewView {
 // --- the shared renderer ----------------------------------------------------------------------------------------
 
 let renderer: THREE.WebGLRenderer | null = null;
+/** Image-based light like the arena's: TRELLIS's PBR textures have metallic patches, black without an environment. */
+let environment: THREE.Texture | null = null;
 let timer = 0;
 const views = new Set<PreviewScene>();
 
@@ -57,8 +60,12 @@ function attach(view: PreviewScene) {
     renderer.setClearColor(0x000000, 0);
     renderer.localClippingEnabled = true;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    pmrem.dispose();
     timer = window.setInterval(frame, 1000 / FPS);
   }
+  view.scene.environment = environment;
   views.add(view);
 }
 
@@ -66,6 +73,8 @@ function detach(view: PreviewScene) {
   views.delete(view);
   if (views.size === 0 && renderer) {
     window.clearInterval(timer);
+    environment?.dispose();
+    environment = null;
     renderer.dispose();
     renderer.forceContextLoss();
     renderer = null;
@@ -279,8 +288,9 @@ class PreviewScene implements ForgePreviewView {
       this.voxels.count = Math.floor(this.voxelOrder.length * k);
       shader.uniforms.uAlpha.value = this.clay || this.final ? 0.45 : 0.85 + 0.15 * Math.sin(t * 9);
     }
+    // h: the sweep line. Before any sweep the hologram shows whole (everything is above -0.6).
     const k = this.sweepFrom < 0 ? 1 : Math.min(1, (t - this.sweepFrom) / SWEEP);
-    const h = this.sweepFrom < 0 ? 0.6 : -0.6 + k * 1.25;
+    const h = this.sweepFrom < 0 ? -0.6 : -0.6 + k * 1.25;
     if (k >= 1 && this.voxels && this.clay) this.voxels.visible = false; // the clay is all in
     this.keepBelow.constant = h; // the new stage: y <= h
     this.keepAbove.constant = -h; // the old one: y >= h

@@ -9,14 +9,15 @@ const STAGES = [
   ['Sheet', 'Drawing your fighter'],
   ['Voxels', 'Blocking out the shape'],
   ['Clay', 'Sculpting'],
-  ['Paint', 'Painting'],
-  ['Rig', 'Rigging'],
+  ['Paint', 'Painting and rigging'],
+  ['Rig', 'Rigged'],
   ['Live', 'Materializing'],
 ] as const;
 
 /** Which stage the preview is at, from what exists so far. */
 function stageOf(p: Preview | null, revealed: boolean): number {
-  if (p?.glbUrl) return revealed ? 5 : 4;
+  if (p?.glbUrl) return revealed ? 6 : 5; // the paint sweeps in and the rig flashes, then it's live
+  if (p?.step === 'rig') return 4; // the box is painting (baking) and rigging
   if (p?.meshUrl) return 3;
   if (p?.voxelsUrl) return 2;
   if (p?.sheetUrl) return 1;
