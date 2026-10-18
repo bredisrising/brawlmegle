@@ -164,6 +164,8 @@ await page.route("**/api/matches", async (route) => {
   console.log("blocked match result");
   await route.fulfill({ status: 201, contentType: "application/json", body: "{}" });
 });
+// Commentary voices cost credits and the capture has no sound: captions only.
+await page.route("**/api/tts**", (route) => route.fulfill({ status: 404, body: "" }));
 await page.route("**/samples**", async (route) => {
   if (route.request().method() === "GET") return route.fallback();
   console.log("blocked sample upload", route.request().url());
@@ -262,7 +264,7 @@ await page.evaluate(() => {
   const show = g.showHit.bind(g);
   window.__hits = [];
   g.showHit = (e, by, ko, replaying) => {
-    if (!replaying) window.__hits.push({ t: performance.now(), type: e.type, attacker: e.attacker, move: e.move, damage: e.damage ?? null, ko: !!ko });
+    if (!replaying) window.__hits.push({ t: performance.now(), type: e.type, attacker: e.attacker, move: e.move, damage: e.damage ?? null, ko: !!ko, guardBreak: !!e.guardBreak });
     return show(e, by, ko, replaying);
   };
 });

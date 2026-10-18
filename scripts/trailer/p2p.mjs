@@ -86,6 +86,8 @@ async function open(port, label) {
   await page.route("**/api/highlights", block("highlight upload"));
   await page.route("**/api/matches", block("match result"));
   await page.route("**/samples**", block("sample upload"));
+  // Commentary voices cost credits and the capture has no sound: captions only.
+  await page.route("**/api/tts**", (route) => route.fulfill({ status: 404, body: "" }));
   await page.route("**/api/fighters", async (route) => {
     const res = await route.fetch();
     await route.fulfill({ response: res, json: await pick(await res.json(), [P1, P2]) });
@@ -107,7 +109,7 @@ async function open(port, label) {
     const show = g.showHit.bind(g);
     window.__hits = [];
     g.showHit = (e, by, ko, replaying) => {
-      if (!replaying) window.__hits.push({ t: performance.now(), wall: Date.now(), type: e.type, attacker: e.attacker, move: e.move, damage: e.damage ?? null, ko: !!ko });
+      if (!replaying) window.__hits.push({ t: performance.now(), wall: Date.now(), type: e.type, attacker: e.attacker, move: e.move, damage: e.damage ?? null, ko: !!ko, guardBreak: !!e.guardBreak });
       return show(e, by, ko, replaying);
     };
     g.highlight.start = () => {};
@@ -169,7 +171,23 @@ if ((await st()).phase === "fighting") {
     store.setState((s) => ({ players: { ...s.players, p2: { ...s.players.p2, hp: 1 } } }));
   });
 }
-await host.page.waitForFunction(() => window.__brawl.store.getState().phase !== "fighting", null, { timeout: real(90), polling: 16 });
+await host.page.waitForFunction(() => window.__brawl.store.getState().phase !== "fighting", null, { timeout: real(20), polling: 16 }).catch(async () => {
+  // Nobody landed the last hit: end it on the host (both laptops follow the host's fight).
+  console.log("no finishing hit, ending the round");
+  await host.page.evaluate(() => {
+    const { game } = window.__brawl;
+    // P1 throws a cross every half second until one lands.
+    const eng = game.fight;
+    const step = eng.step.bind(eng);
+    let n = 0;
+    eng.step = (cmds, stances) => {
+      if (n++ % 30 === 0) cmds = [...cmds, { kind: "attack", player: "p1", t: performance.now(), move: "cross", hand: "R", height: "head", speed: 1.2, windup: 1.1 }];
+      return step(cmds, stances);
+    };
+    eng.fighters.p2.hp = 1;
+  });
+  await host.page.waitForFunction(() => window.__brawl.store.getState().phase !== "fighting", null, { timeout: real(20), polling: 16 }).catch(() => {});
+});
 mark("ko");
 console.log("ended", JSON.stringify(await st()));
 await host.page.waitForFunction(() => window.__brawl.store.getState().replay, null, { timeout: real(30), polling: 16 }).catch(() => {});

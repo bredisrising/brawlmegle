@@ -142,6 +142,33 @@
         <div class="anim display" style="margin-top:1vh; font-size:${tall ? 16 : 11}vw; color:var(--hp); ${anim("punch", 1.15, 0.28)}">${C}</div>
       </div>
       <div class="flash" style="opacity:0; ${anim("flash2", 1.15, 0.25, "linear")}"></div>`;
+  } else if (card === "step") {
+    // How-it-works lower third: a step number, what happens, one line of how.
+    root.innerHTML = `
+      <div style="position:absolute; left:${tall ? 5 : 3.5}vw; ${tall ? "top:6vh;" : "bottom:7vh;"} max-width:${tall ? 90 : 80}vw; ${out()}">
+        <div class="anim" style="position:absolute; inset:-1.4vw -2vw; background:rgba(11,11,13,0.82); border-left:0.6vw solid ${color}; ${anim("wipeIn", 0, 0.18, "linear")}"></div>
+        <div style="position:relative; display:flex; align-items:baseline; gap:1.4vw;">
+          <span class="anim display" style="font-size:${tall ? 13 : 6}vw; color:${color}; ${anim("slamL", 0.04, 0.28)}">${C}</span>
+          <span class="anim display" style="font-size:${tall ? 7.2 : 3.6}vw; line-height:0.95; ${anim("slamL", 0.1, 0.28)}">${A}</span>
+        </div>
+        <div class="anim" style="position:relative; margin-top:1vh; font-weight:600; font-size:${tall ? 3.6 : 1.55}vw; line-height:1.3; color:rgba(243,240,232,0.85); ${anim("rise", 0.3, 0.3)}">${B}</div>
+      </div>`;
+  } else if (card === "link") {
+    // The link card a friend sees when you send them the site (public/og.jpg), in a plain chat message.
+    root.innerHTML = `
+      <div class="hatch" style="position:absolute; inset:0; background-color:var(--ink);"></div>
+      <div class="center">
+        <div class="anim" style="width:${tall ? 88 : 58}vw; background:#2b2d31; border-radius:1vw; padding:${tall ? 4 : 2}vw; ${anim("rise", 0, 0.35)}">
+          <div style="display:flex; align-items:center; gap:1vw; font-weight:700; font-size:${tall ? 3.8 : 1.4}vw; color:#f2f3f5;">
+            <span style="width:${tall ? 7 : 2.6}vw; height:${tall ? 7 : 2.6}vw; border-radius:50%; background:var(--p1); display:inline-block;"></span>
+            you <span style="font-weight:500; color:#949ba4; font-size:0.8em;">today</span></div>
+          <div style="margin:0.8vw 0 1vw ${tall ? 8 : 3.6}vw; font-size:${tall ? 4 : 1.5}vw; color:#dbdee1;"><span style="color:#00a8fc;">${A}</span> ${B}</div>
+          <div class="anim" style="margin-left:${tall ? 8 : 3.6}vw; border-left:0.35vw solid var(--p1); background:#232428; border-radius:0.5vw; padding:1vw; ${anim("pop", 0.45, 0.3)}">
+            <div style="font-weight:700; color:#00a8fc; font-size:${tall ? 3.4 : 1.25}vw; margin-bottom:0.6vw;">Brawlmegle</div>
+            <img src="../../public/og.jpg" style="width:100%; border-radius:0.4vw; display:block;">
+          </div>
+        </div>
+      </div>`;
   } else if (card === "tag") {
     root.innerHTML = `
       <div class="anim chip cond" style="position:absolute; ${B || "left:3vw; top:4vh;"} background:${color}; color:var(--ink); font-size:${tall ? 4.4 : 2.3}vw; letter-spacing:0.2em; ${anim("pop", 0, 0.25)}">${A}</div>`;
