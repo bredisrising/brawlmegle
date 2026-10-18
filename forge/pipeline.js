@@ -86,14 +86,15 @@ async function local(path, init = {}, timeoutMs = 20_000) {
 /**
  * Model sheet -> rigged GLB on our GPU box. Same result as makeModel ({ model, rigged }), plus the box's own
  * timings. Throws on any failure, or if it isn't done within FORGE_3D_TIMEOUT, so the caller can fall back to Tripo.
+ * With `model` (a GLB), the box only rigs that model (forge/gpu/rescue.mjs).
  */
-export async function makeModelLocal(sheet, onStep) {
+export async function makeModelLocal(sheet, onStep, model = null) {
   const deadline = Date.now() + LOCAL_TIMEOUT_MS;
   // A stopped box doesn't refuse the connection, it just never answers: find out in 3 s, not 20.
   const health = await (await local("/health", {}, 3_000)).json();
   if (!health.ready) throw new Error(`GPU box not ready: ${health.error ?? "warming up"}`);
   const { id } = await (
-    await local("/jobs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ image: sheet.toString("base64") }) })
+    await local("/jobs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ image: sheet.toString("base64"), model: model?.toString("base64") }) })
   ).json();
   onStep("model");
   let step = "model";

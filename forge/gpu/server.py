@@ -1,7 +1,7 @@
 """
 Forge 3D service: model sheet in, Mixamo-rigged GLB out, on one GPU box (see README.md).
 
-    POST /jobs                 {"image": base64 PNG/JPEG model sheet}  ->  202 {"id"}
+    POST /jobs                 {"image": base64 PNG/JPEG model sheet, "model"?: base64 GLB to rig only}  ->  202 {"id"}
     GET  /jobs/<id>            ->  {"status": queued|model|rig|done|failed, "timings", "error", "rigged", "queued"}
     GET  /jobs/<id>/rigged.glb ->  the rigged model (model.glb: the same model without a skeleton)
     GET  /health               ->  {"ok", "ready", "queued", "settings"}
@@ -255,8 +255,12 @@ class Handler(BaseHTTPRequestHandler):
             sheet = Image.open(io.BytesIO(raw))
             sheet.load()
             sheet = sheet.convert("RGBA" if sheet.mode in ("RGBA", "LA", "P") else "RGB")
+            # Rig only: a model is already there (say Tripo's, whose rig failed), so skip TRELLIS.
+            model = base64.b64decode(body["model"]) if body.get("model") else None
+            if model is not None and model[:4] != b"glTF":
+                raise ValueError("model must be a GLB")
         except Exception as err:  # noqa: BLE001
-            return self.send(400, {"error": f"send {{image: base64 PNG/JPEG}}: {err}"})
+            return self.send(400, {"error": f"send {{image: base64 PNG/JPEG, model?: base64 GLB}}: {err}"})
         job_id = uuid.uuid4().hex
         job_dir = os.path.join(WORK, job_id)
         os.makedirs(job_dir)
@@ -264,7 +268,14 @@ class Handler(BaseHTTPRequestHandler):
         job = {"id": job_id, "dir": job_dir, "sheet": sheet, "status": "queued", "created": time.time(), "timings": {}, "rigged": False}
         with jobs_lock:
             jobs[job_id] = job
-        gpu_q.put(job)
+        if model is None:
+            gpu_q.put(job)
+        else:
+            with open(os.path.join(job_dir, "raw.glb"), "wb") as f:
+                f.write(model)
+            job["lm_thread"] = threading.Thread(target=find_landmarks, args=(job,), daemon=True)
+            job["lm_thread"].start()
+            rig_q.put(job)
         self.send(202, {"id": job_id})
 
 
