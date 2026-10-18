@@ -7,7 +7,11 @@ const WASM_ROOT = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1/wa
 const POSE_PARAM = new URLSearchParams(window.location.search).get('pose');
 const PHONE = typeof matchMedia === 'function' && matchMedia('(pointer: coarse) and (max-width: 900px)').matches;
 const POSE_VARIANT = POSE_PARAM === 'lite' || POSE_PARAM === 'full' ? POSE_PARAM : PHONE ? 'lite' : 'full';
-const POSE_MODEL = `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_${POSE_VARIANT}/float16/1/pose_landmarker_${POSE_VARIANT}.task`;
+const modelUrl = (variant: 'lite' | 'full') =>
+  `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_${variant}/float16/1/pose_landmarker_${variant}.task`;
+const POSE_MODEL = modelUrl(POSE_VARIANT);
+/** Over this many ms per detection the full model can't keep up with a 30 fps camera: drop to lite (unless ?pose=). */
+const SLOW_DETECT_MS = 38;
 
 /** Webcam -> MediaPipe PoseLandmarker -> timestamped image and world landmarks. */
 export class CameraSource implements InputSource {
@@ -16,6 +20,12 @@ export class CameraSource implements InputSource {
   private readonly listeners = new Set<(frame: PoseFrame) => void>();
   private stream: MediaStream | null = null;
   private landmarker: PoseLandmarker | null = null;
+  /** For swapping to the lite model when this machine is too slow for full (see SLOW_DETECT_MS). */
+  private files: Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>> | null = null;
+  private delegate: 'GPU' | 'CPU' = 'GPU';
+  private variant: 'lite' | 'full' = POSE_VARIANT;
+  private timedFrames = 0;
+  private swapping = false;
   private frameRequest = 0;
   private running = false;
   private _latestFrame: PoseFrame | null = null;
@@ -92,9 +102,11 @@ export class CameraSource implements InputSource {
         minPosePresenceConfidence: 0.5,
         minTrackingConfidence: 0.5,
       };
+      this.files = files;
       try {
         this.landmarker = await PoseLandmarker.createFromOptions(files, options);
       } catch {
+        this.delegate = 'CPU';
         // Some browsers expose WebGL but cannot initialize MediaPipe's GPU delegate.
         this.landmarker = await PoseLandmarker.createFromOptions(files, {
           ...options,
@@ -168,6 +180,11 @@ export class CameraSource implements InputSource {
     const result = this.landmarker!.detectForVideo(this.video, now);
     const took = performance.now() - started;
     this.stats.detectMs += 0.1 * (took - this.stats.detectMs);
+    // After a warm-up, a laptop that can't run the full model at camera rate gets the lite one: a punch is only a
+    // few frames long, and frames matter more than the full model's extra accuracy.
+    if (++this.timedFrames === 90 && this.variant === 'full' && !POSE_PARAM && this.stats.detectMs > SLOW_DETECT_MS) {
+      void this.useLite();
+    }
     const settings = this.settings;
     this.stats.width = this.video.videoWidth;
     this.stats.height = this.video.videoHeight;
@@ -194,6 +211,31 @@ export class CameraSource implements InputSource {
       } catch (error) {
         this.reportError(error); // the other listeners still get the frame
       }
+    }
+  }
+
+  private async useLite() {
+    if (this.swapping || !this.files) return;
+    this.swapping = true;
+    console.warn(`[camera] pose model full takes ${this.stats.detectMs.toFixed(0)} ms per frame here; switching to lite`);
+    try {
+      const lite = await PoseLandmarker.createFromOptions(this.files, {
+        baseOptions: { modelAssetPath: modelUrl('lite'), delegate: this.delegate },
+        runningMode: 'VIDEO',
+        numPoses: new URLSearchParams(window.location.search).get('poses') === '1' ? 1 : 2,
+        minPoseDetectionConfidence: 0.5,
+        minPosePresenceConfidence: 0.5,
+        minTrackingConfidence: 0.5,
+      });
+      if (!this.running) return lite.close();
+      const old = this.landmarker;
+      this.landmarker = lite;
+      this.variant = 'lite';
+      old?.close();
+    } catch (err) {
+      console.warn('[camera] lite model failed to load, staying on full', err);
+    } finally {
+      this.swapping = false;
     }
   }
 
