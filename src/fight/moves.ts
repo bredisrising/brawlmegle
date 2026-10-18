@@ -50,6 +50,12 @@ export const FIGHT = {
   queueSize: 2,
   /** Punches in a row that can cancel each other's recovery (see FightEngine.chainable). */
   maxChain: 4,
+  /**
+   * A strike's wind-up already shown on screen (from the reader's first sign of the motion) counts toward its
+   * startup, up to this many frames, but never below minStartup: what you threw lands sooner, still readable.
+   */
+  maxHeadStart: 6,
+  minStartup: 4,
   /** Farthest a strike steps in to reach (m). Beyond that it whiffs: spacing still matters. */
   maxLunge: 0.4,
   /** Fighters can't get closer than this (m). */

@@ -81,6 +81,8 @@ export class Resolver {
       windup: intent.windup,
       lunge,
       autoLunge: true,
+      // The fighter has been showing the wind-up since the motion started (the 'anticipate' tell).
+      headStart: Math.max(0, ((intent.t - intent.onsetT) * 60) / 1000),
     };
   }
 }

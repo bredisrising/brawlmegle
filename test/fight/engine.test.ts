@@ -180,3 +180,24 @@ describe('combos: fast punches all come out', () => {
     expect(jab!.tick).toBeGreaterThanOrEqual(MOVES.kick.startup + MOVES.kick.active + MOVES.kick.recovery);
   });
 });
+
+describe('head start: the wind-up already on screen counts toward startup', () => {
+  const activeAt = (cmd: Command) => {
+    const e = engineAt(0.7);
+    for (let i = 0; i < 40; i++) {
+      e.step(i === 0 ? [cmd] : [], { p1: stance('p1'), p2: stance('p2') });
+      if (e.state('p1').phase === 'active') return i;
+    }
+    return -1;
+  };
+
+  test('a cross the reader saw start 100 ms ago lands 6 frames sooner, a jab no sooner than the floor', () => {
+    expect(activeAt(attack('p1', 'cross', { headStart: 6 }))).toBe(activeAt(attack('p1', 'cross')) - 6);
+    expect(activeAt(attack('p1', 'jab', { hand: 'L', headStart: 6 }))).toBe(FIGHT.minStartup - 1);
+  });
+
+  test('the head start is capped, and junk values are ignored', () => {
+    expect(activeAt(attack('p1', 'kick', { headStart: 60 }))).toBe(activeAt(attack('p1', 'kick')) - FIGHT.maxHeadStart);
+    expect(activeAt(attack('p1', 'cross', { headStart: Number.NaN }))).toBe(activeAt(attack('p1', 'cross')));
+  });
+});

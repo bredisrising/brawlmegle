@@ -128,7 +128,10 @@ export class FightEngine {
       move: c.move,
       hand: c.hand,
       spec,
-      startup: spec.startup + (gassed ? FIGHT.gassedStartup : 0),
+      startup: Math.max(
+        Math.min(FIGHT.minStartup, spec.startup),
+        spec.startup + (gassed ? FIGHT.gassedStartup : 0) - clamp(finiteOr(c.headStart ?? 0, 0), 0, FIGHT.maxHeadStart),
+      ),
       scale: speed * windup * (gassed ? FIGHT.gassedDamage : 1),
       height: c.height,
       lunge: this.lungeFor(c, spec),
