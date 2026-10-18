@@ -319,6 +319,7 @@ export class IntentReader {
           || handToFace(body, s.peak, tipPt.p, this.config.guard.radius, s.since - s.faceBeforeOnset > 600)) ? 'raising guard'
         : def.kind === 'arm' && bothHandsUp(body, name, tTip, s.since - s.faceBeforeOnset > 600 && t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 250) ? 'both hands up'
         : def.kind === 'arm' && movedTogether(s.peak, this.limbs[name === 'armL' ? 'armR' : 'armL'], t) ? 'both hands moved'
+        : def.kind === 'arm' && raisedOverHead(body, s.peakTip, s.peak) ? 'not a punch'
         : null;
       if (reason) {
         s.phase = 'idle';
@@ -551,6 +552,15 @@ function bothHandsUp(body: Body, limb: LimbName, travel: Vec3, bothCameUp: boole
   const other = body.points[limb === 'armL' ? LM.rWrist : LM.lWrist];
   const otherShoulder = body.points[limb === 'armL' ? LM.rShoulder : LM.lShoulder];
   return bothCameUp || other.vf.y - otherShoulder.vf.y > 1.0;
+}
+
+/**
+ * A hand going up over the head (scratching it, waving, fixing hair, hands in the air) isn't a punch: punches
+ * end at the opponent's head or body, at most around eye level.
+ */
+function raisedOverHead(body: Body, end: Vec3, travel: Vec3) {
+  const nose = body.points[LM.nose].p;
+  return end.y > nose.y + 0.2 && travel.y > 0.5 * len(travel);
 }
 
 /**
