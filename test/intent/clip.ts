@@ -14,9 +14,14 @@ export function loadClip(path: string): Clip {
   return { header, frames };
 }
 
+/** Anything shaped like the IntentReader (lets tests compare an older reader side by side). */
+export type ReaderLike = { update(frame: PoseFrame | null, now?: number): { intents: Intent[]; debug: unknown }; setMatcher(m: StyleMatcher | null): void };
+export type ReaderFactory = (config: IntentConfig) => ReaderLike;
+export const defaultReader: ReaderFactory = (config) => new IntentReader('p1', config);
+
 /** Feeds a clip through a fresh reader at its own timestamps. Returns every intent plus per-frame debug. */
-export function runClip(clip: Clip, config: IntentConfig = DEFAULT_INTENT, matcher: StyleMatcher | null = null) {
-  const reader = new IntentReader('p1', config);
+export function runClip(clip: Clip, config: IntentConfig = DEFAULT_INTENT, matcher: StyleMatcher | null = null, makeReader: ReaderFactory = defaultReader) {
+  const reader = makeReader(config);
   reader.setMatcher(matcher);
   const intents: Intent[] = [];
   const trace: { t: number; debug: unknown }[] = [];

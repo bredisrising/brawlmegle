@@ -51,6 +51,8 @@ export class StyleMatcher {
   decide(features: number[], ruleStyle: StrikeStyle): StrikeStyle {
     const match = this.classify(features);
     if (!match || match.style === ruleStyle) return ruleStyle;
+    // A couple of examples are too few to overrule the rules: one sloppy example would flip every strike like it.
+    if (this.templates.filter((t) => t.style === match.style).length < 3) return ruleStyle;
     const ruleDistance = this.nearestByStyle(features).get(ruleStyle) ?? Infinity;
     return match.distance < 0.7 * ruleDistance ? match.style : ruleStyle;
   }

@@ -21,10 +21,15 @@ export const LM = {
   lHip: 23, rHip: 24, lKnee: 25, rKnee: 26, lAnkle: 27, rAnkle: 28,
 } as const;
 
-/** Left/right landmark pairs checked for swaps, grouped by limb so a whole limb swaps together. */
+/**
+ * Left/right landmark pairs checked for swaps. A whole limb can swap, or just the hands (or feet): when the
+ * hands cross in front of the body MediaPipe often trades the wrists but keeps the elbows.
+ */
 const SWAP_GROUPS: [number, number][][] = [
   [[13, 14], [15, 16], [17, 18], [19, 20], [21, 22]], // elbows, wrists, hands
+  [[15, 16], [17, 18], [19, 20], [21, 22]], // wrists and hands only
   [[25, 26], [27, 28], [29, 30], [31, 32]], // knees, ankles, feet
+  [[27, 28], [29, 30], [31, 32]], // ankles and feet only
 ];
 /** Hands and feet move fast; everything else is filtered as "core". */
 const EXTREMITIES = new Set([15, 16, 17, 18, 19, 20, 21, 22, 27, 28, 29, 30, 31, 32]);
@@ -43,6 +48,11 @@ export type PreprocessConfig = {
   maxSpeed: number;
   /** Time constant for the slow "home" calibration (seconds). */
   homeSeconds: number;
+  /**
+   * Time constant for the body unit (seconds). Players lean in and out all the time (20–40% size changes in a
+   * second or two at a laptop), so it has to follow within a fraction of a second, or every position drifts.
+   */
+  unitSeconds: number;
 };
 
 export const DEFAULT_PREPROCESS: PreprocessConfig = {
@@ -54,6 +64,7 @@ export const DEFAULT_PREPROCESS: PreprocessConfig = {
   holdMs: 200,
   maxSpeed: 40,
   homeSeconds: 2.5,
+  unitSeconds: 0.4,
 };
 
 export type Vec3 = { x: number; y: number; z: number };
@@ -74,7 +85,7 @@ export type Body = {
   points: BodyPoint[]; // 33, indexed like MediaPipe
   /** Hip center relative to its slow-moving home, in body units (y up). Jumps and ducks show up here. */
   root: { x: number; y: number; vx: number; vy: number };
-  /** Current torso size / home torso size. Above 1 = closer to the camera than usual. */
+  /** Current torso size / usual torso size (over a few seconds). Above 1 = closer to the camera than usual. */
   scale: number;
   /** Whether hips are visible (full-body framing) or the body unit falls back to shoulder width. */
   fullBody: boolean;
@@ -101,11 +112,16 @@ export class PosePreprocessor {
   private prevRaw: Raw[] | null = null;
   private lastGood: number[] = new Array(33).fill(-Infinity);
   private unitHome = 0;
+  /** The usual body size over a few seconds: leaning in or out shows as `scale` against it (stepping in/out). */
+  private sizeHome = 0;
   private worldUnitHome = 0;
   private home: { x: number; y: number } | null = null;
   /** Full-body (hips) mode with hysteresis, so hips at the edge of the frame don't flip it every frame. */
   private fullBodyMode = false;
   private fullBodySince = 0;
+  /** Raw body size of the last accepted frame, and a size jump waiting for a second frame to confirm it. */
+  private lastRawSize = 0;
+  private pendingSize = 0;
 
   constructor(config: PreprocessConfig = DEFAULT_PREPROCESS) {
     this.config = config;
@@ -140,9 +156,12 @@ export class PosePreprocessor {
     this.prevRaw = null;
     this.lastGood.fill(-Infinity);
     this.unitHome = 0;
+    this.sizeHome = 0;
     this.worldUnitHome = 0;
     this.home = null;
     this.fullBodyMode = false;
+    this.lastRawSize = 0;
+    this.pendingSize = 0;
   }
 
   /** Returns null for repeated or unusable frames; callers keep the previous Body. */
@@ -154,6 +173,17 @@ export class PosePreprocessor {
     if (key === this.lastRawKey) return null;
     // After a long gap (player lost, tab hidden), start fresh instead of filtering across it.
     if (this.prev && frame.t - this.lastT > 300) this.reset();
+    // A torso can't change size by a fifth between two camera frames: that's MediaPipe jumping the whole
+    // skeleton for a frame. Skip that one frame (never two in a row: then the player really moved, or the
+    // tracking is just rough, and either way the frames are all we have).
+    const aspect0 = frame.aspect ?? 4 / 3;
+    const rawSize = bodyUnit(frame.image.map((p) => ({ x: p.x * aspect0, y: p.y, visibility: p.visibility })), this.fullBodyMode).size;
+    if (this.lastRawSize && !this.pendingSize && Math.abs(Math.log(rawSize / this.lastRawSize)) > 0.2) {
+      this.pendingSize = rawSize;
+      return null;
+    }
+    this.pendingSize = 0;
+    this.lastRawSize = rawSize;
     this.lastRawKey = key;
     const dt = this.prev ? (frame.t - this.lastT) / 1000 : 0;
     this.lastT = frame.t;
@@ -199,14 +229,19 @@ export class PosePreprocessor {
     else if (this.fullBodyMode && hipVis < 0.35) this.fullBodyMode = false;
     if (wasFull !== this.fullBodyMode) {
       this.unitHome = 0;
+      this.sizeHome = 0;
       this.worldUnitHome = 0;
       this.home = null;
     }
     const unit = bodyUnit(filtered, this.fullBodyMode);
     const worldUnit = bodyUnit(frame.world, this.fullBodyMode).size;
     const k = dt > 0 ? 1 - Math.exp(-dt / this.config.homeSeconds) : 1;
-    this.unitHome = this.unitHome ? this.unitHome + k * (unit.size - this.unitHome) : unit.size;
-    this.worldUnitHome = this.worldUnitHome ? this.worldUnitHome + k * (worldUnit - this.worldUnitHome) : worldUnit;
+    // The unit follows size changes quickly, but a one-frame jump of more than a quarter is a tracking glitch.
+    const ku = dt > 0 ? 1 - Math.exp(-dt / (this.config.unitSeconds ?? 0.4)) : 1;
+    const sane = !this.unitHome || Math.abs(Math.log(unit.size / this.unitHome)) < 0.25;
+    if (sane) this.unitHome = this.unitHome ? this.unitHome + ku * (unit.size - this.unitHome) : unit.size;
+    if (sane) this.sizeHome = this.sizeHome ? this.sizeHome + k * (unit.size - this.sizeHome) : unit.size;
+    this.worldUnitHome = this.worldUnitHome ? this.worldUnitHome + ku * (worldUnit - this.worldUnitHome) : worldUnit;
 
     const hip = unit.center;
     this.home = this.home ? { x: this.home.x + k * (hip.x - this.home.x), y: this.home.y + k * (hip.y - this.home.y) } : { ...hip };
@@ -262,7 +297,7 @@ export class PosePreprocessor {
     };
 
     const body: Body = {
-      t: frame.t, dt, points, root, scale: unit.size / U, fullBody: unit.fullBody,
+      t: frame.t, dt, points, root, scale: unit.size / (this.sizeHome || U), fullBody: unit.fullBody,
       fullBodyFor: this.fullBodyMode ? frame.t - this.fullBodySince : 0, elbow,
     };
     this.prev = body;
@@ -278,11 +313,12 @@ export class PosePreprocessor {
     for (const group of SWAP_GROUPS) {
       let straight = 0;
       let crossed = 0;
+      // Groups are checked in order on the already-fixed points, so a whole-arm swap isn't undone by the hands check.
       for (const [l, r] of group) {
-        straight += dist(raw[l], last[l]) + dist(raw[r], last[r]);
-        crossed += dist(raw[l], last[r]) + dist(raw[r], last[l]);
+        straight += dist(out[l], last[l]) + dist(out[r], last[r]);
+        crossed += dist(out[l], last[r]) + dist(out[r], last[l]);
       }
-      if (crossed < straight * 0.4) for (const [l, r] of group) [out[l], out[r]] = [raw[r], raw[l]];
+      if (crossed < straight * 0.4) for (const [l, r] of group) [out[l], out[r]] = [out[r], out[l]];
     }
     return out;
   }

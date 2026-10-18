@@ -120,18 +120,20 @@ describe('gaps in the frames', () => {
     const { frames, labels } = synthesize({ seconds: 6, noise: 1, seed: 1, only: ['cross'] });
     const clean = frames.filter((f): f is PoseFrame => !('missing' in f));
     const punch = labels[0];
-    expect(labels[1].start).toBeGreaterThan(punch.end + 900); // nothing else going on after the gap
+    expect(labels[1].start).toBeGreaterThan(punch.end + 700); // nothing else going on after the gap
     const reader = new IntentReader('p1');
     const before: string[] = [];
     // Partway into the first punch (wound up, not confirmed yet)...
     for (const f of clean.filter((f) => f.t < punch.start + 140)) {
-      for (const i of reader.update(f, f.t).intents) before.push(i.kind);
+      const kinds = reader.update(f, f.t).intents.map((i) => i.kind);
+      before.push(...kinds);
+      if (kinds.includes('anticipate')) break;
     }
     expect(before).toContain('anticipate');
     expect(before).not.toContain('strike');
     // ...then nothing for 0.4 s on the camera's clock while the host was suspended (tab hidden: its clock jumps
     // too), and the player is standing still again when frames resume.
-    const after = clean.filter((f) => f.t > punch.end + 400 && f.t < punch.end + 700);
+    const after = clean.filter((f) => f.t > punch.end + 400 && f.t < labels[1].start);
     const strikes = after.flatMap((f) => reader.update(f, f.t).intents).filter((i) => i.kind === 'strike');
     expect(strikes).toEqual([]);
   });

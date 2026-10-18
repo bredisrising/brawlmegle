@@ -12,7 +12,7 @@ export type Intent =
   /** A limb started moving fast: start a wind-up animation now, before the strike is confirmed. */
   | { kind: 'anticipate'; limb: LimbName; t: number }
   /** The wind-up didn't turn into a strike; blend back. */
-  | { kind: 'cancel'; limb: LimbName; t: number; reason?: 'too small' | 'going down' | 'raising guard' | 'both hands up' }
+  | { kind: 'cancel'; limb: LimbName; t: number; reason?: 'too small' | 'going down' | 'raising guard' | 'both hands up' | 'both hands moved' | 'not a punch' }
   | {
       kind: 'strike';
       limb: LimbName;
@@ -50,6 +50,12 @@ export type LimbConfig = {
   recoverMs: number;
   /** Below this speed the limb counts as resting, and its rest position recalibrates. */
   quietSpeed: number;
+  /**
+   * Arms: confirm a strike no sooner than this after its onset, so the style (straight, hook, uppercut) is read
+   * from more of the motion. Free up to the engine's head start: the wind-up shown since the onset counts
+   * toward the strike's startup.
+   */
+  confirmMs?: number;
 };
 
 export type IntentConfig = {
@@ -76,7 +82,7 @@ export type IntentConfig = {
 
 export const DEFAULT_INTENT: IntentConfig = {
   preprocess: DEFAULT_PREPROCESS,
-  arm: { onsetSpeed: 2.2, onsetDist: 0.12, strikeDist: 0.26, returnDist: 0.22, maxWindupMs: 350, recoverMs: 600, quietSpeed: 0.8 },
+  arm: { onsetSpeed: 2.2, onsetDist: 0.12, strikeDist: 0.26, returnDist: 0.22, maxWindupMs: 350, recoverMs: 600, quietSpeed: 0.8, confirmMs: 60 },
   leg: { onsetSpeed: 1.8, onsetDist: 0.12, strikeDist: 0.35, returnDist: 0.25, maxWindupMs: 450, recoverMs: 800, quietSpeed: 0.8 },
   legRise: 0.2,
   depthWeight: 0.5,
