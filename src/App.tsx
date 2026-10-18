@@ -19,6 +19,7 @@ import { MoveGuide } from './ui/MoveGuide';
 import { Callout, ComboCounter } from './ui/ComboCounter';
 import { VsIntro } from './ui/VsIntro';
 import { GameMenu } from './ui/GameMenu';
+import { Captions } from './ui/Captions';
 
 export default function App() {
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -54,6 +55,7 @@ export default function App() {
                 <Callout />
                 <ScreenFlash />
                 <Countdown />
+                <Captions />
                 <KOOverlay />
                 <HUD />
                 <MoveGuide />

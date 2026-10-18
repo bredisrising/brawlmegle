@@ -182,6 +182,64 @@ export async function makeBrief(frames) {
   return brief;
 }
 
+// --- Commentators (SPEC "Commentators"): a fast LLM writes the calls, OpenAI TTS voices them -------------
+const TTS_MODEL = process.env.FORGE_TTS_MODEL ?? "gpt-4o-mini-tts";
+/** Play-by-play (A) and color (B). */
+const VOICES = { A: process.env.FORGE_VOICE_A ?? "onyx", B: process.env.FORGE_VOICE_B ?? "coral" };
+const COMMENTARY_PROMPT = `You are two fighting-game commentators calling a webcam fighting game at a college hackathon
+(DubHacks, late at night). A is the hype play-by-play announcer, B is the dry, roasting color commentator.
+Write 1 or 2 short lines (max 14 words each) for the moment described. Use the fighters' names. Be funny and
+specific: roast the fighting, the outfits and costume details, the hour, the record. NEVER comment on bodies,
+faces, weight, skin, age or anything a person can't change. Keep it PG-13. Reply as JSON:
+{"lines":[{"voice":"A"|"B","text":"..."}]}`;
+
+/** @param {{moment: string, fighters: Record<string, {name: string, brief?: unknown}>}} ctx */
+export async function commentate(ctx) {
+  const body = await openai(
+    "/chat/completions",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: BRIEF_MODEL,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: COMMENTARY_PROMPT },
+          { role: "user", content: JSON.stringify(ctx) },
+        ],
+      }),
+    },
+    12_000,
+  );
+  const text = body.choices?.[0]?.message?.content;
+  const lines = typeof text === "string" ? JSON.parse(text).lines : null;
+  if (!Array.isArray(lines)) return [];
+  return lines
+    .filter((l) => (l.voice === "A" || l.voice === "B") && typeof l.text === "string")
+    .slice(0, 2)
+    .map((l) => ({ voice: l.voice, text: l.text.slice(0, 140) }));
+}
+
+/** One commentator line as MP3 bytes. */
+export async function speak(text, voice) {
+  const res = await fetch(API + "/audio/speech", {
+    method: "POST",
+    headers: { authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      model: TTS_MODEL,
+      voice: VOICES[voice] ?? VOICES.A,
+      input: text,
+      response_format: "mp3",
+      instructions: voice === "B"
+        ? "Dry, witty fighting-game color commentator. Quick, deadpan, a little smug."
+        : "Hyped fighting-game announcer. Fast, loud, punchy, arena energy.",
+    }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) throw new Error(`OpenAI TTS ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  return Buffer.from(await res.arrayBuffer());
+}
+
 /** Generates a new image from reference images plus a prompt. Returns PNG bytes. */
 export async function editImage(refs, prompt, model = IMAGE_MODEL, size = SHEET_SIZE) {
   const form = new FormData();

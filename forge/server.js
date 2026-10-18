@@ -16,7 +16,7 @@ import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { pipeline } from "node:stream";
-import { runForge, models } from "./pipeline.js";
+import { runForge, models, commentate, speak } from "./pipeline.js";
 
 if (!process.env.OPENAI_API_KEY) {
   console.error("OPENAI_API_KEY is missing. Put it in the repo root .env");
@@ -94,6 +94,22 @@ function view(fighter, base) {
   for (const key of ["sheetUrl", "cardUrl", "glbUrl", "modelUrl"]) if (out[key]?.startsWith("/")) out[key] = base + out[key];
   return out;
 }
+
+/** A sliding-window cap: at most `max` calls per `windowMs` (the commentators spend OpenAI credits too). */
+function limiter(max, windowMs) {
+  const times = [];
+  return () => {
+    const now = Date.now();
+    while (times.length && now - times[0] > windowMs) times.shift();
+    if (times.length >= max) return false;
+    times.push(now);
+    return true;
+  };
+}
+const commentaryAllowed = limiter(Number(process.env.FORGE_MAX_COMMENTARY ?? 60), 10 * 60_000);
+const ttsAllowed = limiter(Number(process.env.FORGE_MAX_TTS ?? 200), 10 * 60_000);
+/** TTS clips by voice + text: template lines repeat every match, so most calls are free and instant. */
+const ttsCache = new Map();
 
 function readJson(req) {
   return new Promise((resolve, reject) => {
@@ -180,6 +196,56 @@ async function handle(req, res) {
   if (req.method === "GET" && url.pathname === "/api/fighters") {
     const ready = [...fighters.values()].filter((f) => f.status === "ready").sort((a, b) => b.createdAt - a.createdAt);
     return json(res, 200, ready.map((f) => view(f, base)));
+  }
+
+  // Commentators: one or two LLM-written lines for a moment of the fight (SPEC "Commentators").
+  if (req.method === "POST" && url.pathname === "/api/commentary") {
+    if (ACCESS_KEY && req.headers["x-forge-key"] !== ACCESS_KEY) return json(res, 403, { error: "bad forge key" });
+    if (!commentaryAllowed()) return json(res, 429, { error: "commentators are resting" });
+    let body;
+    try {
+      body = await readJson(req);
+    } catch (err) {
+      return json(res, err.status ?? 400, { error: err.message });
+    }
+    if (!body || typeof body.moment !== "string") return json(res, 400, { error: "send { moment, fighters }" });
+    const cast = {};
+    for (const id of ["p1", "p2"]) {
+      const f = body.fighters?.[id];
+      if (!f || typeof f.name !== "string") continue;
+      // The forge's brief (archetype, outfit, signature details) makes the lines specific; never the photos.
+      const brief = typeof f.id === "string" ? fighters.get(f.id)?.brief : undefined;
+      cast[id] = { name: f.name.slice(0, 40), ...(brief ? { brief: JSON.stringify(brief).slice(0, 1200) } : {}) };
+    }
+    try {
+      const lines = await commentate({ moment: body.moment.slice(0, 400), fighters: cast, hour: new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Los_Angeles" }) });
+      return json(res, 200, { lines });
+    } catch (err) {
+      console.warn("commentary failed:", err.message);
+      return json(res, 502, { error: "commentary unavailable" });
+    }
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/tts") {
+    if (ACCESS_KEY && req.headers["x-forge-key"] !== ACCESS_KEY) return json(res, 403, { error: "bad forge key" });
+    const text = (url.searchParams.get("text") ?? "").slice(0, 160);
+    const voice = url.searchParams.get("voice") === "B" ? "B" : "A";
+    if (!text.trim()) return json(res, 400, { error: "no text" });
+    const key = `${voice}|${text}`;
+    let audio = ttsCache.get(key);
+    if (!audio) {
+      if (!ttsAllowed()) return json(res, 429, { error: "voices are resting" });
+      try {
+        audio = await speak(text, voice);
+      } catch (err) {
+        console.warn("tts failed:", err.message);
+        return json(res, 502, { error: "voice unavailable" });
+      }
+      ttsCache.set(key, audio);
+      if (ttsCache.size > 400) ttsCache.delete(ttsCache.keys().next().value);
+    }
+    res.writeHead(200, { "content-type": "audio/mpeg", "content-length": audio.length, "cache-control": "public, max-age=86400" });
+    return res.end(audio);
   }
 
   // Whether a forge would be accepted right now, so the game can say so before the player spends ~20 s scanning.

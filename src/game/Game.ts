@@ -24,6 +24,7 @@ import { ClientSession } from './ClientSession';
 import type { MatchPlayer, MirrorEvent, MirrorFrame } from '../net/protocol';
 import { HostSession } from './HostSession';
 import { MatchRecorder, recordingEnabled } from './MatchRecorder';
+import { Commentary, TEMPLATES, fill, type Line } from './Commentary';
 import { localPlayerId, pushPopup, updatePlayer, useGameStore } from './store';
 
 /** K.O. replay: ticks kept, ticks shown before and after the K.O., playback speed, and a hold on the end. */
@@ -92,6 +93,11 @@ export class Game {
   private readonly linkTimer: ReturnType<typeof setInterval>;
   /** Real matches recorded for improving the move reader (host only, when turned on). */
   private readonly recorder = new MatchRecorder();
+  /** The commentators: the host decides what they say (and tells the client laptop); both laptops voice it. */
+  readonly commentary = new Commentary();
+  private lastCall = 0;
+  private firstCalled = false;
+  private dangerCalled: Partial<Record<PlayerId, boolean>> = {};
   /** Combo counting and the round's first hit (both laptops count from the same hit events). */
   private combo = { player: null as PlayerId | null, hits: 0, at: 0, key: 0 };
   /**
@@ -123,12 +129,19 @@ export class Game {
     window.addEventListener('keydown', this.onMuteKey);
     // Countdown beeps, then the "go" (both laptops: the client's store follows the host's countdown).
     this.unsubscribe = useGameStore.subscribe((s, prev) => {
-      if (s.phase === 'ko' && prev.phase !== 'ko') void this.recorder.stop({ winner: s.winner, ending: s.ending });
+      if (s.phase === 'ko' && prev.phase !== 'ko') {
+        void this.recorder.stop({ winner: s.winner, ending: s.ending });
+        if (!this.client) this.callFinish(s.winner, s.ending);
+      }
       if (s.countdown === prev.countdown || s.countdown === null) return;
       this.sfx.play(s.countdown === 0 ? 'go' : 'beep');
       // A new round: forget the last one's combos and first hit.
       if (s.countdown === 0 && !this.client && recordingEnabled()) this.startRecording();
       if (s.countdown === COUNTDOWN_FROM) {
+        this.commentary.hush();
+        this.firstCalled = false;
+        this.dangerCalled = {};
+        if (!this.client) this.callIntro();
         this.stopReplay();
         this.firstHitDone = false;
         this.combo.player = null;
@@ -467,6 +480,7 @@ export class Game {
       for (const event of this.fight.step(commands, stances)) {
         this.recorder.event(event);
         this.applyEvent(event);
+        this.react(event);
       }
       this.tickClock();
     }
@@ -703,6 +717,76 @@ export class Game {
   }
 
   // ---------------------------------------------------------------------------
+  // Commentators (host decides, both laptops voice them).
+  // ---------------------------------------------------------------------------
+
+  /** Say lines here and on the client laptop. Non-urgent calls keep a gap so they don't chatter. */
+  private call(lines: Line[], urgent = false) {
+    if (!lines.length) return;
+    const now = performance.now();
+    if (!urgent && now - this.lastCall < 2500) return;
+    this.lastCall = now;
+    this.commentary.say(lines, urgent);
+    this.outbox.push({ kind: 'call', lines, urgent });
+  }
+
+  private cast() {
+    const { players } = useGameStore.getState();
+    return { p1: { id: this.fighters.p1?.id, name: players.p1.name }, p2: { id: this.fighters.p2?.id, name: players.p2.name } };
+  }
+
+  /** The big moments get a line. */
+  private react(event: FightEvent) {
+    const { players } = useGameStore.getState();
+    const d = opponentOf(event.attacker);
+    const vars = { a: players[event.attacker].name, d: players[d].name };
+    if (event.type === 'startup') {
+      if (event.move === 'fireball') this.call([fill(TEMPLATES.fireball, vars)], true);
+      return;
+    }
+    if (!event.damage || useGameStore.getState().phase !== 'fighting') return;
+    if (event.move === 'fireball') return this.call([fill(event.type === 'blocked' ? TEMPLATES.fireballBlocked : TEMPLATES.fireballHit, vars)], true);
+    if (event.type === 'blocked') return;
+    if (!this.firstCalled) {
+      this.firstCalled = true;
+      return this.call([fill(TEMPLATES.first, vars)]);
+    }
+    if (event.type === 'counter') return this.call([fill(TEMPLATES.counter, vars)]);
+    if (this.combo.player === event.attacker && (this.combo.hits === 3 || this.combo.hits === 5)) {
+      return this.call([fill(TEMPLATES.combo, { ...vars, n: this.combo.hits })], true);
+    }
+    if (players[d].hp < 25 && !this.dangerCalled[d]) {
+      this.dangerCalled[d] = true;
+      this.call([fill(TEMPLATES.danger, vars)]);
+    }
+  }
+
+  /** Round start: the LLM writes the intro (it lands during the countdown); a template if it's slow or down. */
+  private callIntro() {
+    const cast = this.cast();
+    const vars = { a: cast.p1.name, d: cast.p2.name };
+    void this.commentary
+      .write('The round is about to start: introduce the two fighters with some trash talk.', cast)
+      .then((lines) => {
+        if (useGameStore.getState().phase !== 'countdown' && useGameStore.getState().phase !== 'fighting') return;
+        this.call(lines.length ? lines : [fill(TEMPLATES.intro, vars)], true);
+      });
+  }
+
+  /** The finish: an instant call, then the LLM's roast (over the replay). */
+  private callFinish(winner: PlayerId | null, ending: string | null) {
+    const { players } = useGameStore.getState();
+    const w = winner ? players[winner].name : '';
+    const l = winner ? players[opponentOf(winner)].name : '';
+    if (!winner) this.call([fill(TEMPLATES.draw, {})], true);
+    else this.call([fill(ending === 'time' ? TEMPLATES.time : TEMPLATES.ko, { w, d: l })], true);
+    const moment = !winner
+      ? 'Time ran out and it is a draw. Roast both of them.'
+      : `${ending === 'time' ? 'Time ran out' : 'K.O.'}: ${w} beat ${l} with ${players[winner].hp} HP left. Hype the winner, roast the loser.`;
+    void this.commentary.write(moment, this.cast()).then((lines) => lines.length && this.call(lines, true));
+  }
+
+  // ---------------------------------------------------------------------------
   // Mirror: the client laptop draws the host's fight. The host sends who's fighting as what ('match'), a frame
   // of engine state every tick, and the moments that need effects ('events'); the client runs no fight of its own.
   // ---------------------------------------------------------------------------
@@ -762,6 +846,7 @@ export class Game {
     for (const e of events) {
       if (e.kind !== 'move') this.tickEvents.push(e);
       if (e.kind === 'fight') this.showHit(e.event, e.by, e.ko);
+      else if (e.kind === 'call') this.commentary.say(e.lines, e.urgent);
       else if (e.kind === 'anticipate') {
         if (e.cancel) this.views[e.player].cancelTell(e.hand);
         else this.views[e.player].anticipate(e.hand);
@@ -820,6 +905,8 @@ export class Game {
   private onMuteKey = (e: KeyboardEvent) => {
     if (e.code !== 'KeyM' || e.target instanceof HTMLInputElement) return;
     this.sfx.muted = !this.sfx.muted;
+    this.commentary.muted = this.sfx.muted;
+    if (this.sfx.muted) this.commentary.hush();
   };
 
   /** Dev only: press 1 / 2 to fake a hit on P1 / P2 (Shift = counter) until the fight engine exists. */
