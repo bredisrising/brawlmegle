@@ -225,7 +225,10 @@ export class IntentReader {
       if (i < 0) continue;
       const other = PARTNER[name];
       const otherNow = out.some((x) => x.kind === 'strike' && x.limb === other);
-      if (!movedTogether(this.limbs[name].peak, this.limbs[other], t, otherNow)) continue;
+      // Both striking on the same frame with mirror-image motion (both elbows coming up as the shoulders drop
+      // into a duck, both hands lifting into a block) is the body moving too.
+      const mirrored = otherNow && mirrorImage(this.limbs[name], LIMBS[name].side, this.limbs[other], LIMBS[other].side);
+      if (!mirrored && !movedTogether(this.limbs[name].peak, this.limbs[other], t, otherNow)) continue;
       out.splice(i, 1, { kind: 'cancel', limb: name, t, reason: 'both hands moved' });
       this.limbs[name].phase = 'idle';
       if (otherNow) {
@@ -399,6 +402,9 @@ export class IntentReader {
         : def.kind === 'arm' && bothHandsUp(body, name, s.peak, s.since - s.faceBeforeOnset > 600 && t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 250) ? 'both hands up'
         : def.kind === 'arm' && raisedOverHead(body, s.peakTip, s.peak, midPt.p, root.p) ? 'not a punch'
         : def.kind === 'arm' && otherHandAlong(body, def, s, tipPt.p, root.p) ? 'both hands moved'
+        // A hand pulled in across the body with the elbow tucking in and staying down is the guard closing up (the
+        // other hand's usual move while one hand punches), not a hook: a hook brings the elbow up.
+        : def.kind === 'arm' && s.peakMidRise < 0.08 && s.peakMidOut < -0.05 && sweepsIn(def, s.peak) ? 'not a punch'
         : null;
       if (reason) {
         s.phase = 'idle';
@@ -654,6 +660,21 @@ function raisedOverHead(body: Body, end: Vec3, travel: Vec3, elbow: Vec3, should
   const nose = body.points[LM.nose].p;
   // The elbow comes up to shoulder height too: an uppercut can finish high, but its elbow stays down.
   return end.y > nose.y + 0.2 && travel.y > 0.5 * len(travel) && elbow.y > shoulder.y - 0.1;
+}
+
+/** The hand swept in toward the body's center more than it went anywhere else (a hook's path, or a guard tuck). */
+function sweepsIn(def: LimbDef, travel: Vec3) {
+  return -travel.x * def.side > 0.6 * len(travel);
+}
+
+/** The two limbs' peak motions (hand and middle joint) are mirror images of each other, side for side. */
+function mirrorImage(a: LimbState, sideA: number, b: LimbState, sideB: number) {
+  // In each limb's own frame: x outward from its side, y up.
+  const va = { x: a.peak.x * sideA + a.peakMidOut, y: a.peak.y + a.peakMidRise };
+  const vb = { x: b.peak.x * sideB + b.peakMidOut, y: b.peak.y + b.peakMidRise };
+  const la = Math.hypot(va.x, va.y), lb = Math.hypot(vb.x, vb.y);
+  if (la < 0.05 || lb < 0.5 * la || lb > 2 * la) return false;
+  return (va.x * vb.x + va.y * vb.y) / (la * lb) > 0.8;
 }
 
 /**
