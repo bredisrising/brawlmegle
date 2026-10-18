@@ -17,10 +17,13 @@ each limb owned by its bones, no bone owning the mesh); a failed check moves on 
    double-walled shell), and when the remesh doesn't fill the inside it comes out as ~1,000 sub-voxel blobs, of which
    path 1 would keep one chest- or leg-sized patch (dylan, lamdestroyer, lampham). The flood fill closes small openings
    and fills whatever the outside can't reach, so it doesn't depend on that.
-3. "envelope": distance to the fitted bone segments with a smooth falloff, each vertex limited to the bones of its
-   own body part (and the joints next to it), then smoothed over the surface.
+3. "envelope": vertices snug around a bone are pinned to it; everything else (loose cloth, skirts, hair, a hijab,
+   loose sleeves, the folds at the joints) gets the smoothest weights the surface allows between those pins. Bone
+   heat sees a skirt as part of the solid between the legs and a hijab's drape as part of the arm it hangs next to;
+   the surface fill follows how the cloth actually hangs off the body.
 
-`--attempt 2` (the forge's re-rig after its own rig check turned the first rig down) goes straight to the envelope.
+`--attempt N` picks the plan (PLANS below): 1 tries all three in order, 2 goes straight to the envelope, 3 is bone
+heat on a finer solid. The GPU box (server.py) moves on to the next attempt when the game's rig check fails.
 The result reports the path, every attempt and the check's numbers; `rig_ok: false` means even the last path failed.
 The output is about 1 m tall, feet at y=0, with the "mixamorig:" bone names the game looks up
 (src/director/skeletonPose.ts).
@@ -38,7 +41,7 @@ from mathutils import Matrix, Vector, kdtree
 from mathutils.bvhtree import BVHTree
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rig_check import blender_stats, seg_dist  # noqa: E402
+from rig_check import CHAINS, blender_stats, seg_dist  # noqa: E402
 
 argv = sys.argv[sys.argv.index("--") + 1 :]
 IN_GLB, LANDMARKS, OUT_GLB = argv[:3]
@@ -47,7 +50,7 @@ VOXEL = float(opts.get("--voxel", 0.008))  # proxy voxel size for a 1 m tall mod
 DEBUG_BLEND = opts.get("--debug")
 STATIC_GLB = opts.get("--static")  # also write the oriented, normalized model without a skeleton
 YAW = float(opts.get("--yaw", 0))  # degrees about +y (glTF up) that turn the generator's front to +x
-ATTEMPT = int(opts.get("--attempt", 1))  # which plan (PLANS below): the box moves on to 2 and 3 when the game's rig check fails
+ATTEMPT = int(opts.get("--attempt", 1))  # which plan (PLANS below): the box moves on to the next one when the game's rig check fails
 PROXY_FACES = 40000
 t0 = time.time()
 marks = {}
@@ -496,12 +499,16 @@ def heat_weights(proxy):
     return {"heat_empty": empty, "heat_unweighted": unweighted, "orphans": finish_weights()}
 
 
-# Envelope: each vertex belongs to its nearest bone segment, rigidly along the bone's middle, blended with the bone
-# it joins over BLEND either side of each joint (elbow, knee, hip, shoulder, neck...), then smoothed over the
-# surface. A vertex only takes weight from its own bone and the ones it joins (plus what the smoothing brings from
-# its neighbors on the surface), so a hand next to the thigh never takes thigh weight.
-BLEND = float(opts.get("--blend", 0.03))  # m on a 1 m model, each side of a joint
-SMOOTH = float(opts.get("--smooth", 0.025))  # m: how far the surface smoothing spreads the weights
+# Envelope (harmonic): the vertices snug around a bone are pinned to it (rigid along the bone's middle, blended with
+# the bone it joins over BLEND either side of each joint). Every other vertex (loose cloth, hair, the folds at the
+# joints) gets the smoothest weights the surface allows between those pins: a harmonic fill over the mesh, so weights
+# spread along the surface, not through the air. A skirt blends from the hips down into both thighs, a hijab's drape
+# follows the head and shoulders it hangs from, a hand never takes weight from the thigh it hangs next to unless the
+# mesh joins them.
+BLEND = 0.03  # m on a 1 m model, each side of a joint
+SKIN_PCT, SKIN_MUL = 10, 1.6  # a bone's skin: 1.6x the 10th percentile of its nearest vertices' distances
+LOOSE = 0.02  # m past the skin where the envelope's lean toward the nearest bone fades: drapes and long skirts hang free
+CLEAR = 0.02  # m: a pinned vertex is this much nearer its bone's part than any other part
 
 
 def smoothstep(x):
@@ -509,61 +516,124 @@ def smoothstep(x):
     return x * x * (3 - 2 * x)
 
 
-def envelope_weights():
-    pts = body_points()
+def harmonic_fill(n, edges, pinned, values, pull, guide, iters=2000, tol=1e-5):
+    """Values on the free vertices that minimize the summed squared differences across edges (uniform graph
+    Laplacian) plus pull * (value - guide)^2, with the pinned vertices fixed. Conjugate gradients, all columns at
+    once."""
+    free = ~pinned
+    fidx = -np.ones(n, dtype=np.int64)
+    fidx[free] = np.arange(free.sum())
+    deg = np.bincount(edges.ravel(), minlength=n).astype(float)
+    a, b = edges[:, 0], edges[:, 1]
+    ff = free[a] & free[b]
+    fa, fb = fidx[a[ff]], fidx[b[ff]]
+    nf = int(free.sum())
+    rhs = np.zeros((nf, values.shape[1]))
+    for u, v in ((a, b), (b, a)):  # free u next to pinned v
+        m = free[u] & pinned[v]
+        np.add.at(rhs, fidx[u[m]], values[v[m]])
+    d = (deg[free] + pull[free])[:, None]
+    rhs += pull[free][:, None] * guide[free]
+
+    def apply(x):
+        y = d * x
+        np.subtract.at(y, fa, x[fb])
+        np.subtract.at(y, fb, x[fa])
+        return y
+
+    x = rhs / np.maximum(d, 1)
+    r = rhs - apply(x)
+    p = r.copy()
+    rr = (r * r).sum(axis=0)
+    for _ in range(iters):
+        if rr.max() < tol * tol * max(1.0, nf):
+            break
+        ap = apply(p)
+        alpha = rr / np.maximum((p * ap).sum(axis=0), 1e-30)
+        x += p * alpha
+        r -= ap * alpha
+        rr_new = (r * r).sum(axis=0)
+        p = r + p * (rr_new / np.maximum(rr, 1e-30))
+        rr = rr_new
+    out = values.copy()
+    out[free] = x
+    return out
+
+
+def envelope_weights(pull=0.0):
+    # Work on the welded surface (UV seams split vertices).
+    all_pts = body_points()
+    key = np.round(all_pts / 1e-5).astype(np.int64)
+    _, first, weld = np.unique(key, axis=0, return_index=True, return_inverse=True)
+    weld = weld.reshape(-1)
+    pts = all_pts[first]
+    edges = np.empty(len(body.data.edges) * 2, dtype=np.int64)
+    body.data.edges.foreach_get("vertices", edges)
+    e = weld[edges.reshape(-1, 2)]
+    e = np.unique(np.sort(e[e[:, 0] != e[:, 1]], axis=1), axis=0)
     names = [s[0] for s in SEGMENTS]
     idx = {n: i for i, n in enumerate(names)}
     head = np.array([tuple(s[1]) for s in SEGMENTS])
     tail = np.array([tuple(s[2]) for s in SEGMENTS])
     length = np.linalg.norm(tail - head, axis=1)
     dist = np.stack([seg_dist(pts, head[i], tail[i]) for i in range(len(names))], axis=1)
-    nearest = dist.argmin(axis=1)
     parent = [idx.get(b.parent.name) if b.parent else None for b in arm_data.bones]
     kids = [[c for c, p in enumerate(parent) if p == i] for i in range(len(names))]
+    chain_of = np.zeros(len(names), dtype=int)
+    for ci, c in enumerate(CHAINS.values()):
+        for b in c:
+            if P + b in idx:
+                chain_of[idx[P + b]] = ci
+    raw = dist.argmin(axis=1)
+    d1 = dist[np.arange(len(pts)), raw]
+    other = np.where(chain_of[None, :] == chain_of[raw][:, None], np.inf, dist).min(axis=1)
+    skin = np.array([SKIN_MUL * np.percentile(dist[raw == i, i], SKIN_PCT) if (raw == i).sum() > 20 else 0.0 for i in range(len(names))])
+    pinned = (d1 <= skin[raw]) & (other > d1 + CLEAR)
+    # The nearest bone, blended into its parent and child near the joints: what the pinned vertices get, and what
+    # the slightly loose ones (wide trousers) are pulled toward.
     w = np.zeros((len(pts), len(names)))
     for i in range(len(names)):
-        rows = np.nonzero(nearest == i)[0]
+        rows = np.nonzero(raw == i)[0]
         if not len(rows):
             continue
         along = (pts[rows] - head[i]) @ (tail[i] - head[i]) / max(length[i], 1e-9)  # meters from the bone's head
         own = np.ones(len(rows))
         joins = ([(parent[i], along)] if parent[i] is not None else []) + ([(kids[i][0], length[i] - along)] if len(kids[i]) == 1 else [])
-        for other, gap in joins:  # gap: meters to the joint; half and half at the joint itself
-            r = max(1e-3, min(BLEND, 0.45 * length[i], 0.45 * length[other]))
+        for o, gap in joins:  # gap: meters to the joint; half and half at the joint itself
+            r = max(1e-3, min(BLEND, 0.45 * length[i], 0.45 * length[o]))
             share = np.minimum(1 - smoothstep((gap + r) / (2 * r)), own)
-            w[rows, other] += share
+            w[rows, o] += share
             own -= share
         w[rows, i] += own
-    # Smooth over the surface (UV seams split vertices, so weld by position first) to soften the rest.
-    key = np.round(pts / 1e-5).astype(np.int64)
-    _, weld = np.unique(key, axis=0, return_inverse=True)
-    weld = weld.reshape(-1)
-    edges = np.empty(len(body.data.edges) * 2, dtype=np.int64)
-    body.data.edges.foreach_get("vertices", edges)
-    e = weld[edges.reshape(-1, 2)]
-    e = e[e[:, 0] != e[:, 1]]
-    n = weld.max() + 1
-    wm = np.zeros((n, w.shape[1]))
-    np.add.at(wm, weld, w)
-    wm /= np.maximum(np.bincount(weld, minlength=n), 1)[:, None]
-    deg = np.bincount(e.ravel(), minlength=n)[:, None]
-    edge = float(np.median(np.linalg.norm(pts[edges.reshape(-1, 2)[:, 0]] - pts[edges.reshape(-1, 2)[:, 1]], axis=1)))
-    passes = int(np.clip((SMOOTH / max(edge, 1e-4)) ** 2, 2, 80))  # diffusion spreads ~ edge * sqrt(passes)
-    for _ in range(passes):
-        acc = np.zeros_like(wm)
-        np.add.at(acc, e[:, 0], wm[e[:, 1]])
-        np.add.at(acc, e[:, 1], wm[e[:, 0]])
-        wm = np.where(deg > 0, 0.5 * wm + 0.5 * acc / np.maximum(deg, 1), wm)
-    w = wm[weld]
+    # Pieces of the surface with no pinned vertex at all (a loose strand) can't be filled: they go to their nearest
+    # bone outright, then count as pinned.
+    comp = np.arange(len(pts))
+    while True:  # connected components by label propagation
+        lo = np.minimum(comp[e[:, 0]], comp[e[:, 1]])
+        new = comp.copy()
+        np.minimum.at(new, e[:, 0], lo)
+        np.minimum.at(new, e[:, 1], lo)
+        new = new[new]
+        if (new == comp).all():
+            break
+        comp = new
+    has_pin = np.zeros(len(pts), dtype=bool)
+    has_pin[comp[pinned]] = True
+    stray = ~has_pin[comp]
+    pinned = pinned | stray
+    loose = np.maximum(d1 - skin[raw], 0)
+    w = harmonic_fill(len(pts), e, pinned, w, pull * np.exp(-((loose / LOOSE) ** 2)), w)
+    w = np.clip(w, 0, None)
     w[w < 0.02 * w.max(axis=1, keepdims=True)] = 0
     w /= np.maximum(w.sum(axis=1, keepdims=True), 1e-9)
+    w = w[weld]
     reset_groups()
     groups = [body.vertex_groups[nm] for nm in names]
-    for i in range(len(pts)):
+    for i in range(len(w)):
         for j in np.argsort(w[i])[::-1][:4]:
             if w[i, j] > 0:
                 groups[j].add([i], float(w[i, j]), "REPLACE")
-    return {"orphans": finish_weights(), "smooth_passes": passes}
+    return {"orphans": finish_weights(), "pinned": round(float(pinned.mean()), 3)}
 
 
 def check_weights():
@@ -583,15 +653,17 @@ def solid_proxy(close, voxel=VOXEL):
     return proxy, info | pinfo
 
 
-# The paths each attempt tries, in order, before the envelope (the last resort of every attempt).
+# The bone heat paths each attempt tries, in order, then its envelope (the last resort of every attempt; the number
+# is how hard slightly loose vertices lean toward their nearest bone: wide trousers vs. a long skirt).
 PLANS = {
-    1: [("bone-heat", lambda: remesh_proxy(body.data, VOXEL))] + [("bone-heat-retry", lambda c=c: solid_proxy(c)) for c in (1, 2)],
-    2: [],  # straight to the envelope
-    3: [("bone-heat-retry", lambda: solid_proxy(2, VOXEL * 0.75))],  # a finer, more closed solid than attempt 1's
+    1: ([("bone-heat", lambda: remesh_proxy(body.data, VOXEL))] + [("bone-heat-retry", lambda c=c: solid_proxy(c)) for c in (1, 2)], 0.0),
+    2: ([], 0.0),  # straight to the envelope
+    3: ([], 0.3),  # the envelope, leaning loose vertices toward their bone
+    4: ([("bone-heat-retry", lambda: solid_proxy(2, VOXEL * 0.75))], 0.0),  # a finer, more closed solid than attempt 1's
 }
 attempts = []
 result = None
-plan = PLANS.get(ATTEMPT, [])
+plan, pull = PLANS.get(ATTEMPT, ([], 0.0))
 
 for path, make in plan:
     start = time.time()
@@ -615,7 +687,7 @@ for path, make in plan:
         break
 if not result:
     start = time.time()
-    entry = {"path": "envelope"} | envelope_weights()
+    entry = {"path": "envelope", "pull": pull} | envelope_weights(pull)
     check = check_weights()
     entry |= {"ok": check["ok"], "fails": check["fails"], "s": round(time.time() - start, 2)}
     attempts.append(entry)

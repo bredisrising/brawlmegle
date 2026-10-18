@@ -46,7 +46,7 @@ OPTIMIZER = os.environ.get("FORGE3D_OPTIMIZER", f"{ROOT}/optimizer/optimize-glb.
 # The forge's rig check (forge/rigcheck.js: poses the rig like the game and skins it), next to the optimizer. When a
 # rig fails it, the rigger's next attempt plan is tried (rig_blender.py PLANS), up to LAST_RIG_ATTEMPT.
 RIGCHECK = os.environ.get("FORGE3D_RIGCHECK", f"{ROOT}/optimizer/rigcheck.js")
-LAST_RIG_ATTEMPT = 3
+LAST_RIG_ATTEMPT = 4
 WORK = os.environ.get("FORGE3D_WORK", "/var/lib/forge3d/jobs")
 SETTINGS = {
     "pipeline": os.environ.get("FORGE3D_PIPELINE", "1024_cascade"),

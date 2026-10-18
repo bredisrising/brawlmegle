@@ -10,7 +10,13 @@ textured Mixamo-rigged GLB out, the same file the game already loads from Tripo.
    come from average A-pose proportions.
 3. **Blender** (`rig_blender.py`, headless) turns the model to face +x, scales it to 1 m and fits a Mixamo skeleton
    (`mixamorig:Hips` ... `RightToeBase`) to the joints. It skins the mesh with bone heat on a watertight voxel copy and
-   exports `rigged.glb` and `model.glb` (no skeleton).
+   exports `rigged.glb` and `model.glb` (no skeleton). Every skin is checked (`rig_check.py`: each limb owned by its
+   bones, no bone owning the mesh), and a failed check moves on to the next path: bone heat on a flood-filled solid
+   (TRELLIS.2's meshes are hollow shells, which the plain remesh sometimes shatters), then envelope weights.
+4. **The game's rig check** (`forge/rigcheck.js`, installed next to the optimizer) poses the result like the game. If
+   it fails, the box re-rigs with the rigger's next attempt plan (`--attempt 2`: envelope weights, `3`: a finer solid)
+   and sends the best one. The job's `report` says which path made the rig (`rig`), its own check (`rig_ok`, `check`),
+   the game's check (`game_check`) and every try (`tries`).
 
 ## API (`server.py`, port 8790)
 
@@ -91,5 +97,6 @@ FORGE3D_KEY=dev FORGE3D_WORK=/tmp/f3d FORGE3D_FAKE_GLB=model.glb FORGE3D_POSE_MO
   FORGE3D_BLENDER=~/blender-5.2.1-linux-x64/blender python forge/gpu/server.py
 ```
 
-The rigger alone: `blender -b --factory-startup -P rig_blender.py -- in.glb landmarks.json out.glb [--static model.glb]`
-(landmarks from `python landmarks.py pose_landmarker_heavy.task sheet.png landmarks.json`).
+The rigger alone: `blender -b --factory-startup -P rig_blender.py -- in.glb landmarks.json out.glb [--static model.glb] [--attempt N]`
+(landmarks from `python landmarks.py pose_landmarker_heavy.task sheet.png landmarks.json`). Its weight check on any
+rigged GLB: `blender -b --factory-startup -P rig_check.py -- rigged.glb [...]`.
