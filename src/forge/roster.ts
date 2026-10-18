@@ -15,9 +15,6 @@ const KEY = 'brawlegle.roster';
 /** Built-in fighters are available without scanning or saving to localStorage. */
 const HOUSE_FIGHTERS: ForgedFighter[] = [
   { id: 'default', name: 'default', status: 'ready', glbUrl: `${import.meta.env.BASE_URL}models/default.glb` },
-  { id: 'house-1', name: 'Kid Haymaker', status: 'ready' },
-  { id: 'house-2', name: 'Big Tuna', status: 'ready' },
-  { id: 'house-3', name: 'Sweet Science', status: 'ready' },
 ];
 
 function readSaved(): ForgedFighter[] {

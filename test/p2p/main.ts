@@ -285,7 +285,7 @@ async function runGameHost() {
     const phase = await poll(() => client.inbox.find((m) => m.type === 'phase'), 'phase');
     assert(phase.type === 'phase' && phase.phase === 'lobby', 'wrong phase');
     const roster = await poll(() => client.inbox.find((m) => m.type === 'roster'), 'roster');
-    assert(roster.type === 'roster' && roster.fighters.some((f) => f.id === 'house-1'), 'no house fighters in the roster');
+    assert(roster.type === 'roster' && roster.fighters.some((f) => f.id === 'default'), 'no house fighters in the roster');
   });
 
   await test("game host: the client's profile + scan forge P2 (mock forge), with progress sent back", async () => {
@@ -302,11 +302,11 @@ async function runGameHost() {
   });
 
   await test("game host: the client's pick sets up P2 and the client hears 'ready'", async () => {
-    client.peer.send({ type: 'pick', fighterId: 'house-1' });
-    const ready = await poll(() => readyMsg('Kid Haymaker'), 'fighter ready', 20_000);
-    assert(ready.type === 'fighter' && ready.fighter.name === 'Kid Haymaker', 'wrong fighter name');
+    client.peer.send({ type: 'pick', fighterId: 'default' });
+    const ready = await poll(() => readyMsg('default'), 'fighter ready', 20_000);
+    assert(ready.type === 'fighter' && ready.fighter.name === 'default', 'wrong fighter name');
     const p2 = useGameStore.getState().players.p2;
-    assert(p2.status === 'ready' && p2.name === 'Kid Haymaker', `host p2 is ${p2.status} ${p2.name}`);
+    assert(p2.status === 'ready' && p2.name === 'default', `host p2 is ${p2.status} ${p2.name}`);
   });
 
   await test("game host: client poses reach P2's input on the host", async () => {
@@ -364,8 +364,8 @@ async function runGameHost() {
     await client.peer.join(useGameStore.getState().roomCode!);
     await poll(() => useGameStore.getState().connection === 'open' || undefined, 'connection open again');
     // P2's fighter is kept: the rejoined client hears it's ready, and a resent pick doesn't start over.
-    await poll(() => readyMsg('Kid Haymaker'), 'fighter ready after rejoin');
-    client.peer.send({ type: 'pick', fighterId: 'house-1' });
+    await poll(() => readyMsg('default'), 'fighter ready after rejoin');
+    client.peer.send({ type: 'pick', fighterId: 'default' });
     await poll(() => (fighterMsgs().length >= 2 ? true : undefined), 'resent pick answered');
     assert(useGameStore.getState().players.p2.status === 'ready', 'p2 was reset');
     // A reloaded client's pose clock starts over; the host must not drop those frames as stale.
