@@ -12,7 +12,6 @@ const IMAGE_QUALITY = process.env.FORGE_IMAGE_QUALITY ?? "medium";
 /** "high" keeps faces closer to the photos. Only gpt-image-1 models accept it; gpt-image-2 rejects it. */
 const INPUT_FIDELITY = process.env.FORGE_INPUT_FIDELITY ?? "high";
 
-export const models = { brief: BRIEF_MODEL, sheet: IMAGE_MODEL, card: CARD_MODEL, quality: IMAGE_QUALITY, threeD: process.env.TRIPO_API_KEY ? `tripo ${TRIPO_MODEL}, ${FACE_LIMIT} faces + mixamo rig` : "off (no TRIPO_API_KEY)" };
 
 // --- Tripo (image -> low-poly 3D model -> Mixamo-rigged GLB) ------------------------------------------
 // https://developers.tripo3d.ai/llms.txt. Output URLs expire after 5 minutes, so models are downloaded at once.
@@ -23,6 +22,8 @@ const TRIPO_MODEL = process.env.FORGE_TRIPO_MODEL ?? "v3.1-20260211";
 const FACE_LIMIT = Number(process.env.FORGE_FACE_LIMIT ?? 30000);
 /** v1.0 is Tripo's humanoid (biped) rigger; v3.0-20260909 is newer and opt-in. */
 const RIG_MODEL = process.env.FORGE_RIG_MODEL ?? "v1.0-20240301";
+
+export const models = { brief: BRIEF_MODEL, sheet: IMAGE_MODEL, card: CARD_MODEL, quality: IMAGE_QUALITY, threeD: process.env.TRIPO_API_KEY ? `tripo ${TRIPO_MODEL}, ${FACE_LIMIT} faces + mixamo rig` : "off (no TRIPO_API_KEY)" };
 
 async function tripo(path, init = {}, timeoutMs = 60_000) {
   const res = await fetch(TRIPO + path, {
