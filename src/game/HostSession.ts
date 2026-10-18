@@ -19,6 +19,8 @@ const SCAN_WAIT_MS = 90_000;
 export type SetupRemote = (choice: FighterChoice, source: InputSource, scan?: Promise<ScanFrames>) => Promise<void>;
 
 type Choice = Extract<ClientMessage, { type: 'profile' | 'pick' }>;
+/** Game hooks: the client asked for a rematch; a client (re)connected and needs the match state. */
+export type HostHooks = { rematch?: () => void; connected?: () => void };
 type Deferred<T> = { resolve: (value: T) => void; reject: (err: Error) => void };
 
 /**
@@ -48,9 +50,19 @@ export class HostSession {
   private lastPhase = '';
   private readonly cleanup: (() => void)[] = [];
 
-  constructor(input: InputHub, setup: SetupRemote) {
+  constructor(input: InputHub, setup: SetupRemote, private readonly hooks: HostHooks = {}) {
     this.input = input;
     this.setup = setup;
+  }
+
+  /** Whether a client laptop is connected right now. */
+  get connected() {
+    return this.peer.connected;
+  }
+
+  /** Send to the client laptop, if one is connected. */
+  send(msg: HostMessage) {
+    if (this.peer.connected) this.peer.send(msg);
   }
 
   /** Opens the room. Resolves with its code, or '' while signaling is unreachable (the code arrives via the store later). */
@@ -61,7 +73,7 @@ export class HostSession {
       this.peer.onClose(this.onDrop),
       this.peer.onRoom((roomCode) => useGameStore.setState({ roomCode })),
       useGameStore.subscribe((s, prev) => {
-        if (s.phase !== prev.phase || s.countdown !== prev.countdown) this.sendPhase();
+        if (s.phase !== prev.phase || s.countdown !== prev.countdown || s.winner !== prev.winner || s.ending !== prev.ending) this.sendPhase();
         if (s.players[REMOTE] !== prev.players[REMOTE]) this.sendFighter();
       }),
     );
@@ -86,6 +98,7 @@ export class HostSession {
     this.peer.send({ type: 'welcome', player: REMOTE });
     this.sendPhase(true);
     this.sendFighter(true);
+    this.hooks.connected?.();
     // A reloaded client restarts its pose clock: reassign so the hub doesn't drop its "older" frames.
     if (this.input.source(REMOTE) === this.remote) this.input.assign(REMOTE, this.remote);
     void listFighters().then((fighters) => {
@@ -113,6 +126,9 @@ export class HostSession {
       case 'scan':
         if (this.scan) this.scan.resolve(msg.frames);
         else console.warn('[host] got a scan nobody was waiting for');
+        break;
+      case 'rematch':
+        if (useGameStore.getState().phase === 'ko') this.hooks.rematch?.();
         break;
       // 'pose' goes to the RemoteSource.
     }
@@ -197,11 +213,11 @@ export class HostSession {
 
   private sendPhase(force = false) {
     if (!this.peer.connected) return;
-    const { phase, countdown } = useGameStore.getState();
-    const key = `${phase}:${countdown}`;
+    const { phase, countdown, winner, ending } = useGameStore.getState();
+    const key = `${phase}:${countdown}:${winner}:${ending}`;
     if (!force && key === this.lastPhase) return;
     this.lastPhase = key;
-    this.peer.send({ type: 'phase', phase, countdown });
+    this.peer.send({ type: 'phase', phase, countdown, winner, ending });
   }
 
   /**

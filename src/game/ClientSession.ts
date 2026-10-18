@@ -3,15 +3,22 @@ import { captureScan } from '../forge/forge';
 import { FORGE_STEPS, onChange, scanStatus } from '../forge/status';
 import { Peer } from '../net/Peer';
 import { Signaling } from '../net/Signaling';
-import { PROTOCOL_VERSION, type ClientMessage, type HostMessage } from '../net/protocol';
+import { PROTOCOL_VERSION, type ClientMessage, type HostMessage, type MatchPlayer, type MirrorEvent, type MirrorFrame } from '../net/protocol';
 import { config } from '../config';
-import type { ForgedFighter } from '../types';
+import type { ForgedFighter, PlayerId, PoseFrame } from '../types';
 import type { FighterChoice } from './Game';
 import { localPlayerId, updatePlayer, useGameStore } from './store';
 
 const PLAYER = localPlayerId('client');
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Where the host's fight goes on this laptop (the Game draws it). */
+export type ClientMirror = {
+  match(players: Record<PlayerId, MatchPlayer>): void;
+  frame(frame: MirrorFrame): void;
+  events(events: MirrorEvent[]): void;
+};
 
 /**
  * The client laptop's side of P2P. Joins the host's room, tracks + scans P2 on this camera,
@@ -29,9 +36,16 @@ export class ClientSession {
   private setup: ClientMessage[] = [];
   private confirmed = false;
   private disposed = false;
+  /** This laptop's latest camera frame (P2's own pose, blended into its fighter on this screen). */
+  lastFrame: PoseFrame | null = null;
 
-  constructor(code: string) {
+  constructor(code: string, private readonly mirror?: ClientMirror) {
     this.code = code;
+  }
+
+  /** K.O. screen "Rematch" on this laptop: the host decides. */
+  requestRematch() {
+    this.send({ type: 'rematch' });
   }
 
   get inputSource() {
@@ -115,7 +129,10 @@ export class ClientSession {
 
   private stream(source: InputSource) {
     this.stopStream?.();
-    this.stopStream = source.onFrame((frame) => this.send({ type: 'pose', frame }));
+    this.stopStream = source.onFrame((frame) => {
+      this.lastFrame = frame;
+      this.send({ type: 'pose', frame });
+    });
   }
 
   private onHostMessage(msg: HostMessage) {
@@ -126,8 +143,26 @@ export class ClientSession {
       case 'roster':
         useGameStore.setState({ roster: msg.fighters });
         break;
-      case 'phase':
-        useGameStore.setState({ phase: msg.phase, countdown: msg.countdown });
+      case 'phase': {
+        const { screen, players } = useGameStore.getState();
+        useGameStore.setState({
+          phase: msg.phase,
+          countdown: msg.countdown,
+          ...(msg.winner !== undefined ? { winner: msg.winner } : {}),
+          ...(msg.ending !== undefined ? { ending: msg.ending } : {}),
+          // Once the fight starts, this laptop shows it too.
+          ...(msg.phase !== 'lobby' && screen === 'client' && players[PLAYER].status === 'ready' ? { screen: 'game' as const } : {}),
+        });
+        break;
+      }
+      case 'match':
+        this.mirror?.match(msg.players);
+        break;
+      case 'frame':
+        this.mirror?.frame(msg.frame);
+        break;
+      case 'events':
+        this.mirror?.events(msg.events);
         break;
       case 'fighter':
         this.confirmed = true;
@@ -150,9 +185,13 @@ export class ClientSession {
         // The host drops down the fallback ladder (SPEC.md "Forge"), so P2 still gets a fighter.
         updatePlayer(PLAYER, { status: 'forging', statusDetail: 'Forge hiccup, picking a backup fighter' });
         break;
-      case 'ready':
+      case 'ready': {
         updatePlayer(PLAYER, { name: fighter.name, status: 'ready', statusDetail: '', portraitUrl: fighter.cardUrl ?? null });
+        // Rejoined mid-fight: straight back to the fight.
+        const { phase, screen } = useGameStore.getState();
+        if (phase !== 'lobby' && screen === 'client') useGameStore.setState({ screen: 'game' });
         break;
+      }
     }
   }
 

@@ -15,10 +15,11 @@ import { fetchServerFighters, maskedFighter, saveFighter } from '../forge/roster
 import { config } from '../config';
 import {
   PLAYER_IDS, opponentOf,
-  type Command, type FightEvent, type ForgedFighter, type PlayerId, type Stance,
+  type Command, type FightEvent, type FighterState, type ForgedFighter, type PlayerId, type Stance,
 } from '../types';
 import { COUNTDOWN_FROM, KO_FREEZE, MAX_HP, PLAYER_COLORS, PLAYER_NAMES, ROUND_SECONDS, SIM_DT } from './constants';
 import { ClientSession } from './ClientSession';
+import type { MatchPlayer, MirrorEvent, MirrorFrame } from '../net/protocol';
 import { HostSession } from './HostSession';
 import { localPlayerId, pushPopup, updatePlayer, useGameStore } from './store';
 
@@ -57,6 +58,12 @@ export class Game {
   private clock = ROUND_SECONDS;
   private hostSession: HostSession | null = null;
   private client: ClientSession | null = null;
+  /** Host: each slot's fighter, for the client laptop's copy of the fight; and what to tell it this tick. */
+  private readonly fighters: Partial<Record<PlayerId, ForgedFighter>> = {};
+  private outbox: MirrorEvent[] = [];
+  /** Client: the host's latest fight frame, and which fighter models are showing. */
+  private mirrored: MirrorFrame | null = null;
+  private readonly mirrorShown: Partial<Record<PlayerId, string>> = {};
   private accumulator = 0;
   private phaseTimer = 0;
   /** Aborted on dispose: stops in-flight scans and forge polling (HMR / unmount), so no camera is left running. */
@@ -88,7 +95,10 @@ export class Game {
    */
   async host() {
     this.hostSession?.dispose();
-    const session = new HostSession(this.input, (choice, source, scan) => this.setupPlayer('p2', choice, source, scan));
+    const session = new HostSession(this.input, (choice, source, scan) => this.setupPlayer('p2', choice, source, scan), {
+      rematch: () => this.rematch(),
+      connected: () => this.sendMatch(),
+    });
     this.hostSession = session;
     const code = await session.open();
     useGameStore.setState({ role: 'host', roomCode: code || null, screen: 'avatar' });
@@ -97,7 +107,11 @@ export class Game {
   /** Title screen: "Connect" with a room code. */
   async join(code: string) {
     if (config.signalUrl) {
-      const client = new ClientSession(code);
+      const client = new ClientSession(code, {
+        match: (players) => this.mirrorMatch(players),
+        frame: (frame) => (this.mirrored = frame),
+        events: (events) => this.mirrorEvents(events),
+      });
       await client.connect();
       this.client = client;
     } else {
@@ -142,6 +156,8 @@ export class Game {
     this.spawn(id);
     const label = level === 'normal' ? 'CPU' : `CPU ${level}`;
     updatePlayer(id, { name: `${fighter.name} (${label})`, status: 'ready', statusDetail: '', portraitUrl: fighter.cardUrl ?? null });
+    this.fighters[id] = fighter;
+    this.sendMatch();
     const { players } = useGameStore.getState();
     if (PLAYER_IDS.every((p) => players[p].status === 'ready')) this.startCountdown();
   }
@@ -197,6 +213,8 @@ export class Game {
 
       this.spawn(id);
       updatePlayer(id, { status: 'ready', statusDetail: '', portraitUrl: fighter.cardUrl ?? null });
+      this.fighters[id] = fighter;
+      this.sendMatch();
 
       const { players } = useGameStore.getState();
       if (PLAYER_IDS.every((p) => players[p].status === 'ready')) this.startCountdown();
@@ -224,6 +242,8 @@ export class Game {
   }
 
   rematch() {
+    // On the client laptop the host runs the fight: ask it.
+    if (this.client) return this.client.requestRematch();
     this.fight.reset();
     this.fightTicks = 0;
     for (const id of PLAYER_IDS) {
@@ -267,6 +287,7 @@ export class Game {
 
   /** One fixed 60 Hz step. */
   private tick() {
+    if (this.client) return this.mirrorTick();
     const { phase, countdown } = useGameStore.getState();
     this.phaseTimer += SIM_DT;
 
@@ -294,11 +315,17 @@ export class Game {
       const out = frame ? this.intent[id].update(frame) : null;
       if (out) {
         commands.push(...this.resolver.resolve(id, out.intents, this.fight));
-        if (id === localPlayerId(useGameStore.getState().role)) showMove(out.intents);
+        const text = moveText(out.intents);
+        if (text && id === localPlayerId(useGameStore.getState().role)) useGameStore.setState({ lastMove: { text, at: performance.now() } });
+        else if (text) this.outbox.push({ kind: 'move', player: id, text });
       }
       stances[id] = out?.stance ?? { player: id, guard: true, advance: 0, lean: { x: 0, y: 0 }, tracked: false };
     }
-    for (const c of commands) if (c.kind === 'anticipate') this.views[c.player].anticipate(c.hand);
+    for (const c of commands) {
+      if (c.kind !== 'anticipate') continue;
+      this.views[c.player].anticipate(c.hand);
+      this.outbox.push({ kind: 'anticipate', player: c.player, hand: c.hand });
+    }
     if (phase === 'fighting') {
       this.fightTicks++;
       for (const event of this.fight.step(commands, stances)) this.applyEvent(event);
@@ -306,7 +333,9 @@ export class Game {
     }
     // Hit-stop: the picture holds on the impact while the engine does (effects and camera shake keep going).
     // (Only mid-round: the K.O. hit's hit-stop never runs out, since the engine stops stepping.)
-    if (useGameStore.getState().phase === 'fighting' && this.fight.frozen) return;
+    const frozen = useGameStore.getState().phase === 'fighting' && this.fight.frozen;
+    this.sendFrame(stances, frozen);
+    if (frozen) return;
     const distance = this.fight.distance();
     for (const id of PLAYER_IDS) {
       this.views[id].update({
@@ -340,13 +369,21 @@ export class Game {
     // TODO: once FightEngine is real, mirror FighterState.hp instead of subtracting here.
     const hp = Math.max(0, players[defender].hp - event.damage);
     updatePlayer(defender, { hp });
-    this.views[defender].onEvent(event, this.fight.state(event.attacker));
-
     const by = this.fight.state(event.attacker);
+    const ko = hp <= 0;
+    this.showHit(event, by, ko);
+    this.outbox.push({ kind: 'fight', event, by, ko });
+    if (ko) useGameStore.setState({ phase: 'ko', ending: 'ko', winner: event.attacker, countdown: null });
+  }
+
+  /** The look of a hit (both laptops): the reaction, sparks, impact frames, camera punch, popup, K.O. drama. */
+  private showHit(event: FightEvent, by: Readonly<FighterState>, ko: boolean) {
+    if (!event.damage) return;
+    const defender = opponentOf(event.attacker);
+    this.views[defender].onEvent(event, by);
     const point = this.views[defender].worldJoint(by.height === 'body' || event.move === 'knee' ? 'neck' : 'head');
     if (by.height === 'body' || event.move === 'knee') point.y -= 0.08;
     const heavy = event.type === 'counter' || event.damage >= 10;
-    const ko = hp <= 0;
     this.effects.burst(point, event.type === 'blocked' ? 'blocked' : event.type === 'counter' ? 'counter' : 'hit');
     // Punch: impact frames on the big ones, the camera leaning into the hit.
     if (!ko && event.type === 'counter') {
@@ -377,7 +414,89 @@ export class Game {
       this.renderer.punch(point, 0.4, 0.7);
       this.renderer.slowMotion(KO_FREEZE + 1.4, 0.3);
       this.effects.burst(point, 'ko');
-      useGameStore.setState({ phase: 'ko', ending: 'ko', winner: event.attacker, countdown: null });
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Mirror: the client laptop draws the host's fight. The host sends who's fighting as what ('match'), a frame
+  // of engine state every tick, and the moments that need effects ('events'); the client runs no fight of its own.
+  // ---------------------------------------------------------------------------
+
+  /** Host: tell the client laptop who's fighting as what. */
+  private sendMatch() {
+    if (!this.hostSession?.connected) return;
+    const { players } = useGameStore.getState();
+    const entry = (id: PlayerId): MatchPlayer => {
+      const fighter = players[id].status === 'ready' ? this.fighters[id] : undefined;
+      return { name: players[id].name, fighter: fighter ? { ...fighter, brief: undefined } : null, hp: players[id].hp };
+    };
+    this.hostSession.send({ type: 'match', players: { p1: entry('p1'), p2: entry('p2') } });
+  }
+
+  /** Host: this tick's fight state, and anything that happened, to the client laptop. */
+  private sendFrame(stances: Record<PlayerId, Stance>, frozen: boolean) {
+    const session = this.hostSession;
+    const { phase, timeLeft } = useGameStore.getState();
+    if (!session?.connected || phase === 'lobby') {
+      this.outbox = [];
+      return;
+    }
+    if (this.outbox.length) session.send({ type: 'events', events: this.outbox });
+    this.outbox = [];
+    session.send({
+      type: 'frame',
+      frame: {
+        states: { p1: this.fight.state('p1'), p2: this.fight.state('p2') },
+        guard: { p1: stances.p1.guard, p2: stances.p2.guard },
+        distance: this.fight.distance(),
+        frozen,
+        timeLeft,
+      },
+    });
+  }
+
+  /** Client: load and spawn the fighters the host says are fighting. */
+  private mirrorMatch(players: Record<PlayerId, MatchPlayer>) {
+    for (const id of PLAYER_IDS) {
+      const p = players[id];
+      // P2 is this laptop's player: its name and status come from its own setup messages.
+      if (id !== localPlayerId('client')) {
+        updatePlayer(id, { name: p.name, status: p.fighter ? 'ready' : 'waiting', hp: p.hp, portraitUrl: p.fighter?.cardUrl ?? null });
+      }
+      const key = p.fighter ? `${p.fighter.id}:${p.fighter.glbUrl ?? ''}` : '';
+      if (key === (this.mirrorShown[id] ?? '')) continue;
+      this.mirrorShown[id] = key;
+      if (!p.fighter) this.views[id].setVisible(false);
+      else void this.loadFighter(id, p.fighter).then(() => this.spawn(id));
+    }
+  }
+
+  /** Client: effects for what just happened on the host. */
+  private mirrorEvents(events: MirrorEvent[]) {
+    for (const e of events) {
+      if (e.kind === 'fight') this.showHit(e.event, e.by, e.ko);
+      else if (e.kind === 'anticipate') this.views[e.player].anticipate(e.hand);
+      else if (e.player === localPlayerId('client')) useGameStore.setState({ lastMove: { text: e.text, at: performance.now() } });
+    }
+  }
+
+  /** Client: draw the host's latest frame (this laptop's own camera adds its player's live pose). */
+  private mirrorTick() {
+    const m = this.mirrored;
+    if (!m) return;
+    const { players, timeLeft, phase } = useGameStore.getState();
+    if (m.timeLeft !== timeLeft) useGameStore.setState({ timeLeft: m.timeLeft });
+    for (const id of PLAYER_IDS) if (players[id].hp !== m.states[id].hp) updatePlayer(id, { hp: m.states[id].hp });
+    if (m.frozen && phase === 'fighting') return;
+    for (const id of PLAYER_IDS) {
+      this.views[id].update({
+        state: m.states[id],
+        live: id === localPlayerId('client') ? this.client?.lastFrame ?? null : null,
+        guard: m.guard[id],
+        distance: m.distance,
+        opponentKo: m.states[opponentOf(id)].phase === 'ko',
+        dt: SIM_DT,
+      });
     }
   }
 
@@ -399,7 +518,8 @@ export class Game {
 }
 
 /** Name the last real move the camera read, for the camera picture-in-picture. */
-function showMove(intents: Intent[]) {
+function moveText(intents: Intent[]): string | null {
+  let last: string | null = null;
   for (const i of intents) {
     const text = i.kind === 'strike' ? `${i.limb.endsWith('L') ? 'Left' : 'Right'} ${i.style}`
       : i.kind === 'duck' ? 'Duck'
@@ -407,6 +527,7 @@ function showMove(intents: Intent[]) {
       : i.kind === 'jump' ? 'Jump'
       : i.kind === 'guard' && i.up ? 'Guard up'
       : null;
-    if (text) useGameStore.setState({ lastMove: { text, at: performance.now() } });
+    if (text) last = text;
   }
+  return last;
 }

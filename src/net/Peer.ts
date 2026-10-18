@@ -96,7 +96,7 @@ export class Peer {
 
   /** Poses go on the lossy channel, everything else on the reliable one. */
   send(msg: Message): void {
-    if (msg.type === 'pose') {
+    if (msg.type === 'pose' || msg.type === 'frame') {
       const ch = this.channels.poses;
       if (ch?.readyState === 'open' && ch.bufferedAmount < POSE_BUFFER_LIMIT) ch.send(JSON.stringify(msg));
       return;
