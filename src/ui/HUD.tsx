@@ -1,6 +1,7 @@
 import { useGameStore } from '../game/store';
 import type { PlayerId } from '../types';
 import { ACCENT } from './accent';
+import { GuardBar } from './GuardBar';
 import { HealthBar } from './HealthBar';
 
 /** Top bar: [portrait | hp / name]  VS  [hp / name | portrait] */
@@ -60,8 +61,9 @@ function PlayerHUD({ id }: { id: PlayerId }) {
       </div>
 
       <div className={`flex min-w-0 flex-1 flex-col gap-1.5 sm:gap-2 ${right ? 'items-end' : 'items-start'}`}>
-        <div className="w-full">
+        <div className="flex w-full flex-col gap-1">
           <HealthBar hp={player.hp} side={right ? 'right' : 'left'} />
+          {phase !== 'lobby' && <GuardBar guard={player.guard} lock={player.guardLock} side={right ? 'right' : 'left'} />}
         </div>
         <div className={`flex max-w-full items-stretch ${right ? 'flex-row-reverse' : ''}`}>
           <span className={`slant ${accent.bg} grid place-items-center px-3 font-display text-xs leading-none text-ink [--slant:6px] sm:text-sm`}>

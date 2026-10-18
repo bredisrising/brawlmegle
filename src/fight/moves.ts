@@ -65,6 +65,18 @@ export const FIGHT = {
    * kick is only the distance (the resolver), so both break a guard: lifting a leg always does what the player meant.
    */
   guardBreakers: ['kick', 'knee'] as readonly string[],
+  /**
+   * The guard wears out, so nobody can turtle forever: holding a block drains it (guardDrain per second) and every
+   * blocked hit takes a chunk (guardPerBlock). Empty: the guard is crushed, a short stagger and no blocking for
+   * guardLockout seconds while it refills. Let go and it comes back (guardRegen per second, after guardRegenDelay).
+   */
+  guardMax: 100,
+  guardDrain: 12,
+  guardPerBlock: 10,
+  guardRegen: 30,
+  guardRegenDelay: 0.5,
+  guardLockout: 2.5,
+  guardCrushStun: 20,
   /** Slip and duck stay effective this many frames. */
   evadeFrames: 15,
   /** Attacks thrown while busy wait this long for the fighter to be free (or to chain), so none get lost. */

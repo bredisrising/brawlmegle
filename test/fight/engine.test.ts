@@ -373,3 +373,33 @@ describe('kick breaks guard', () => {
     expect(first?.type).toBe('counter');
   });
 });
+
+describe('the guard wears out', () => {
+  test('holding a block the whole time crushes it: a stagger, then no blocking until it refills', () => {
+    const e = engineAt(0.7);
+    const held = run(e, Math.ceil((FIGHT.guardMax / FIGHT.guardDrain) * 60) + 5, {}, { p2: { guard: true } });
+    const crush = held.find((ev) => ev.type === 'guardCrush');
+    expect(crush?.attacker).toBe('p1');
+    expect(e.state('p2').guard).toBeLessThan(5);
+    expect(e.state('p2').guardLock).toBeGreaterThan(0);
+    // Guard still held up, but it's crushed: the jab lands.
+    const jab = run(e, 40, { 25: [attack('p1', 'jab', { hand: 'L', autoLunge: true })] }, { p2: { guard: true } });
+    expect(jab.some((ev) => ev.type === 'hit' || ev.type === 'counter')).toBe(true);
+    expect(jab.some((ev) => ev.type === 'blocked')).toBe(false);
+    // Once the lockout runs out it's back, full.
+    run(e, Math.round(FIGHT.guardLockout * 60), {}, {});
+    expect(e.state('p2').guardLock).toBe(0);
+    expect(e.state('p2').guard).toBeGreaterThan(90);
+    const later = run(e, 40, { 0: [attack('p1', 'jab', { hand: 'L', autoLunge: true })] }, { p2: { guard: true } });
+    expect(later.some((ev) => ev.type === 'blocked')).toBe(true);
+  });
+
+  test('blocked punches chip the guard; dropping it lets it refill', () => {
+    const e = engineAt(0.7);
+    run(e, 40, { 0: [attack('p1', 'jab', { hand: 'L', autoLunge: true })] }, { p2: { guard: true } });
+    const afterOne = e.state('p2').guard!;
+    expect(afterOne).toBeLessThan(FIGHT.guardMax - FIGHT.guardPerBlock + 1);
+    run(e, 120, {}, {});
+    expect(e.state('p2').guard).toBe(FIGHT.guardMax);
+  });
+});

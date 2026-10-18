@@ -16,6 +16,9 @@ export interface PlayerState {
   hp: number;
   /** Super meter 0..100 (full = a fireball is ready). */
   meter: number;
+  /** Guard 0..100 (it drains while blocking), and seconds until a crushed guard works again (0 = it works). */
+  guard: number;
+  guardLock: number;
   /** Generated hero portrait (from the forge pipeline), shown in the HUD. */
   portraitUrl: string | null;
   /** While forging: the stages the live preview shows (null when there's nothing to show). */
@@ -127,6 +130,8 @@ const initialPlayer = (id: PlayerId): PlayerState => ({
   statusDetail: '',
   hp: MAX_HP,
   meter: 0,
+  guard: 100,
+  guardLock: 0,
   portraitUrl: null,
   forge: null,
 });

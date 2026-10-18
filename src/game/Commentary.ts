@@ -187,6 +187,10 @@ export const TEMPLATES = {
     { voice: 'A', text: '[shouting] {a} smashes through the guard!' },
     { voice: 'A', text: "[excited] You can't just block against {a}! The leg goes right through!" },
   ],
+  guardCrush: [
+    { voice: 'A', text: "[shouting] The guard is gone! {d} can't block!" },
+    { voice: 'A', text: '[shouting] Guard crushed! Go get {d}, {a}!' },
+  ],
   danger: [
     { voice: 'A', text: '[excited] {d} is in serious trouble!' },
     { voice: 'A', text: '[shouting] One more clean hit and {d} is done!' },

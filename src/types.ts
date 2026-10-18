@@ -84,6 +84,9 @@ export type FighterState = {
   evadeDir?: Hand;
   /** Super meter, 0..FIGHT.maxMeter: a full one throws a fireball. */
   meter?: number;
+  /** Guard left, 0..FIGHT.guardMax, and frames until a crushed guard works again (0 = it works). */
+  guard?: number;
+  guardLock?: number;
 };
 
 /** A fireball in flight, for the director. */
@@ -91,7 +94,8 @@ export type Projectile = { id: number; owner: PlayerId; x: number };
 
 export type FightEvent = {
   t: number;
-  type: 'startup' | 'hit' | 'blocked' | 'whiff' | 'counter' | 'ko' | 'timeout';
+  /** guardCrush: the defender's guard ran out (attacker = the other fighter, who gets the opening). */
+  type: 'startup' | 'hit' | 'blocked' | 'whiff' | 'counter' | 'ko' | 'timeout' | 'guardCrush';
   attacker: PlayerId;
   move: string;
   damage?: number;

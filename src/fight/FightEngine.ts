@@ -40,6 +40,10 @@ type Fighter = {
   lastAttackAt: number;
   meter: number;
   sinceAttack: number; // seconds
+  /** Guard left (FIGHT.guardMax full), frames until a crushed guard works again, seconds since it was last up. */
+  guard: number;
+  guardLock: number;
+  sinceGuard: number;
 };
 
 const DT = 1 / 60;
@@ -72,6 +76,7 @@ export class FightEngine {
       return events;
     }
     for (const id of PLAYER_IDS) this.advance(id, events);
+    for (const id of PLAYER_IDS) this.wearGuard(id, stances[id], events);
     // Both swings resolve against the same moment, so a same-tick exchange is a trade, not a P1 win.
     const moment = this.snapshot();
     for (const id of PLAYER_IDS) this.resolve(id, stances, events, moment);
@@ -91,6 +96,7 @@ export class FightEngine {
     return {
       x: f.x, hp: f.hp, stamina: f.stamina, phase: f.phase, move: a?.move, frame: f.frame,
       hand: a?.hand, height: a?.height, length, evade: f.evade?.kind, evadeDir: f.evade?.dir, meter: f.meter,
+      guard: f.guard, guardLock: f.guardLock,
     };
   }
 
@@ -289,8 +295,8 @@ export class FightEngine {
       return;
     }
 
-    // You can block while free or already blocking, not mid-attack or while reeling from a hit.
-    const canBlock = before.phase === 'idle' || before.phase === 'blockstun';
+    // You can block while free or already blocking, not mid-attack, reeling from a hit, or with a crushed guard.
+    const canBlock = (before.phase === 'idle' || before.phase === 'blockstun') && g.guardLock === 0;
     const guarding = Boolean(stances[defenderId]?.guard) && canBlock;
     const guardBreak = guarding && FIGHT.guardBreakers.includes(a.move);
     if (guarding && !guardBreak) {
@@ -307,7 +313,9 @@ export class FightEngine {
       this.hitstop = Math.max(this.hitstop, 3);
       events.push({ t: this.now, type: 'blocked', attacker: id, move: a.move, damage: chip, hitstopFrames: 3 });
       this.knockback(defenderId, chip);
-      if (g.hp <= 0) this.ko(defenderId, id, a.move, events);
+      if (g.hp <= 0) return this.ko(defenderId, id, a.move, events);
+      g.guard -= FIGHT.guardPerBlock;
+      if (g.guard <= 0) this.crushGuard(defenderId, events);
       return;
     }
 
@@ -332,6 +340,38 @@ export class FightEngine {
     events.push({ t: this.now, type: counter ? 'counter' : 'hit', attacker: id, move: a.move, damage, hitstopFrames: stop, ...(guardBreak ? { guardBreak: true } : {}) });
     this.knockback(defenderId, damage);
     if (g.hp <= 0) this.ko(defenderId, id, a.move, events);
+  }
+
+  /** The guard drains while it's up and refills once it's down (FIGHT.guard*); a crushed one counts down its lockout. */
+  private wearGuard(id: PlayerId, stance: Stance | undefined, events: FightEvent[]) {
+    const f = this.fighters[id];
+    if (f.phase === 'ko') return;
+    if (f.guardLock > 0) {
+      f.guardLock--;
+      f.guard = FIGHT.guardMax * (1 - f.guardLock / Math.round(FIGHT.guardLockout * 60));
+      return;
+    }
+    if (stance?.guard && (f.phase === 'idle' || f.phase === 'blockstun')) {
+      f.sinceGuard = 0;
+      f.guard -= FIGHT.guardDrain * DT;
+      if (f.guard <= 0) this.crushGuard(id, events);
+    } else {
+      f.sinceGuard += DT;
+      if (f.sinceGuard > FIGHT.guardRegenDelay) f.guard = Math.min(FIGHT.guardMax, f.guard + FIGHT.guardRegen * DT);
+    }
+  }
+
+  /** Guard crush: a short stagger, and no blocking until the lockout runs out. */
+  private crushGuard(id: PlayerId, events: FightEvent[]) {
+    const f = this.fighters[id];
+    f.guard = 0;
+    f.guardLock = Math.round(FIGHT.guardLockout * 60);
+    if (f.phase === 'idle' || f.phase === 'blockstun') {
+      f.phase = 'hitstun';
+      f.stun = FIGHT.guardCrushStun;
+      f.frame = 0;
+    }
+    events.push({ t: this.now, type: 'guardCrush', attacker: opponentOf(id), move: 'guard' });
   }
 
   private gainMeter(id: PlayerId, amount: number) {
@@ -366,7 +406,7 @@ export class FightEngine {
           continue;
         }
         const spec = MOVES.fireball;
-        if (stances[defenderId]?.guard && (g.phase === 'idle' || g.phase === 'blockstun')) {
+        if (stances[defenderId]?.guard && (g.phase === 'idle' || g.phase === 'blockstun') && g.guardLock === 0) {
           const chip = Math.max(1, Math.round(spec.chip * s.scale * this.damageScale));
           g.hp = Math.max(0, g.hp - chip);
           g.phase = 'blockstun';
@@ -449,6 +489,7 @@ function fresh(x: number): Fighter {
   return {
     x, hp: FIGHT.maxHp, stamina: FIGHT.maxStamina, phase: 'idle', frame: 0,
     attack: null, stun: 0, evade: null, queue: [], chain: 0, meter: 0, mash: 0, lastLanded: false, lastAttackAt: -1, sinceAttack: 10,
+    guard: FIGHT.guardMax, guardLock: 0, sinceGuard: 10,
   };
 }
 

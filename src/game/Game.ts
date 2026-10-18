@@ -73,7 +73,7 @@ const NEXT_REPLAY_BACKSTOP_MS = 12_000;
 const playerId = () => (crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** Big moments with a template line ready for each side (Commentary TEMPLATES). */
-const MOMENTS = ['first', 'counter', 'combo', 'guardBreak', 'danger', 'ko', 'time'] as const;
+const MOMENTS = ['first', 'counter', 'combo', 'guardBreak', 'guardCrush', 'danger', 'ko', 'time'] as const;
 type Moment = (typeof MOMENTS)[number];
 
 const ARENA_CENTER = new THREE.Vector3(0, 0.5, 0);
@@ -424,7 +424,7 @@ export class Game {
       delete this.mirrorShown[id];
       this.views[id].reset();
       this.views[id].setVisible(false);
-      updatePlayer(id, { name: PLAYER_NAMES[id], status: 'waiting', statusDetail: '', portraitUrl: null, forge: null, hp: MAX_HP, meter: 0 });
+      updatePlayer(id, { name: PLAYER_NAMES[id], status: 'waiting', statusDetail: '', portraitUrl: null, forge: null, hp: MAX_HP, meter: 0, guard: 100, guardLock: 0 });
     }
     this.input.unassign('p2');
     this.mirrored = null;
@@ -1028,7 +1028,7 @@ export class Game {
     this.fightTicks = 0;
     for (const p of PLAYER_IDS) {
       this.views[p].reset();
-      updatePlayer(p, { hp: MAX_HP, meter: 0 });
+      updatePlayer(p, { hp: MAX_HP, meter: 0, guard: 100, guardLock: 0 });
     }
     this.input.unassign(id);
     this.views[id].setVisible(false);
@@ -1047,7 +1047,7 @@ export class Game {
     for (const p of PLAYER_IDS) {
       this.cpu[p]?.reset();
       this.views[p].reset();
-      updatePlayer(p, { hp: MAX_HP, meter: 0 });
+      updatePlayer(p, { hp: MAX_HP, meter: 0, guard: 100, guardLock: 0 });
     }
     this.input.source(id)?.stop();
     this.input.unassign(id);
@@ -1131,6 +1131,13 @@ export class Game {
   /** Engine event -> HP in the store, hit-stop, effects, popups. */
   private applyEvent(event: FightEvent) {
     const { players, phase } = useGameStore.getState();
+    if (phase === 'fighting' && event.type === 'guardCrush') {
+      const by = this.fight.state(event.attacker);
+      this.showHit(event, by, false);
+      this.outbox.push({ kind: 'fight', event, by, ko: false });
+      this.tickEvents.push({ kind: 'fight', event, by, ko: false });
+      return;
+    }
     if (phase !== 'fighting' || !event.damage) return;
 
     const defender = opponentOf(event.attacker);
@@ -1147,6 +1154,13 @@ export class Game {
 
   /** The look of a hit (both laptops): the reaction, sparks, impact frames, camera punch, popup, K.O. drama. */
   private showHit(event: FightEvent, by: Readonly<FighterState>, ko: boolean, replaying = false) {
+    // A guard held too long (or blocked too much) gives out: everyone should see why the blocks stopped working.
+    if (event.type === 'guardCrush' && !replaying) {
+      useGameStore.setState({ callout: { text: 'Guard crushed', key: performance.now() } });
+      this.announcer.crowd('ooh', 0.6);
+      this.sfx.play('whoosh', 0.6);
+      return;
+    }
     if (!event.damage) return;
     const defender = opponentOf(event.attacker);
     this.views[defender].onEvent(event, by);
@@ -1360,6 +1374,7 @@ export class Game {
     const { players } = useGameStore.getState();
     const a = event.attacker;
     const d = opponentOf(a);
+    if (event.type === 'guardCrush' && useGameStore.getState().phase === 'fighting') return this.call([this.momentLine('guardCrush', a)], true);
     if (!event.damage || useGameStore.getState().phase !== 'fighting') return;
     if (event.type === 'blocked') return this.blocked(d);
     this.blockStreak = { defender: null, n: 0, called: false };
@@ -1566,12 +1581,15 @@ export class Game {
     }
   }
 
-  /** Super meters into the store (only when the whole number changes, to spare the HUD re-renders). */
+  /** Super and guard meters into the store (only when the shown number changes, to spare the HUD re-renders). */
   private showMeters(states: Record<PlayerId, Readonly<FighterState>>) {
     const { players } = useGameStore.getState();
     for (const id of PLAYER_IDS) {
       const meter = Math.round(states[id].meter ?? 0);
-      if (meter !== players[id].meter) updatePlayer(id, { meter });
+      const guard = Math.round(states[id].guard ?? 100);
+      // A crushed guard's lockout, in tenths of a second.
+      const guardLock = Math.ceil((states[id].guardLock ?? 0) / 6) / 10;
+      if (meter !== players[id].meter || guard !== players[id].guard || guardLock !== players[id].guardLock) updatePlayer(id, { meter, guard, guardLock });
     }
   }
 
