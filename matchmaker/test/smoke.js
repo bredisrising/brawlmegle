@@ -151,6 +151,31 @@ try {
   assert.notEqual((await host3.next("room")).code, code, "a wrong token gets a new code");
   console.log("ok  host reclaims its code");
 
+  // Spectators: a screen watches a hosted room and gets what the host casts; the host hears how many watch.
+  const caster = await client();
+  caster.send({ type: "host" });
+  const castRoom = (await caster.next("room")).code;
+  const screen = await client();
+  screen.send({ type: "watch", code: castRoom.toLowerCase() });
+  assert.equal((await screen.next("watching")).code, castRoom);
+  assert.equal((await caster.next("watchers")).count, 1);
+  caster.send({ type: "cast", data: { type: "phase", phase: "fighting", countdown: null } });
+  assert.deepEqual((await screen.next("cast")).data, { type: "phase", phase: "fighting", countdown: null });
+  // Casting faster than the signaling rate limit (200 per 10 s) doesn't get the host kicked.
+  for (let i = 0; i < 250; i++) caster.send({ type: "cast", data: { type: "frame", i } });
+  let got = 0;
+  while (got < 50) {
+    await screen.next("cast");
+    got++;
+  }
+  const nowhere = await client();
+  nowhere.send({ type: "watch", code: "ZZZZ" });
+  assert.match((await nowhere.next("error")).message, /No room/);
+  screen.close();
+  assert.equal((await caster.next("watchers")).count, 0);
+  console.log("ok  spectators watch a hosted room");
+  for (const x of [caster, nowhere]) x.close();
+
   if (httpBase) {
     // Training-sample uploads: a `null` header used to crash the whole server.
     const bad = await fetch(`${httpBase}/samples`, { method: "POST", body: "null\n" });

@@ -25,6 +25,7 @@ export default function App() {
   const canvasRef = useRef<HTMLDivElement>(null);
   const [game, setGame] = useState<Game | null>(null);
   const screen = useGameStore((s) => s.screen);
+  const role = useGameStore((s) => s.role);
 
   useEffect(() => {
     const g = new Game(canvasRef.current!);
@@ -57,7 +58,7 @@ export default function App() {
                 <Countdown />
                 <KOOverlay />
                 <HUD />
-                <MoveGuide />
+                {role !== 'spectator' && <MoveGuide />}
                 <GameMenu />
                 <Walkout />
                 <Captions />

@@ -1,5 +1,6 @@
 import { config } from '../../src/config';
 import { Game } from '../../src/game/Game';
+import { SpectatorSession } from '../../src/game/SpectatorSession';
 import { useGameStore } from '../../src/game/store';
 import { RemoteSource } from '../../src/input';
 import { Peer } from '../../src/net/Peer';
@@ -334,6 +335,25 @@ async function runGameHost() {
       host.tick();
       return host.fight.state('p2').move === 'cross' ? true : undefined;
     }, "P2's cross on the host");
+  });
+
+  await test('game host: a watching screen gets the match, the phase and the fight (spectate)', async () => {
+    const seen = { match: 0, frames: 0 };
+    const watcher = new SpectatorSession(useGameStore.getState().roomCode!, {
+      match: () => seen.match++,
+      frame: () => seen.frames++,
+      events: () => {},
+    });
+    await watcher.connect();
+    await poll(() => (useGameStore.getState().watchers === 1 ? true : undefined), 'the host sees one watcher');
+    await poll(() => (seen.match > 0 ? true : undefined), 'the match sent to the watcher');
+    const host = g as unknown as { tick(): void };
+    await poll(() => {
+      host.tick();
+      return seen.frames >= 3 ? true : undefined;
+    }, 'frames cast to the watcher');
+    watcher.dispose();
+    await poll(() => (useGameStore.getState().watchers === 0 ? true : undefined), 'the watcher gone');
   });
 
   await test('game host: drop shows reconnecting; a rejoin keeps P2 and takes a fresh pose clock', async () => {

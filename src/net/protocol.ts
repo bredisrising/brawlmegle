@@ -14,7 +14,12 @@ export type SignalMessage =
   | { type: 'peer-joined'; iceServers: RTCIceServer[] } // server -> host: create the connection and send the offer
   | { type: 'peer-left' } // server -> host: client left signaling (also sent once P2P is up), room is open again
   | { type: 'signal'; data: RTCSessionDescriptionInit | RTCIceCandidateInit } // relayed to the other peer
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  // Spectate: a screen watches a hosted room; the host casts its fight to it through the server.
+  | { type: 'watch'; code: string } // spectator -> server
+  | { type: 'watching'; code: string } // server -> spectator
+  | { type: 'watchers'; count: number } // server -> host: how many screens watch its room
+  | { type: 'cast'; data: HostMessage }; // host -> server -> every watching screen
 
 /** Client -> host over the P2P data channels. */
 export type ClientMessage =

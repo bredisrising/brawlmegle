@@ -38,6 +38,7 @@ export class Peer {
   private readonly closeListeners = new Set<() => void>();
   private readonly connectListeners = new Set<() => void>();
   private readonly roomListeners = new Set<(code: string) => void>();
+  private readonly watcherListeners = new Set<(count: number) => void>();
   /** Remote ICE candidates that arrived before the remote description. */
   private readonly pendingIce: RTCIceCandidateInit[] = [];
   /** Chunked messages being reassembled, by chunk id. */
@@ -120,6 +121,17 @@ export class Peer {
     const cable = lan && (adapter === 'ethernet' || /^169\.254\./.test(local?.address ?? ''));
     const path = relay ? 'relay' : cable ? 'cable' : lan ? 'lan' : 'internet';
     return { rttMs: rtt === undefined ? null : Math.round(rtt * 1000), relay, path, address: local?.address };
+  }
+
+  /** Host: send a message to every screen watching this room (through the signaling server, see Spectate). */
+  cast(msg: HostMessage): void {
+    this.signaling.send({ type: 'cast', data: msg });
+  }
+
+  /** Host: how many screens watch this room, whenever it changes. */
+  onWatchers(cb: (count: number) => void): () => void {
+    this.watcherListeners.add(cb);
+    return () => this.watcherListeners.delete(cb);
   }
 
   get connected(): boolean {
@@ -330,6 +342,10 @@ export class Peer {
         this.roomCode = msg.code;
         this.roomWaiter?.resolve(msg.code);
         for (const cb of this.roomListeners) cb(msg.code);
+        return;
+      }
+      if (msg.type === 'watchers') {
+        for (const cb of this.watcherListeners) cb(msg.count);
         return;
       }
       if (msg.type === 'peer-joined') return await this.offer(msg.iceServers);

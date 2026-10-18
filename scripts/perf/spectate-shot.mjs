@@ -1,0 +1,28 @@
+import { chromium } from "playwright-core";
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const out = process.argv[2];
+const browser = await chromium.connectOverCDP(`http://127.0.0.1:${process.argv[3]}`); const ctx = await browser.newContext({ viewport: { width: 1100, height: 620 } });
+const host = await ctx.newPage();
+host.on("pageerror", (e) => console.log("host pageerror", e.message));
+await host.goto("http://localhost:5182/?input=mock&perf=1&record=0&video=0&walkout=0");
+await host.getByRole("button", { name: /Host/ }).click();
+await host.getByRole("button", { name: /Load fighter/ }).click();
+await host.locator("[data-fighter]").first().click();
+await host.waitForFunction(() => window.__brawl?.store.getState().roomCode, null, { timeout: 30000 });
+const code = await host.evaluate(() => window.__brawl.store.getState().roomCode);
+console.log("room", code);
+const tv = await ctx.newPage();
+tv.on("pageerror", (e) => console.log("tv pageerror", e.message));
+await tv.goto(`http://localhost:5182/?watch=${code}`);
+try { await tv.waitForFunction(() => /watching/i.test(document.body.innerText), null, { timeout: 15000 }); } catch (e) { console.log("tv text:", (await tv.evaluate(() => document.body.innerText)).slice(0, 300).replace(/\n/g, " | ")); await tv.screenshot({ path: `${out}-tv-stuck.png` }); }
+await tv.screenshot({ path: `${out}-tv-lobby.png` });
+console.log("watchers on host:", await host.evaluate(() => window.__brawl.store.getState().watchers));
+console.log("buttons:", await host.evaluate(() => [...document.querySelectorAll("button")].map((b) => b.innerText.trim()).join(" / ")));
+await host.getByRole("button", { name: /normal/i }).first().click();
+console.log("clicked cpu");
+await host.waitForFunction(() => window.__brawl.store.getState().phase === "fighting", null, { timeout: 180000 });
+await sleep(6000);
+await host.screenshot({ path: `${out}-host-fight.png` });
+await tv.screenshot({ path: `${out}-tv-fight.png` });
+console.log("tv phase:", await tv.evaluate(() => document.body.innerText.slice(0, 200).replace(/\n/g, " | ")));
+await ctx.close(); await browser.close();

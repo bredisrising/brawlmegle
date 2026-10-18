@@ -220,6 +220,52 @@ function joinRoom(client, room) {
 function reset(client) {
   unpair(client);
   stopWaiting(client);
+  stopWatching(client);
+}
+
+// Spectators: screens (a TV, a third laptop) watching a hosted room. The host casts its fight through here to them;
+// the two players' own laptops still talk peer to peer. Keyed by room code, so they survive the host reconnecting.
+const watchers = new Map();
+const MAX_WATCHERS = 8;
+const MAX_CASTS_PER_SECOND = 90;
+
+function watch(client, code) {
+  const key = code.toUpperCase();
+  const hostClient = hosted.get(key);
+  if (!hostClient || hostClient === client) return sendError(client, `No room with code ${code}`);
+  reset(client);
+  let set = watchers.get(key);
+  if (!set) watchers.set(key, (set = new Set()));
+  if (set.size >= MAX_WATCHERS) return sendError(client, "That room has enough screens watching");
+  set.add(client);
+  client.watching = key;
+  send(client, { type: "watching", code: key });
+  send(hostClient, { type: "watchers", count: set.size });
+}
+
+function stopWatching(client) {
+  const key = client.watching;
+  if (!key) return;
+  client.watching = null;
+  const set = watchers.get(key);
+  set?.delete(client);
+  if (set && set.size === 0) watchers.delete(key);
+  const hostClient = hosted.get(key);
+  if (hostClient) send(hostClient, { type: "watchers", count: set?.size ?? 0 });
+}
+
+/** Host -> every screen watching its room. Capped per second; dropped when nobody watches. */
+function cast(client, data) {
+  const set = client.hostCode && watchers.get(client.hostCode);
+  if (!set?.size) return;
+  const now = Date.now();
+  if (now - client.castWindow > 1000) {
+    client.castWindow = now;
+    client.casts = 0;
+  }
+  if (++client.casts > MAX_CASTS_PER_SECOND) return;
+  const out = JSON.stringify({ type: "cast", data });
+  for (const w of set) if (w.ws.readyState === w.ws.OPEN) w.ws.send(out);
 }
 
 /** Host/join flow: the host opens a room and shows its code; the room stays open so a dropped client can rejoin. */
@@ -244,6 +290,9 @@ function host(client, wanted, token) {
     client.hostCode = code;
   }
   send(client, { type: "room", code: client.hostCode, token: roomToken(client.hostCode), iceServers: iceServers(client.id) });
+  // Screens may already be watching this code (the host reconnected): tell it, so it casts to them.
+  const watching = watchers.get(client.hostCode)?.size ?? 0;
+  if (watching) send(client, { type: "watchers", count: watching });
 }
 
 function joinHosted(client, code) {
@@ -265,23 +314,30 @@ function stopHosting(client) {
 }
 
 function onMessage(client, raw) {
+  let msg;
+  try {
+    msg = JSON.parse(raw.toString());
+  } catch {
+    msg = null;
+  }
+  // A host casting its fight sends ~30 a second: that has its own cap (cast()), not the signaling rate limit.
+  if (msg?.type === "cast") return cast(client, msg.data);
+
   const now = Date.now();
   if (now - client.windowStart > RATE_WINDOW_MS) {
     client.windowStart = now;
     client.msgs = 0;
   }
   if (++client.msgs > RATE_MAX_MESSAGES) return client.ws.close(1008, "rate limit");
-
-  let msg;
-  try {
-    msg = JSON.parse(raw.toString());
-  } catch {
-    return sendError(client, "bad json");
-  }
+  if (!msg) return sendError(client, "bad json");
 
   switch (msg?.type) {
     case "host":
       host(client, msg.code, msg.token);
+      break;
+    case "watch":
+      if (typeof msg.code === "string" && ROOM_RE.test(msg.code)) watch(client, msg.code);
+      else sendError(client, "bad room code");
       break;
     case "join":
       if (typeof msg.code === "string") {
@@ -344,7 +400,7 @@ const wss = new WebSocketServer({
 
 wss.on("connection", (ws) => {
   /** @type {Client} */
-  const client = { id: crypto.randomUUID(), ws, peer: null, waiting: null, hostCode: null, alive: true, msgs: 0, windowStart: Date.now() };
+  const client = { id: crypto.randomUUID(), ws, peer: null, waiting: null, hostCode: null, watching: null, alive: true, msgs: 0, windowStart: Date.now(), casts: 0, castWindow: 0 };
   clients.add(client);
   ws.on("pong", () => (client.alive = true));
   ws.on("message", (raw) => onMessage(client, raw));

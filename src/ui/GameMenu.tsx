@@ -15,6 +15,8 @@ export function GameMenu() {
   const role = useGameStore((s) => s.role);
   const link = useGameStore((s) => s.link);
   const connection = useGameStore((s) => s.connection);
+  const watchers = useGameStore((s) => s.watchers);
+  const roomCode = useGameStore((s) => s.roomCode);
   const replay = useGameStore((s) => s.replay);
   const walkout = useGameStore((s) => s.walkout);
   const [open, setOpen] = useState(false);
@@ -36,8 +38,8 @@ export function GameMenu() {
     <div className="pointer-events-auto absolute bottom-14 right-4 flex flex-col items-end gap-2">
       {open && (
         <div className="animate-rise flex flex-col items-end gap-3 bg-ink/90 px-4 py-3">
-          {role !== 'client' && <TextButton onClick={() => (setOpen(false), game.changeFighter())}>Change fighter</TextButton>}
-          {role !== 'client' && (
+          {role === 'host' && <TextButton onClick={() => (setOpen(false), game.changeFighter())}>Change fighter</TextButton>}
+          {role === 'host' && (
             <TextButton
               title="Saves both players' movement points (no video) after each round, to improve move detection"
               onClick={() => {
@@ -48,15 +50,17 @@ export function GameMenu() {
               Record for training: {recording ? 'on' : 'off'}
             </TextButton>
           )}
-          <TextButton
-            title="Also saves this laptop's camera video each round (for checking moves); next round on"
-            onClick={() => {
-              setVideoEnabled(!video);
-              setVideo(!video);
-            }}
-          >
-            Camera video: {video ? 'on' : 'off'}
-          </TextButton>
+          {role !== 'spectator' && (
+            <TextButton
+              title="Also saves this laptop's camera video each round (for checking moves); next round on"
+              onClick={() => {
+                setVideoEnabled(!video);
+                setVideo(!video);
+              }}
+            >
+              Camera video: {video ? 'on' : 'off'}
+            </TextButton>
+          )}
           <TextButton onClick={() => window.location.reload()}>Back to title</TextButton>
         </div>
       )}
@@ -74,7 +78,16 @@ export function GameMenu() {
         >
           Menu [Esc]
         </button>
-        {connection && (
+        {role === 'host' && watchers > 0 && (
+          <span className="bg-ink/80 px-3 py-1.5 font-cond text-xs font-bold uppercase tracking-[0.2em] text-paper/70" title="Screens showing this fight (Watch on the title screen)">
+            {watchers} watching
+          </span>
+        )}
+        {role === 'spectator' ? (
+          <span className={`bg-ink/80 px-3 py-1.5 font-cond text-xs font-bold uppercase tracking-[0.2em] ${connection === 'reconnecting' ? 'text-dmg' : 'text-paper/70'}`}>
+            {connection === 'reconnecting' ? 'Reconnecting…' : `Watching ${roomCode ?? ''}`}
+          </span>
+        ) : connection && (
           <span className={`bg-ink/80 px-3 py-1.5 font-cond text-xs font-bold uppercase tracking-[0.2em] ${tone}`} title={`Round trip to the other laptop${link?.address ? ` (from ${link.address})` : ''}`}>
             {connection === 'reconnecting' ? 'Reconnecting…' : `${PATH_LABEL[link?.path ?? 'internet']} ${rtt ?? '–'} ms`}
           </span>

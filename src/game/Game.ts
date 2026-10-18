@@ -27,7 +27,8 @@ import {
 } from '../types';
 import { COUNTDOWN_FROM, KO_FREEZE, MAX_HP, PLAYER_COLORS, PLAYER_NAMES, ROUND_SECONDS, SIM_DT } from './constants';
 import { ClientSession } from './ClientSession';
-import type { MatchPlayer, MirrorEvent, MirrorFrame } from '../net/protocol';
+import { SpectatorSession } from './SpectatorSession';
+import type { HostMessage, MatchPlayer, MirrorEvent, MirrorFrame } from '../net/protocol';
 import { HostSession } from './HostSession';
 import { MatchRecorder, recordingEnabled } from './MatchRecorder';
 import { HighlightRecorder } from './HighlightRecorder';
@@ -106,12 +107,16 @@ export class Game {
   private clock = ROUND;
   private hostSession: HostSession | null = null;
   private client: ClientSession | null = null;
+  /** A screen that only watches a hosted room (spectate). */
+  private spectator: SpectatorSession | null = null;
   /** Host: P2's moves as read on the client laptop (newer clients read their own camera), waiting for the tick. */
   private remoteIntents: Intent[] = [];
   private remoteStance: { stance: Stance; at: number } | null = null;
   /** Host: each slot's fighter, for the client laptop's copy of the fight; and what to tell it this tick. */
   private readonly fighters: Partial<Record<PlayerId, ForgedFighter>> = {};
   private outbox: MirrorEvent[] = [];
+  /** Alternates, so watching screens get every other frame. */
+  private castTick = 0;
   /** Client: the host's latest fight frame, and which fighter models are showing. */
   private mirrored: MirrorFrame | null = null;
   private readonly mirrorShown: Partial<Record<PlayerId, string>> = {};
@@ -179,7 +184,7 @@ export class Game {
       if (s.phase === 'ko' && prev.phase !== 'ko') {
         void this.recorder.stop({ winner: s.winner, ending: s.ending });
         this.announceFinish(s.winner, s.ending);
-        if (!this.client) {
+        if (!this.mirroring) {
           // The CPU wears someone else's fighter: only human sides get a record.
           recordMatch({ p1: this.cpu.p1 ? undefined : this.fighters.p1, p2: this.cpu.p2 ? undefined : this.fighters.p2 }, s.winner);
           this.callFinish(s.winner, s.ending);
@@ -193,12 +198,12 @@ export class Game {
         this.announcer.crowd('cheer', 0.4);
       }
       // A new round: forget the last one's combos and first hit.
-      if (s.countdown === 0 && !this.client && recordingEnabled()) this.startRecording();
+      if (s.countdown === 0 && !this.mirroring && recordingEnabled()) this.startRecording();
       if (s.countdown === COUNTDOWN_FROM) {
         this.commentary.hush();
         this.firstCalled = false;
         this.dangerCalled = {};
-        if (!this.client) this.callIntro();
+        if (!this.mirroring) this.callIntro();
         this.stopReplay();
         this.firstHitDone = false;
         this.combo.player = null;
@@ -239,6 +244,7 @@ export class Game {
       rematch: () => this.rematch(),
       connected: () => this.sendMatch(),
       skip: () => this.skipForgeWait('p2'),
+      watched: () => this.sendMatch(),
       read: (intents, stance) => {
         this.remoteIntents.push(...intents);
         this.remoteStance = { stance: { ...stance, player: 'p2' }, at: performance.now() };
@@ -272,6 +278,37 @@ export class Game {
       console.warn('VITE_SIGNAL_URL not set: the client flow runs offline on this laptop');
     }
     useGameStore.setState({ role: 'client', roomCode: code, screen: 'avatar' });
+  }
+
+  /**
+   * Title screen: "Watch" (spectate). This screen shows a hosted room's fight with no camera and no player of its own:
+   * a TV or a third laptop next to the two players. Throws the server's message for a bad code.
+   */
+  watch(code: string): Promise<void> {
+    // One watch at a time (a double tap, or React running the ?watch= effect twice in dev); a failed one can retry.
+    this.watchStart ??= this.startWatching(code).catch((err) => {
+      this.watchStart = null;
+      throw err;
+    });
+    return this.watchStart;
+  }
+
+  private watchStart: Promise<void> | null = null;
+
+  private async startWatching(code: string) {
+    const session = new SpectatorSession(code.toUpperCase(), {
+      match: (players) => this.mirrorMatch(players),
+      frame: (frame) => (this.mirrored = frame),
+      events: (events) => this.mirrorEvents(events),
+    });
+    await session.connect();
+    this.spectator = session;
+    useGameStore.setState({ role: 'spectator', roomCode: session.code, connection: 'open', screen: 'game' });
+  }
+
+  /** This laptop draws someone else's fight (the client laptop, or a watching screen) instead of running one. */
+  private get mirroring() {
+    return this.client !== null || this.spectator !== null;
   }
 
   /** Avatar screen: the player on THIS laptop scanned, went masked, or picked a saved fighter. */
@@ -352,7 +389,7 @@ export class Game {
   /** Any key or click during the walkout (host): straight to ROUND 1. The client laptop follows the countdown. */
   private skipWalkout() {
     const { phase, countdown } = useGameStore.getState();
-    if (this.client || phase !== 'countdown' || countdown !== COUNTDOWN_FROM) return;
+    if (this.mirroring || phase !== 'countdown' || countdown !== COUNTDOWN_FROM) return;
     this.phaseTimer = Infinity;
   }
 
@@ -488,6 +525,7 @@ export class Game {
   rematch() {
     // On the client laptop the host runs the fight: ask it.
     if (this.client) return this.client.requestRematch();
+    if (this.spectator) return; // a watching screen doesn't run the match
     this.stopReplay();
     this.fight.reset();
     this.fightTicks = 0;
@@ -510,6 +548,7 @@ export class Game {
     clearInterval(this.linkTimer);
     this.hostSession?.dispose();
     this.client?.dispose();
+    this.spectator?.dispose();
     for (const id of PLAYER_IDS) {
       this.input.source(id)?.stop(); // release the camera, not just the hub's subscription
       this.input.unassign(id);
@@ -549,7 +588,7 @@ export class Game {
   /** One fixed 60 Hz step. */
   private tick() {
     if (this.replay) return this.replayTick();
-    if (this.client) return this.mirrorTick();
+    if (this.mirroring) return this.mirrorTick();
     const { phase, countdown } = useGameStore.getState();
     this.phaseTimer += SIM_DT;
 
@@ -656,7 +695,7 @@ export class Game {
    * laptop can only go back to the title: the host owns the match.
    */
   changeFighter() {
-    if (this.client) return void window.location.reload();
+    if (this.client || this.spectator) return void window.location.reload();
     const id = localPlayerId(useGameStore.getState().role);
     this.stopReplay();
     this.fight.reset();
@@ -840,7 +879,7 @@ export class Game {
   /** Host or Practice (not Training, not the client laptop): record the replay for the title screen's reel. */
   private startHighlight(finish: FightEvent) {
     const { training, players } = useGameStore.getState();
-    if (this.client || training || !HighlightRecorder.supported()) return;
+    if (this.mirroring || training || !HighlightRecorder.supported()) return;
     const side = (id: PlayerId) => ({ id: this.fighters[id]?.id, name: players[id].name.replace(/\s*\(CPU[^)]*\)$/, ''), cpu: !!this.cpu[id] });
     const winner = finish.attacker;
     this.highlight.start(this.renderer.renderer.domElement, {
@@ -997,26 +1036,33 @@ export class Game {
 
   /** Host: tell the client laptop who's fighting as what. */
   private sendMatch() {
-    if (!this.hostSession?.connected) return;
+    const session = this.hostSession;
+    if (!session || (!session.connected && !session.watching)) return;
     const { players } = useGameStore.getState();
     const entry = (id: PlayerId): MatchPlayer => {
       const fighter = players[id].status === 'ready' ? this.fighters[id] : undefined;
       return { name: players[id].name, fighter: fighter ? { ...fighter, brief: undefined } : null, hp: players[id].hp };
     };
-    this.hostSession.send({ type: 'match', players: { p1: entry('p1'), p2: entry('p2') } });
+    const msg: HostMessage = { type: 'match', players: { p1: entry('p1'), p2: entry('p2') } };
+    session.send(msg);
+    session.cast(msg);
   }
 
   /** Host: this tick's fight state, and anything that happened, to the client laptop. */
   private sendFrame(stances: Record<PlayerId, Stance>, frozen: boolean) {
     const session = this.hostSession;
     const { phase, timeLeft } = useGameStore.getState();
-    if (!session?.connected || phase === 'lobby') {
+    if (!session || (!session.connected && !session.watching) || phase === 'lobby') {
       this.outbox = [];
       return;
     }
-    if (this.outbox.length) session.send({ type: 'events', events: this.outbox });
+    if (this.outbox.length) {
+      const events: HostMessage = { type: 'events', events: this.outbox };
+      session.send(events);
+      session.cast(events);
+    }
     this.outbox = [];
-    session.send({
+    const frame: HostMessage = {
       type: 'frame',
       frame: {
         states: { p1: this.fight.state('p1'), p2: this.fight.state('p2') },
@@ -1026,15 +1072,19 @@ export class Game {
         timeLeft,
         projectiles: [...this.fight.projectiles()],
       },
-    });
+    };
+    session.send(frame);
+    // Watching screens get every other tick (30 a second through the server); their mirror holds the last one.
+    if ((this.castTick = (this.castTick + 1) % 2) === 0) session.cast(frame);
   }
 
   /** Client: load and spawn the fighters the host says are fighting. */
   private mirrorMatch(players: Record<PlayerId, MatchPlayer>) {
     for (const id of PLAYER_IDS) {
       const p = players[id];
-      // P2 is this laptop's player: its name and status come from its own setup messages.
-      if (id !== localPlayerId('client')) {
+      // P2 is the client laptop's own player: its name and status come from its own setup messages. A watching screen
+      // has no player of its own: both come from the host.
+      if (this.spectator || id !== localPlayerId('client')) {
         updatePlayer(id, { name: p.name, status: p.fighter ? 'ready' : 'waiting', hp: p.hp, portraitUrl: p.fighter?.cardUrl ?? null });
       }
       const key = p.fighter ? `${p.fighter.id}:${p.fighter.glbUrl ?? ''}` : '';
@@ -1055,7 +1105,7 @@ export class Game {
         if (e.cancel) this.views[e.player].cancelTell(e.hand);
         else this.views[e.player].anticipate(e.hand);
       }
-      else if (e.player === localPlayerId('client')) useGameStore.setState({ lastMove: { text: e.text, at: performance.now() } });
+      else if (this.client && e.player === localPlayerId('client')) useGameStore.setState({ lastMove: { text: e.text, at: performance.now() } });
     }
   }
 

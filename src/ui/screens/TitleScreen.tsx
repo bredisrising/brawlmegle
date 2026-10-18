@@ -42,6 +42,20 @@ export function TitleScreen() {
     e.preventDefault();
     if (code.length === 4) run(() => game.join(code));
   };
+  const watchCode = () => {
+    if (code.length === 4) run(() => game.watch(code));
+  };
+
+  // `?watch=ABCD`: a screen set up to show a room's fight (a TV or a third laptop) goes straight to watching it.
+  useEffect(() => {
+    const wanted = new URLSearchParams(window.location.search).get('watch')?.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
+    if (wanted?.length === 4) {
+      setCode(wanted);
+      void run(() => game.watch(wanted));
+    }
+    // Once, on load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="tex-hatch pointer-events-auto absolute inset-0 overflow-hidden bg-ink">
@@ -96,11 +110,19 @@ export function TitleScreen() {
                   autoComplete="off"
                   className="w-full border-b-[6px] border-p2 bg-paper py-3 text-center font-display text-6xl tracking-[0.3em] text-ink caret-dmg outline-none placeholder:text-ink/15"
                 />
-                <div className="flex items-center justify-between gap-6">
+                <p className="font-cond text-sm font-semibold uppercase tracking-[0.12em] text-paper/55">
+                  Join to play as Player 2. Watch to show the fight on this screen (no camera).
+                </p>
+                <div className="flex flex-wrap items-center justify-between gap-4">
                   <TextButton onClick={() => setMode('pick')}>← Back</TextButton>
-                  <ArcadeButton type="submit" color="bg-p2" disabled={busy || code.length !== 4}>
-                    Join
-                  </ArcadeButton>
+                  <div className="flex gap-3">
+                    <ArcadeButton type="button" color="bg-paper" disabled={busy || code.length !== 4} onClick={watchCode}>
+                      Watch
+                    </ArcadeButton>
+                    <ArcadeButton type="submit" color="bg-p2" disabled={busy || code.length !== 4}>
+                      Join
+                    </ArcadeButton>
+                  </div>
                 </div>
               </form>
             ) : null}

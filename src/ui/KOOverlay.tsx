@@ -38,11 +38,13 @@ export function KOOverlay() {
       </div>
 
       <div className="animate-rise mt-8 flex flex-col items-center gap-5 [animation-delay:700ms]">
-        <ArcadeButton size="lg" onClick={() => game.rematch()}>
-          Rematch
-        </ArcadeButton>
+        {role !== 'spectator' && (
+          <ArcadeButton size="lg" onClick={() => game.rematch()}>
+            Rematch
+          </ArcadeButton>
+        )}
         <div className="flex gap-6">
-          {role !== 'client' && <TextButton onClick={() => game.changeFighter()}>Change fighter</TextButton>}
+          {role === 'host' && <TextButton onClick={() => game.changeFighter()}>Change fighter</TextButton>}
           <TextButton onClick={() => window.location.reload()}>Title</TextButton>
         </div>
       </div>

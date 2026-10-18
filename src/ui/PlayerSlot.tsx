@@ -26,7 +26,9 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
   const right = id === 'p2';
   const accent = ACCENT[id];
   const busy = player.status === 'scanning' || player.status === 'forging';
-  const remote = id !== localPlayerId(role);
+  // A watching screen (spectate) has no player of its own and no controls: both slots just show the players.
+  const watching = role === 'spectator';
+  const remote = watching || id !== localPlayerId(role);
 
   const rejoining = remote && connection === 'reconnecting';
 
@@ -89,7 +91,7 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
               {accent.tag}
             </span>
             <span className="slant -mx-1 bg-paper px-4 py-1.5 font-cond text-sm font-extrabold uppercase tracking-[0.25em] text-ink [--slant:8px]">
-              {busy ? player.status : remote ? (connection === 'open' ? 'Challenger connected' : 'Waiting for challenger') : 'Waiting'}
+              {busy ? player.status : watching ? 'Getting ready' : remote ? (connection === 'open' ? 'Challenger connected' : 'Waiting for challenger') : 'Waiting'}
             </span>
           </div>
 
@@ -121,7 +123,7 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
                   right={right}
                 />
               )}
-              {player.status === 'forging' && !remote && (
+              {player.status === 'forging' && !remote && !watching && (
                 <TextButton onClick={() => game.skipForgeWait(id)} title="Fight as a stand-in now; your fighter materializes in when it's ready">
                   Don't wait: fight now
                 </TextButton>
@@ -129,7 +131,7 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
             </div>
           )}
 
-          {!busy && remote && (
+          {!busy && remote && !watching && (
             <div className={`animate-rise flex flex-col gap-3 [animation-delay:160ms] ${right ? 'items-end' : 'items-start'}`}>
               <p className="font-cond text-lg font-semibold uppercase tracking-[0.15em] text-paper/70">
                 {connection === 'open' ? (
@@ -153,7 +155,7 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
             <p className="border-l-4 border-dmg bg-ink-2 px-3 py-2 font-semibold text-paper">{player.statusDetail}</p>
           )}
 
-          {!busy && remote && connection !== 'open' && (
+          {!busy && remote && !watching && connection !== 'open' && (
             <div className={`animate-rise flex flex-col gap-2 [animation-delay:240ms] ${right ? 'items-end' : 'items-start'}`}>
               <p className="font-cond text-sm font-semibold uppercase tracking-[0.2em] text-paper/60">No one around? Fight the CPU</p>
               <div className="flex flex-wrap gap-2">
@@ -166,7 +168,7 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
             </div>
           )}
 
-          {!busy && remote && import.meta.env.DEV && (
+          {!busy && remote && !watching && import.meta.env.DEV && (
             <div className="animate-rise [animation-delay:240ms]">
               <ArcadeButton color={accent.bg} onClick={() => game.addTestPlayer(id)}>
                 Add test player

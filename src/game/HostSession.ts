@@ -27,6 +27,8 @@ export type HostHooks = {
   skip?: () => void;
   /** P2's moves as read on the client laptop (intents and/or the latest stance). */
   read?: (intents: Intent[], stance: Stance) => void;
+  /** A screen started watching the room (spectate): it needs the match state. */
+  watched?: () => void;
 };
 type Deferred<T> = { resolve: (value: T) => void; reject: (err: Error) => void };
 
@@ -55,6 +57,8 @@ export class HostSession {
   private scan: Deferred<ScanFrames> | null = null;
   private lastFighter = '';
   private lastPhase = '';
+  /** Screens watching this room (spectate). */
+  private watchers = 0;
   private readonly cleanup: (() => void)[] = [];
 
   constructor(input: InputHub, setup: SetupRemote, private readonly hooks: HostHooks = {}) {
@@ -72,6 +76,16 @@ export class HostSession {
     if (this.peer.connected) this.peer.send(msg);
   }
 
+  /** Whether any screen watches this room (spectate). */
+  get watching() {
+    return this.watchers > 0;
+  }
+
+  /** Send to every screen watching this room, if any (through the signaling server). */
+  cast(msg: HostMessage) {
+    if (this.watchers > 0) this.peer.cast(msg);
+  }
+
   /** Opens the room. Resolves with its code, or '' while signaling is unreachable (the code arrives via the store later). */
   async open(): Promise<string> {
     this.cleanup.push(
@@ -79,6 +93,14 @@ export class HostSession {
       this.peer.onConnected(this.onConnected),
       this.peer.onClose(this.onDrop),
       this.peer.onRoom((roomCode) => useGameStore.setState({ roomCode })),
+      this.peer.onWatchers((count) => {
+        const more = count > this.watchers;
+        this.watchers = count;
+        useGameStore.setState({ watchers: count });
+        if (!more) return;
+        this.sendPhase(true);
+        this.hooks.watched?.();
+      }),
       useGameStore.subscribe((s, prev) => {
         if (s.phase !== prev.phase || s.countdown !== prev.countdown || s.winner !== prev.winner || s.ending !== prev.ending) this.sendPhase();
         if (s.players[REMOTE] !== prev.players[REMOTE]) this.sendFighter();
@@ -228,12 +250,14 @@ export class HostSession {
   }
 
   private sendPhase(force = false) {
-    if (!this.peer.connected) return;
+    if (!this.peer.connected && !this.watching) return;
     const { phase, countdown, winner, ending } = useGameStore.getState();
     const key = `${phase}:${countdown}:${winner}:${ending}`;
     if (!force && key === this.lastPhase) return;
     this.lastPhase = key;
-    this.peer.send({ type: 'phase', phase, countdown, winner, ending });
+    const msg: HostMessage = { type: 'phase', phase, countdown, winner, ending };
+    this.send(msg);
+    this.cast(msg);
   }
 
   /**

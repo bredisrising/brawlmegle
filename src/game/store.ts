@@ -63,6 +63,8 @@ export interface GameState {
   caption: { voice: 'A' | 'B'; text: string; key: number } | null;
   /** The P2P link to the other laptop: round trip (ms) and the path (cable, LAN, internet or a TURN relay). */
   link: LinkStats | null;
+  /** Host: how many screens watch this room (spectate). */
+  watchers: number;
   /** This laptop's camera is being recorded for training right now (the REC dot). */
   recordingVideo: boolean;
   /** Training: no opponent fighting back, no clock, health and meter refill. */
@@ -108,6 +110,7 @@ export const useGameStore = create<GameState>(() => ({
   recordingVideo: false,
   training: false,
   link: null,
+  watchers: 0,
   caption: null,
   lastMove: null,
 }));

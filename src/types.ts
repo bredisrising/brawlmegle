@@ -9,7 +9,8 @@ export const PLAYER_IDS: readonly PlayerId[] = ['p1', 'p2'];
 export const opponentOf = (id: PlayerId): PlayerId => (id === 'p1' ? 'p2' : 'p1');
 
 /** Which laptop this is. Host = the game + P1, client = scanner/streamer for P2. */
-export type Role = 'host' | 'client';
+/** host: runs the fight. client: the other player's laptop. spectator: a screen that only watches (no camera). */
+export type Role = 'host' | 'client' | 'spectator';
 
 export type Phase = 'lobby' | 'countdown' | 'fighting' | 'ko';
 
