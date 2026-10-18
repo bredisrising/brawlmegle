@@ -191,7 +191,7 @@ lampham got fixed.
 
 ### Rigs that collapsed onto one bone (fixed)
 
-Three of 14 GPU rigs (dylan HQ, lamdestroyer, lampham) came out with nearly all the weight on one bone: Spine1 owned
+Three GPU rigs (dylan HQ, lamdestroyer, lampham) came out with nearly all the weight on one bone: Spine1 owned
 75% of dylan, RightLeg 97% of lamdestroyer, LeftUpLeg 43% of lampham. The joints were fine; the skin wasn't.
 
 - **Cause:** TRELLIS.2's meshes are hollow: a 2-3 mm double-walled shell around an empty inside (every ray through the
@@ -204,9 +204,19 @@ Three of 14 GPU rigs (dylan HQ, lamdestroyer, lampham) came out with nearly all 
 - **Fix (`rig_blender.py`, `rig_check.py`):** the proxy must cover the body and stay in one piece, and the weights
   must pass a check (each limb's vertices owned by that limb, each body part's share near what its geometry gives it,
   no bone owning the mesh). Otherwise the next path: bone heat on a solid built by voxel flood fill (the surface
-  thickened by a voxel to close gaps, everything the outside can't reach filled), then envelope weights (nearest bone
-  segment, blended over 3 cm at each joint, smoothed over the surface). The box then runs the game's rig check and
-  tries the next attempt plan if it fails. The 19 rigs that were fine come out byte-identical.
+  thickened by a voxel to close gaps, everything the outside can't reach filled), then envelope weights. The box then
+  runs the game's rig check (`forge/rigcheck.js`) and tries the next attempt plan if it fails. The rigs that were
+  fine come out byte-identical.
+- **Clothes:** four synthetic test fighters (a knee-length dress, a hijab with a long skirt, an oversized hoodie, a
+  tank top) failed 3 of 4 the same day. Bone heat treats a skirt as a solid between the legs and a drape as part of
+  whatever bone is nearest. The envelope pins only the vertices snug around a bone (within 1.6x the 10th percentile
+  of that bone's nearest-vertex distances, clearly nearer it than any other body part) and fills every other vertex
+  with the smoothest weights the surface allows between the pins (a harmonic fill, conjugate gradients over the
+  welded mesh). A skirt then blends from the hips into both thighs instead of splitting down the middle. On the 23
+  live fighters plus the 4 test ones, the box's attempt loop passes all 27 (end to end through server.py, rig check
+  on the optimized GLB it sends): 20 on plain bone heat, 3 on the flood-filled solid, the dress, hoodie and a Tripo
+  model on the envelope at attempt 2, the hijab on attempt 1's envelope. Known limit: the hijab's loose tail that
+  hangs beside the right upper arm still follows the arm more than the head.
 
 ## The box
 
