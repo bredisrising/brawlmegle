@@ -35,7 +35,9 @@ The orchestrator in practice (camera -> on screen, ~180 ms from the first sign o
   and passes `headStart` = frames the wind-up has already been on screen; the engine counts them toward
   startup (FIGHT.maxHeadStart / minStartup).
 - FightEngine queues attacks thrown while busy (FIGHT.bufferFrames, queueSize) and lets punches chain out of
-  recovery (immediately on hit/block, from half recovery on a whiff), so fast combos all come out.
+  recovery (immediately on a hit, from half recovery on a whiff, never off a block), so fast combos all come out.
+  Hitting a guard costs the attacker (FIGHT.blockRecovery, blockCost; counts toward the mash penalty), so the
+  blocker moves first.
 - test/fight/orchestrator.test.ts runs real guided recordings through all of it and prints what was thrown.
 
 Also in the fight:
@@ -48,11 +50,14 @@ Also in the fight:
   `?walkout=0` skips it. Music: public/walkout/walkout.mp3 (original, scripts/make-walkout-music.mjs); drop in
   public/walkout/custom.mp3 (+ optional custom.json `{"start": s, "drop": s, "beats": {"p1","p2","two","vs","end"}}`:
   where to start, and when after that fighter 1's shot or every cut lands) to use your own track (both gitignored).
-- Super: a meter fills from landing hits (FIGHT.meterOn*); with it full, holding both fists up over the head (the
-  reader's `special` intent) throws a fireball, a projectile the engine flies, that can be blocked or ducked.
+- Super: removed from play (its overhead gesture fired on blocks). The engine still has the meter and fireball
+  projectile (FIGHT.meterOn*, fireball in MOVES) if a better gesture brings it back; nothing triggers it now.
+- K.O.: the loser is a ragdoll (director/ragdoll.ts: Verlet joints, fixed 120 Hz steps, thrown by the finishing blow,
+  no randomness, so both laptops and the replay show the same fall).
 - Commentators (game/Commentary.ts): the host picks the moments (react/callIntro/callFinish in Game.ts): instant
   template lines for big moments, LLM-written intro and K.O. lines from the forge server (POST /api/commentary, using
-  the fighters' forge briefs), voiced through GET /api/tts (OpenAI TTS, cached) with captions; mirrored as `call` events.
+  the fighters' forge briefs), voiced through GET /api/tts (ElevenLabs eleven_v3, OpenAI fallback, cached; voices
+  only with `?voices=1`, captions always) ; mirrored as `call` events. Announcer barks and crowd: public/announcer/.
 - K.O. replay: both laptops keep the last ~4 s as drawn and replay the finish slowly from a sweeping camera.
 - Highlights (game/HighlightRecorder.ts): the laptop running the fight (host or Practice; not Training, the client or
   phones) records the K.O. replay off the WebGL canvas (960x540 VP9, ~1.2 MB) and uploads it with who, the move and
