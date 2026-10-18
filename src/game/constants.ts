@@ -11,6 +11,11 @@ export const ROUND_SECONDS = 60;
 export const FIGHTER_HEIGHT = 1;
 /** Display-only scale applied to each fighter on screen. Models, poses and the fight line stay in 1 m units. */
 export const FIGHTER_SCALE = 0.75;
+/**
+ * Screen meters per fight-line meter. The engine's ranges are tuned for play, not anatomy, so the director draws
+ * the fight line shorter: fighters stand close enough that a punch in range visibly reaches.
+ */
+export const FIGHT_LINE_SCALE = 0.5;
 /** Fighters start this far apart on the fight line (meters). */
 export const FIGHTER_SPACING = 1;
 

@@ -73,6 +73,12 @@ export type FighterState = {
   phase: 'idle' | 'startup' | 'active' | 'recovery' | 'hitstun' | 'blockstun' | 'ko';
   move?: string;
   frame: number; // frame within the current phase
+  // For the director (how to draw it), not the rules:
+  hand?: Hand; // the attacking hand (or leg, for knees and kicks)
+  height?: 'head' | 'body';
+  length?: number; // total frames of the current phase, when it has a fixed length
+  evade?: 'slip' | 'duck';
+  evadeDir?: Hand;
 };
 
 export type FightEvent = {

@@ -21,4 +21,13 @@ export const config = {
    * Not a real secret (it ships in the page); the server also caps forges per hour and per day.
    */
   forgeKey: (import.meta.env.VITE_FORGE_KEY as string | undefined) ?? '720f66ea6f3cebda14050f8fa706cc1a',
+  /**
+   * How much of the player's real body shows on their fighter (0..1). Moves always come from the fight engine; this
+   * only adds their lean, head and hand positions on top of the fighting stance. `?live=` overrides.
+   */
+  liveBlend: clamp01(Number(params.get('live') ?? 0.35)),
 };
+
+function clamp01(v: number) {
+  return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.35;
+}

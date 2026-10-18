@@ -2,6 +2,7 @@ import { Renderer } from '../director/Renderer';
 import * as THREE from 'three';
 import { Effects, type EffectKind } from '../director/Effects';
 import { FighterView } from '../director/FighterView';
+import { Cpu, type CpuLevel } from '../fight/Cpu';
 import { FightEngine } from '../fight/FightEngine';
 import { Resolver } from '../fight/Resolver';
 import { IntentReader } from '../intent/IntentReader';
@@ -10,7 +11,7 @@ import { InputHub, createLocalSource, type InputSource } from '../input';
 import { MockSource } from '../input/sources/MockSource';
 import { captureScan, forgeFighter, type ScanFrames } from '../forge/forge';
 import { forgeStatus, onChange, scanStatus } from '../forge/status';
-import { maskedFighter, saveFighter } from '../forge/roster';
+import { fetchServerFighters, maskedFighter, saveFighter } from '../forge/roster';
 import { config } from '../config';
 import {
   PLAYER_IDS, opponentOf,
@@ -49,6 +50,9 @@ export class Game {
   private readonly effects: Effects;
   private readonly views: Record<PlayerId, FighterView>;
   private readonly intent: Record<PlayerId, IntentReader>;
+  /** CPU opponents by slot: they play through the same engine commands and stance a player's reader produces. */
+  private readonly cpu: Partial<Record<PlayerId, Cpu>> = {};
+  private fightTicks = 0;
   private hostSession: HostSession | null = null;
   private client: ClientSession | null = null;
   private accumulator = 0;
@@ -113,6 +117,32 @@ export class Game {
     return this.setupPlayer(id, { kind: 'existing', fighter: { id: 'test', name: PLAYER_NAMES[id], status: 'ready' } }, new MockSource());
   }
 
+  /**
+   * Fill a slot with a CPU opponent. It borrows a forged fighter from the server (not the one it's fighting), or
+   * the house model without one. A client joining from another laptop takes the slot back (setupPlayer).
+   */
+  async addCpuPlayer(id: PlayerId, level: CpuLevel = 'normal') {
+    updatePlayer(id, { name: 'CPU', status: 'forging', statusDetail: 'Picking a fighter' });
+    const opponent = useGameStore.getState().players[opponentOf(id)].name.toLowerCase();
+    const pool = (await fetchServerFighters()).filter((f) => f.glbUrl && f.name.toLowerCase() !== opponent);
+    const pick = pool[Math.floor(Math.random() * pool.length)];
+    const fighter: ForgedFighter = pick ?? { id: 'cpu', name: 'Sparring Bot', status: 'ready', glbUrl: `${import.meta.env.BASE_URL}models/default.glb` };
+    this.input.unassign(id);
+    this.cpu[id] = new Cpu(id, level, Math.floor(Math.random() * 1e6));
+    try {
+      await this.views[id].setFighter(fighter);
+    } catch (err) {
+      console.warn('cpu fighter failed to load, using the placeholder', err);
+      await this.views[id].setFighter({ id: 'cpu', name: 'Sparring Bot', status: 'ready' });
+    }
+    this.views[id].setVisible(true);
+    this.effects.burst(this.views[id].root.position, 'spawn');
+    const label = level === 'normal' ? 'CPU' : `CPU ${level}`;
+    updatePlayer(id, { name: `${fighter.name} (${label})`, status: 'ready', statusDetail: '', portraitUrl: fighter.cardUrl ?? null });
+    const { players } = useGameStore.getState();
+    if (PLAYER_IDS.every((p) => players[p].status === 'ready')) this.startCountdown();
+  }
+
   /** Secret debug menu: fire an effect in the middle of the arena, optionally with hit-stop + shake. */
   debugBurst(kind: EffectKind, impact = false) {
     // Spawn is a ground effect (it fires at a fighter's feet in play).
@@ -128,6 +158,7 @@ export class Game {
    */
   private async setupPlayer(id: PlayerId, choice: FighterChoice, source: InputSource = createLocalSource(), scan?: Promise<ScanFrames>) {
     const name = choice.kind === 'existing' ? choice.fighter.name : choice.name;
+    delete this.cpu[id]; // a real player takes the slot
     try {
       updatePlayer(id, { name, status: 'scanning', statusDetail: 'Starting camera' });
       await source.start();
@@ -171,6 +202,11 @@ export class Game {
 
   rematch() {
     this.fight.reset();
+    this.fightTicks = 0;
+    for (const id of PLAYER_IDS) {
+      this.cpu[id]?.reset();
+      this.views[id].reset();
+    }
     for (const id of PLAYER_IDS) updatePlayer(id, { hp: MAX_HP });
     useGameStore.setState({ winner: null });
     this.startCountdown();
@@ -215,10 +251,17 @@ export class Game {
       useGameStore.setState({ countdown: null });
     }
 
-    // Input -> intent -> fight engine. All stubs for now (see SPEC.md).
+    // Input -> intent -> resolver -> fight engine. A CPU slot thinks instead, from the engine's state.
     const commands: Command[] = [];
     const stances = {} as Record<PlayerId, Stance>;
     for (const id of PLAYER_IDS) {
+      const cpu = this.cpu[id];
+      if (cpu) {
+        const out = phase === 'fighting' ? cpu.think(this.fight, this.fightTicks) : null;
+        if (out) commands.push(...out.commands);
+        stances[id] = out?.stance ?? { player: id, guard: true, advance: 0, lean: { x: 0, y: 0 }, tracked: true };
+        continue;
+      }
       const frame = this.input.latest(id);
       const out = frame ? this.intent[id].update(frame) : null;
       if (out) {
@@ -227,10 +270,22 @@ export class Game {
       }
       stances[id] = out?.stance ?? { player: id, guard: true, advance: 0, lean: { x: 0, y: 0 }, tracked: false };
     }
+    for (const c of commands) if (c.kind === 'anticipate') this.views[c.player].anticipate(c.hand);
     if (phase === 'fighting') {
+      this.fightTicks++;
       for (const event of this.fight.step(commands, stances)) this.applyEvent(event);
     }
-    for (const id of PLAYER_IDS) this.views[id].update(this.fight.state(id), this.input.latest(id));
+    const distance = this.fight.distance();
+    for (const id of PLAYER_IDS) {
+      this.views[id].update({
+        state: this.fight.state(id),
+        live: this.cpu[id] ? null : this.input.latest(id),
+        guard: stances[id].guard,
+        distance,
+        opponentKo: this.fight.state(opponentOf(id)).phase === 'ko',
+        dt: SIM_DT,
+      });
+    }
   }
 
   /** Engine event -> HP in the store, hit-stop, effects, popups. */
@@ -242,7 +297,7 @@ export class Game {
     // TODO: once FightEngine is real, mirror FighterState.hp instead of subtracting here.
     const hp = Math.max(0, players[defender].hp - event.damage);
     updatePlayer(defender, { hp });
-    this.views[defender].onEvent(event);
+    this.views[defender].onEvent(event, this.fight.state(event.attacker));
     this.renderer.freeze((event.hitstopFrames ?? 0) * SIM_DT);
 
     const point = this.views[defender].worldJoint('head');

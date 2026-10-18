@@ -1,5 +1,5 @@
 import { PLAYER_IDS, opponentOf } from '../types';
-import type { AttackMove, Command, FightEvent, FighterState, PlayerId, Stance } from '../types';
+import type { AttackMove, Command, FightEvent, FighterState, Hand, PlayerId, Stance } from '../types';
 import { FIGHT, MOVES, hitstopFrames, hitstunFrames, type MoveSpec } from './moves';
 
 /**
@@ -11,7 +11,7 @@ import { FIGHT, MOVES, hitstopFrames, hitstunFrames, type MoveSpec } from './mov
  */
 
 type AttackCommand = Extract<Command, { kind: 'attack' }>;
-type Attack = { move: AttackMove; spec: MoveSpec; startup: number; scale: number; height: 'head' | 'body'; lunge: number; done: boolean };
+type Attack = { move: AttackMove; hand: Hand; spec: MoveSpec; startup: number; scale: number; height: 'head' | 'body'; lunge: number; done: boolean };
 type Fighter = {
   x: number;
   hp: number;
@@ -21,7 +21,7 @@ type Fighter = {
   attack: Attack | null;
   /** Frames of hitstun/blockstun left. */
   stun: number;
-  evade: { kind: 'slip' | 'duck'; frames: number } | null;
+  evade: { kind: 'slip' | 'duck'; frames: number; dir?: Hand } | null;
   buffered: { command: AttackCommand; frames: number } | null;
   sinceAttack: number; // seconds
 };
@@ -51,7 +51,16 @@ export class FightEngine {
 
   state(player: PlayerId): Readonly<FighterState> {
     const f = this.fighters[player];
-    return { x: f.x, hp: f.hp, stamina: f.stamina, phase: f.phase, move: f.attack?.move, frame: f.frame };
+    const a = f.attack;
+    const length = f.phase === 'startup' ? a?.startup
+      : f.phase === 'active' ? a?.spec.active
+      : f.phase === 'recovery' ? a?.spec.recovery
+      : f.phase === 'hitstun' || f.phase === 'blockstun' ? f.frame + f.stun
+      : undefined;
+    return {
+      x: f.x, hp: f.hp, stamina: f.stamina, phase: f.phase, move: a?.move, frame: f.frame,
+      hand: a?.hand, height: a?.height, length, evade: f.evade?.kind, evadeDir: f.evade?.dir,
+    };
   }
 
   /** Center-to-center distance on the fight line (m). */
@@ -81,7 +90,7 @@ export class FightEngine {
       if (f.phase === 'idle') this.start(c.player, c, events);
       else f.buffered = { command: c, frames: FIGHT.bufferFrames };
     } else if (c.kind === 'defend' && (c.move === 'slip' || c.move === 'duck')) {
-      if (f.phase === 'idle' || f.phase === 'recovery') f.evade = { kind: c.move, frames: FIGHT.evadeFrames };
+      if (f.phase === 'idle' || f.phase === 'recovery') f.evade = { kind: c.move, frames: FIGHT.evadeFrames, dir: c.dir };
     }
     // Blocking comes from Stance.guard every tick; 'anticipate' is for the director.
   }
@@ -92,6 +101,7 @@ export class FightEngine {
     const gassed = f.stamina < FIGHT.gassedBelow;
     f.attack = {
       move: c.move,
+      hand: c.hand,
       spec,
       startup: spec.startup + (gassed ? FIGHT.gassedStartup : 0),
       scale: c.speed * c.windup * (gassed ? FIGHT.gassedDamage : 1),
