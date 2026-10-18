@@ -8,6 +8,7 @@ export function KOOverlay() {
   const phase = useGameStore((s) => s.phase);
   const winner = useGameStore((s) => s.winner);
   const winnerName = useGameStore((s) => (s.winner ? s.players[s.winner].name : ''));
+  const ending = useGameStore((s) => s.ending);
   if (phase !== 'ko') return null;
   const accent = ACCENT[winner ?? 'p1'];
   const fromRight = winner === 'p2';
@@ -19,7 +20,7 @@ export function KOOverlay() {
         <div className="absolute inset-x-0 bottom-0 h-2 bg-ink" />
         <div className="tex-hatch flex h-48 items-center justify-center overflow-hidden sm:h-64">
           <span className="animate-slam font-display text-[8rem] leading-none tracking-tighter text-ink [animation-delay:120ms] sm:text-[14rem]">
-            K.O.
+            {ending === 'time' ? 'TIME' : 'K.O.'}
           </span>
         </div>
       </div>
@@ -29,7 +30,7 @@ export function KOOverlay() {
           {accent.tag}
         </span>
         <span className="slant -ml-1 bg-paper px-6 py-3 font-display text-3xl uppercase tracking-tight text-ink [--slant:10px] sm:text-5xl">
-          {winnerName} wins
+          {winner ? `${winnerName} wins` : 'Draw'}
         </span>
       </div>
 

@@ -44,6 +44,10 @@ export interface GameState {
   /** 3, 2, 1, then 0 = "FIGHT!"; null when hidden. */
   countdown: number | null;
   winner: PlayerId | null;
+  /** Round clock in whole seconds while fighting; null outside a round. */
+  timeLeft: number | null;
+  /** How the round ended: a K.O., or the clock ran out (winner = more HP left, null = draw). */
+  ending: 'ko' | 'time' | null;
   players: Record<PlayerId, PlayerState>;
   popups: HitPopup[];
   /** Bumped on big hits to retrigger the screen-flash animation. */
@@ -69,6 +73,8 @@ export const useGameStore = create<GameState>(() => ({
   phase: 'lobby',
   countdown: null,
   winner: null,
+  timeLeft: null,
+  ending: null,
   players: Object.fromEntries(PLAYER_IDS.map((id) => [id, initialPlayer(id)])) as Record<PlayerId, PlayerState>,
   popups: [],
   flashKey: 0,

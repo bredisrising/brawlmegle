@@ -67,6 +67,11 @@ export class FightEngine {
     };
   }
 
+  /** In hit-stop: the fight is frozen on the impact for a few frames (the director freezes the picture too). */
+  get frozen(): boolean {
+    return this.hitstop > 0;
+  }
+
   /** Center-to-center distance on the fight line (m). */
   distance(): number {
     return Math.abs(this.fighters.p2.x - this.fighters.p1.x);

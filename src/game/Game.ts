@@ -17,7 +17,7 @@ import {
   PLAYER_IDS, opponentOf,
   type Command, type FightEvent, type ForgedFighter, type PlayerId, type Stance,
 } from '../types';
-import { COUNTDOWN_FROM, KO_FREEZE, MAX_HP, PLAYER_NAMES, SIM_DT } from './constants';
+import { COUNTDOWN_FROM, KO_FREEZE, MAX_HP, PLAYER_NAMES, ROUND_SECONDS, SIM_DT } from './constants';
 import { ClientSession } from './ClientSession';
 import { HostSession } from './HostSession';
 import { localPlayerId, pushPopup, updatePlayer, useGameStore } from './store';
@@ -53,6 +53,8 @@ export class Game {
   /** CPU opponents by slot: they play through the same engine commands and stance a player's reader produces. */
   private readonly cpu: Partial<Record<PlayerId, Cpu>> = {};
   private fightTicks = 0;
+  /** Seconds left in the round (the store shows it rounded up). */
+  private clock = ROUND_SECONDS;
   private hostSession: HostSession | null = null;
   private client: ClientSession | null = null;
   private accumulator = 0;
@@ -224,7 +226,7 @@ export class Game {
       this.views[id].reset();
     }
     for (const id of PLAYER_IDS) updatePlayer(id, { hp: MAX_HP });
-    useGameStore.setState({ winner: null });
+    useGameStore.setState({ winner: null, ending: null });
     this.startCountdown();
   }
 
@@ -244,7 +246,8 @@ export class Game {
 
   private startCountdown() {
     this.phaseTimer = 0;
-    useGameStore.setState({ phase: 'countdown', countdown: COUNTDOWN_FROM });
+    this.clock = ROUND_SECONDS;
+    useGameStore.setState({ phase: 'countdown', countdown: COUNTDOWN_FROM, timeLeft: ROUND_SECONDS, ending: null });
   }
 
   private update = (dt: number, frozen: boolean) => {
@@ -294,7 +297,11 @@ export class Game {
     if (phase === 'fighting') {
       this.fightTicks++;
       for (const event of this.fight.step(commands, stances)) this.applyEvent(event);
+      this.tickClock();
     }
+    // Hit-stop: the picture holds on the impact while the engine does (effects and camera shake keep going).
+    // (Only mid-round: the K.O. hit's hit-stop never runs out, since the engine stops stepping.)
+    if (useGameStore.getState().phase === 'fighting' && this.fight.frozen) return;
     const distance = this.fight.distance();
     for (const id of PLAYER_IDS) {
       this.views[id].update({
@@ -308,6 +315,17 @@ export class Game {
     }
   }
 
+  /** Round clock: when it runs out, more HP left wins (equal is a draw). */
+  private tickClock() {
+    if (useGameStore.getState().phase !== 'fighting') return;
+    this.clock -= SIM_DT;
+    const shown = Math.max(0, Math.ceil(this.clock));
+    if (shown !== useGameStore.getState().timeLeft) useGameStore.setState({ timeLeft: shown });
+    if (this.clock > 0) return;
+    const [a, b] = [this.fight.state('p1').hp, this.fight.state('p2').hp];
+    useGameStore.setState({ phase: 'ko', ending: 'time', winner: a === b ? null : a > b ? 'p1' : 'p2', countdown: null });
+  }
+
   /** Engine event -> HP in the store, hit-stop, effects, popups. */
   private applyEvent(event: FightEvent) {
     const { players, phase } = useGameStore.getState();
@@ -318,7 +336,6 @@ export class Game {
     const hp = Math.max(0, players[defender].hp - event.damage);
     updatePlayer(defender, { hp });
     this.views[defender].onEvent(event, this.fight.state(event.attacker));
-    this.renderer.freeze((event.hitstopFrames ?? 0) * SIM_DT);
 
     const point = this.views[defender].worldJoint('head');
     const heavy = event.type === 'counter' || event.damage >= 10;
@@ -336,7 +353,7 @@ export class Game {
     if (hp <= 0) {
       this.renderer.freeze(KO_FREEZE);
       this.effects.burst(point, 'ko');
-      useGameStore.setState({ phase: 'ko', winner: event.attacker, countdown: null });
+      useGameStore.setState({ phase: 'ko', ending: 'ko', winner: event.attacker, countdown: null });
     }
   }
 

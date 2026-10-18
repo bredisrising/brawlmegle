@@ -133,6 +133,19 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
             <p className="border-l-4 border-dmg bg-ink-2 px-3 py-2 font-semibold text-paper">{player.statusDetail}</p>
           )}
 
+          {!busy && remote && connection !== 'open' && (
+            <div className={`animate-rise flex flex-col gap-2 [animation-delay:240ms] ${right ? 'items-end' : 'items-start'}`}>
+              <p className="font-cond text-sm font-semibold uppercase tracking-[0.2em] text-paper/60">No one around? Fight the CPU</p>
+              <div className="flex flex-wrap gap-2">
+                {(['easy', 'normal', 'hard'] as const).map((level) => (
+                  <ArcadeButton key={level} color={accent.bg} onClick={() => void game.addCpuPlayer(id, level)}>
+                    {level}
+                  </ArcadeButton>
+                ))}
+              </div>
+            </div>
+          )}
+
           {!busy && remote && import.meta.env.DEV && (
             <div className="animate-rise [animation-delay:240ms]">
               <ArcadeButton color={accent.bg} onClick={() => game.addTestPlayer(id)}>

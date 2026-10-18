@@ -6,6 +6,10 @@ import { HealthBar } from './HealthBar';
 /** Top bar: [portrait | hp / name]  VS  [hp / name | portrait] */
 export function HUD() {
   const phase = useGameStore((s) => s.phase);
+  const timeLeft = useGameStore((s) => s.timeLeft);
+  const ending = useGameStore((s) => s.ending);
+  const label = phase === 'ko' ? (ending === 'time' ? 'TIME' : 'KO') : phase === 'fighting' && timeLeft !== null ? String(timeLeft) : 'VS';
+  const urgent = phase === 'fighting' && timeLeft !== null && timeLeft <= 10;
 
   return (
     <div className="absolute inset-x-0 top-0 grid grid-cols-[1fr_auto_1fr] items-start gap-2 px-3 pt-3 sm:gap-4 sm:px-8 sm:pt-6">
@@ -13,8 +17,12 @@ export function HUD() {
       <div className="animate-rise flex flex-col items-center">
         <div className="cut bg-paper p-[3px] [--cut:10px]">
           <div className="cut grid h-12 w-16 place-items-center bg-ink [--cut:9px] sm:h-16 sm:w-24">
-            <span className={`font-display text-3xl leading-none tracking-tight sm:text-5xl ${phase === 'ko' ? 'text-dmg' : 'text-paper'}`}>
-              {phase === 'ko' ? 'KO' : 'VS'}
+            <span
+              className={`font-display leading-none tracking-tight ${label.length > 2 ? 'text-2xl sm:text-4xl' : 'text-3xl sm:text-5xl'} ${
+                phase === 'ko' || urgent ? 'text-dmg' : 'text-paper'
+              }`}
+            >
+              {label}
             </span>
           </div>
         </div>
