@@ -1,42 +1,80 @@
-import { FilesetResolver, PoseLandmarker, type NormalizedLandmark } from '@mediapipe/tasks-vision';
+import type { PoseLandmarker } from '@mediapipe/tasks-vision';
 import type { Landmark, PoseFrame } from '../../types';
 import type { InputSource } from '../InputSource';
+import {
+  WASM_ROOT, landmarkerOptions, selectCenteredPose, toLandmark,
+  type PoseDelegate, type PoseVariant, type PoseWorkerReply, type PoseWorkerRequest,
+} from './poseModel';
 
-const WASM_ROOT = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1/wasm';
+const PARAMS = new URLSearchParams(window.location.search);
 /** `full` is more accurate at a modest cost; phones get `lite` to keep the frame rate up. `?pose=lite|full` overrides. */
-const POSE_PARAM = new URLSearchParams(window.location.search).get('pose');
+const POSE_PARAM = PARAMS.get('pose');
 const PHONE = typeof matchMedia === 'function' && matchMedia('(pointer: coarse) and (max-width: 900px)').matches;
-const POSE_VARIANT = POSE_PARAM === 'lite' || POSE_PARAM === 'full' ? POSE_PARAM : PHONE ? 'lite' : 'full';
-const modelUrl = (variant: 'lite' | 'full') =>
-  `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_${variant}/float16/1/pose_landmarker_${variant}.task`;
-const POSE_MODEL = modelUrl(POSE_VARIANT);
+const POSE_VARIANT: PoseVariant = POSE_PARAM === 'lite' || POSE_PARAM === 'full' ? POSE_PARAM : PHONE ? 'lite' : 'full';
+const NUM_POSES = PARAMS.get('poses') === '1' ? 1 : 2;
+/** `?posedelegate=cpu` runs the model on the CPU (XNNPACK) instead of the GPU, e.g. when the GPU is the bottleneck. */
+const DELEGATE: PoseDelegate = PARAMS.get('posedelegate')?.toLowerCase() === 'cpu' ? 'CPU' : 'GPU';
+/** Detection runs in a worker where the browser can (`?poseworker=0` keeps it on the main thread, as before). */
+const WORKER_OK = PARAMS.get('poseworker') !== '0';
 /** Over this many ms per detection the full model can't keep up with a 30 fps camera: drop to lite (unless ?pose=). */
 const SLOW_DETECT_MS = 38;
 
-/** Webcam -> MediaPipe PoseLandmarker -> timestamped image and world landmarks. */
+/**
+ * Webcam -> MediaPipe PoseLandmarker -> timestamped image and world landmarks.
+ *
+ * The model runs in a worker (poseWorker.ts): each new camera frame goes over as a VideoFrame, the landmarks come
+ * back a detection later, stamped with the frame's capture time. Only the newest frame waits while one is being
+ * detected, so nothing queues up and adds lag. Browsers without VideoFrame / OffscreenCanvas run it in the page.
+ */
 export class CameraSource implements InputSource {
   readonly kind = 'camera';
   readonly video = document.createElement('video');
   private readonly listeners = new Set<(frame: PoseFrame) => void>();
   private stream: MediaStream | null = null;
+  /** In-page model (no worker). */
   private landmarker: PoseLandmarker | null = null;
   /** For swapping to the lite model when this machine is too slow for full (see SLOW_DETECT_MS). */
-  private files: Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>> | null = null;
-  private delegate: 'GPU' | 'CPU' = 'GPU';
-  private variant: 'lite' | 'full' = POSE_VARIANT;
+  private files: unknown = null;
+  private delegate: PoseDelegate = DELEGATE;
+  private variant: PoseVariant = POSE_VARIANT;
   private timedFrames = 0;
   private swapping = false;
   private frameRequest = 0;
   private running = false;
   private _latestFrame: PoseFrame | null = null;
   private _tracking = false;
+  /** Worker mode: the worker, whether a frame is being detected, and the newest frame waiting for it. */
+  private worker: Worker | null = null;
+  private inFlight = false;
+  private pending: { image: VideoFrame; t: number } | null = null;
+  private nextId = 0;
+  /** Copies of the frames being detected, so listeners can see the exact image a pose came from. */
+  private readonly kept = new Map<number, VideoFrame>();
+  private delivering: CanvasImageSource | null = null;
 
   get latestFrame() {
     return this._latestFrame;
   }
 
+  /**
+   * The camera image the frame being delivered right now was detected on (valid inside an onFrame listener). In
+   * worker mode the video has usually moved on by the time the landmarks arrive; this is the matching picture.
+   */
+  get image(): CanvasImageSource {
+    return this.delivering ?? this.video;
+  }
+
   /** Diagnostics for the tuner: what the camera actually delivers and how long MediaPipe takes. */
-  readonly stats = { width: 0, height: 0, fps: 0, detectMs: 0, timestamps: 'none' as 'capture' | 'callback' | 'none' };
+  readonly stats = {
+    width: 0, height: 0, fps: 0, detectMs: 0, timestamps: 'none' as 'capture' | 'callback' | 'none',
+    /** Where the model runs: 'worker' or 'page', and on what. */
+    runner: 'page' as 'worker' | 'page', delegate: DELEGATE as PoseDelegate,
+    /** Measured over the last two seconds: detections finished, and frames the camera delivered. */
+    detectFps: 0, cameraFps: 0,
+  };
+  private rateStart = 0;
+  private cameraFrames = 0;
+  private detections = 0;
 
   /** The camera's real settings (it may not grant the 60 fps we ask for). */
   get settings(): MediaTrackSettings | null {
@@ -91,28 +129,14 @@ export class CameraSource implements InputSource {
       this.video.srcObject = this.stream;
       await this.video.play();
 
-      const files = await FilesetResolver.forVisionTasks(WASM_ROOT);
-      const options = {
-        baseOptions: { modelAssetPath: POSE_MODEL, delegate: 'GPU' as const },
-        runningMode: 'VIDEO' as const,
-        // 2 on purpose: with numPoses 1, MediaPipe adds its own hidden smoothing (more lag on top of ours).
-        // With 2 it re-runs person detection each frame (a few ms) but stays unsmoothed. `?poses=1` to compare.
-        numPoses: new URLSearchParams(window.location.search).get('poses') === '1' ? 1 : 2,
-        minPoseDetectionConfidence: 0.5,
-        minPosePresenceConfidence: 0.5,
-        minTrackingConfidence: 0.5,
-      };
-      this.files = files;
-      try {
-        this.landmarker = await PoseLandmarker.createFromOptions(files, options);
-      } catch {
-        this.delegate = 'CPU';
-        // Some browsers expose WebGL but cannot initialize MediaPipe's GPU delegate.
-        this.landmarker = await PoseLandmarker.createFromOptions(files, {
-          ...options,
-          baseOptions: { modelAssetPath: POSE_MODEL, delegate: 'CPU' },
-        });
+      if (WORKER_OK && typeof Worker === 'function' && typeof VideoFrame === 'function' && typeof OffscreenCanvas === 'function') {
+        try {
+          await this.startWorker();
+        } catch (err) {
+          console.warn('[camera] pose worker unavailable, detecting on the main thread', err);
+        }
       }
+      if (!this.worker) await this.startInPage();
       this.running = true;
       this.schedule();
     } catch (error) {
@@ -123,9 +147,18 @@ export class CameraSource implements InputSource {
 
   stop() {
     this.running = false;
+    this.stats.detectFps = this.stats.cameraFps = 0;
+    this.rateStart = 0;
     if (this.frameRequest && 'cancelVideoFrameCallback' in this.video) this.video.cancelVideoFrameCallback(this.frameRequest);
     else cancelAnimationFrame(this.frameRequest);
     this.frameRequest = 0;
+    this.worker?.terminate();
+    this.worker = null;
+    this.inFlight = false;
+    this.pending?.image.close();
+    this.pending = null;
+    for (const image of this.kept.values()) image.close();
+    this.kept.clear();
     this.landmarker?.close();
     this.landmarker = null;
     this.stream?.getTracks().forEach((track) => track.stop());
@@ -139,6 +172,47 @@ export class CameraSource implements InputSource {
   onFrame(cb: (frame: PoseFrame) => void) {
     this.listeners.add(cb);
     return () => this.listeners.delete(cb);
+  }
+
+  private async startWorker() {
+    const worker = new Worker(new URL('./poseWorker.ts', import.meta.url), { type: 'module' });
+    try {
+      this.delegate = await new Promise<PoseDelegate>((resolve, reject) => {
+        worker.onmessage = (e: MessageEvent<PoseWorkerReply>) => {
+          if (e.data.type === 'ready') resolve(e.data.delegate);
+          else if (e.data.type === 'failed') reject(new Error(e.data.error));
+        };
+        worker.onerror = (e) => reject(new Error(e.message || 'pose worker failed to load'));
+        this.post(worker, { type: 'init', variant: this.variant, delegate: this.delegate, numPoses: NUM_POSES });
+      });
+    } catch (err) {
+      worker.terminate();
+      throw err;
+    }
+    worker.onmessage = (e: MessageEvent<PoseWorkerReply>) => this.onWorkerMessage(e.data);
+    worker.onerror = (e) => this.reportError(e.message);
+    this.worker = worker;
+    this.stats.runner = 'worker';
+    this.stats.delegate = this.delegate;
+  }
+
+  private async startInPage() {
+    const { FilesetResolver, PoseLandmarker } = await import('@mediapipe/tasks-vision');
+    const files = await FilesetResolver.forVisionTasks(WASM_ROOT);
+    this.files = files;
+    try {
+      this.landmarker = await PoseLandmarker.createFromOptions(files, landmarkerOptions(this.variant, this.delegate, NUM_POSES));
+    } catch {
+      this.delegate = 'CPU';
+      // Some browsers expose WebGL but cannot initialize MediaPipe's GPU delegate.
+      this.landmarker = await PoseLandmarker.createFromOptions(files, landmarkerOptions(this.variant, this.delegate, NUM_POSES));
+    }
+    this.stats.runner = 'page';
+    this.stats.delegate = this.delegate;
+  }
+
+  private post(worker: Worker, msg: PoseWorkerRequest, transfer: Transferable[] = []) {
+    worker.postMessage(msg, transfer);
   }
 
   /**
@@ -162,71 +236,142 @@ export class CameraSource implements InputSource {
   private lastErrorAt = -Infinity;
 
   private detectFrame = (time: number) => {
-    if (!this.running || !this.landmarker) return;
+    if (!this.running || !(this.landmarker || this.worker)) return;
+    this.cameraFrames++;
+    this.updateRates();
     // MediaPipe needs strictly increasing timestamps.
     const now = Math.max(time, this.lastTimestamp + 1);
     this.lastTimestamp = now;
     // Always reschedule: one throw here (a GPU hiccup, a listener failing mid-send) must not stop tracking for good.
     try {
-      if (this.video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) this.detect(now);
+      if (this.video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+        if (this.worker) this.sendFrame(now);
+        else this.detect(now);
+      }
     } catch (error) {
       this.reportError(error);
     }
     this.schedule();
   };
 
+  /** Worker mode: hand the frame over, or keep it as the next one if a detection is still running. */
+  private sendFrame(now: number) {
+    const image = new VideoFrame(this.video, { timestamp: Math.round(now * 1000) });
+    if (this.inFlight) {
+      this.pending?.image.close();
+      this.pending = { image, t: now };
+      return;
+    }
+    this.dispatch(image, now);
+  }
+
+  private dispatch(image: VideoFrame, t: number) {
+    const id = ++this.nextId;
+    this.kept.set(id, image.clone());
+    this.inFlight = true;
+    this.post(this.worker!, { type: 'frame', id, t, image }, [image]);
+  }
+
+  private onWorkerMessage(msg: PoseWorkerReply) {
+    if (msg.type === 'variant') {
+      this.swapping = false;
+      if (msg.ok) this.variant = msg.variant;
+      else console.warn('[camera] lite model failed to load, staying on full', msg.error);
+      return;
+    }
+    if (msg.type !== 'result' && msg.type !== 'error') return;
+    this.inFlight = false;
+    const image = this.kept.get(msg.id) ?? null;
+    this.kept.delete(msg.id);
+    try {
+      if (!this.running) return;
+      if (msg.type === 'error') this.reportError(msg.error);
+      else {
+        this.timeDetection(msg.ms);
+        this.deliver(msg.t, msg.image, msg.world, image);
+      }
+    } finally {
+      image?.close();
+      if (this.pending && this.running && this.worker) {
+        const next = this.pending;
+        this.pending = null;
+        this.dispatch(next.image, next.t);
+      }
+    }
+  }
+
   private detect(now: number) {
     const started = performance.now();
     const result = this.landmarker!.detectForVideo(this.video, now);
-    const took = performance.now() - started;
+    this.timeDetection(performance.now() - started);
+    const selected = selectCenteredPose(result.landmarks);
+    const image = selected < 0 ? undefined : result.landmarks[selected];
+    const world = selected < 0 ? undefined : result.worldLandmarks[selected];
+    this.deliver(now, image?.map(toLandmark) ?? null, world?.map(toLandmark) ?? null, null);
+  }
+
+  /** Rates over two seconds (one second of a 24 fps camera counts 20 to 25: too noisy to act on). */
+  private updateRates() {
+    const now = performance.now();
+    if (!this.rateStart) this.rateStart = now;
+    const span = now - this.rateStart;
+    if (span < 2000) return;
+    this.stats.cameraFps = (this.cameraFrames * 1000) / span;
+    this.stats.detectFps = (this.detections * 1000) / span;
+    this.rateStart = now;
+    this.cameraFrames = this.detections = 0;
+  }
+
+  private timeDetection(took: number) {
+    this.detections++;
     this.stats.detectMs += 0.1 * (took - this.stats.detectMs);
     // After a warm-up, a laptop that can't run the full model at camera rate gets the lite one: a punch is only a
     // few frames long, and frames matter more than the full model's extra accuracy.
     if (++this.timedFrames === 90 && this.variant === 'full' && !POSE_PARAM && this.stats.detectMs > SLOW_DETECT_MS) {
       void this.useLite();
     }
+  }
+
+  /** A detection's landmarks -> a PoseFrame for the listeners. `picture`: the exact image it ran on (worker mode). */
+  private deliver(t: number, image: Landmark[] | null, world: Landmark[] | null, picture: CanvasImageSource | null) {
     const settings = this.settings;
     this.stats.width = this.video.videoWidth;
     this.stats.height = this.video.videoHeight;
     this.stats.fps = settings?.frameRate ?? 0;
-    const selected = selectCenteredPose(result.landmarks);
-    const image = selected < 0 ? undefined : result.landmarks[selected];
-    const world = selected < 0 ? undefined : result.worldLandmarks[selected];
     if (!image || !world) {
       this._latestFrame = null;
       this._tracking = false;
       return;
     }
-    const frame: PoseFrame = {
-      t: now,
-      image: image.map(toLandmark),
-      world: world.map(toLandmark),
-      aspect: this.video.videoWidth / this.video.videoHeight,
-    };
+    const frame: PoseFrame = { t, image, world, aspect: this.video.videoWidth / this.video.videoHeight };
     this._latestFrame = frame;
     this._tracking = true;
-    for (const listener of this.listeners) {
-      try {
-        listener(frame);
-      } catch (error) {
-        this.reportError(error); // the other listeners still get the frame
+    this.delivering = picture;
+    try {
+      for (const listener of this.listeners) {
+        try {
+          listener(frame);
+        } catch (error) {
+          this.reportError(error); // the other listeners still get the frame
+        }
       }
+    } finally {
+      this.delivering = null;
     }
   }
 
   private async useLite() {
-    if (this.swapping || !this.files) return;
+    if (this.swapping) return;
     this.swapping = true;
     console.warn(`[camera] pose model full takes ${this.stats.detectMs.toFixed(0)} ms per frame here; switching to lite`);
+    if (this.worker) {
+      this.post(this.worker, { type: 'variant', variant: 'lite' });
+      return; // the worker answers with 'variant'
+    }
+    if (!this.files) return void (this.swapping = false);
     try {
-      const lite = await PoseLandmarker.createFromOptions(this.files, {
-        baseOptions: { modelAssetPath: modelUrl('lite'), delegate: this.delegate },
-        runningMode: 'VIDEO',
-        numPoses: new URLSearchParams(window.location.search).get('poses') === '1' ? 1 : 2,
-        minPoseDetectionConfidence: 0.5,
-        minPosePresenceConfidence: 0.5,
-        minTrackingConfidence: 0.5,
-      });
+      const { PoseLandmarker } = await import('@mediapipe/tasks-vision');
+      const lite = await PoseLandmarker.createFromOptions(this.files as never, landmarkerOptions('lite', this.delegate, NUM_POSES));
       if (!this.running) return lite.close();
       const old = this.landmarker;
       this.landmarker = lite;
@@ -246,29 +391,6 @@ export class CameraSource implements InputSource {
     this.lastErrorAt = t;
     console.error('[camera] pose frame failed', error);
   }
-}
-
-function toLandmark(point: NormalizedLandmark): Landmark {
-  return { x: point.x, y: point.y, z: point.z, visibility: point.visibility ?? 0 };
-}
-
-/** With numPoses 2 (bystanders around), pick the person nearest the center. */
-function selectCenteredPose(poses: NormalizedLandmark[][]): number {
-  let selected = -1;
-  let nearest = Infinity;
-  poses.forEach((pose, index) => {
-    const left = pose[23];
-    const right = pose[24];
-    if (!left || !right) return;
-    const x = (left.x + right.x) / 2;
-    const y = (left.y + right.y) / 2;
-    const distance = (x - 0.5) ** 2 + (y - 0.5) ** 2;
-    if (distance < nearest) {
-      selected = index;
-      nearest = distance;
-    }
-  });
-  return selected;
 }
 
 /** getUserMedia failures in words a player can act on. */

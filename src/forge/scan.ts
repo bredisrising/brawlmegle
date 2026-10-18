@@ -11,8 +11,11 @@ import {
  * JPEG encoding happens once, at the end.
  */
 
-/** Anything that emits pose frames for the video, e.g. CameraSource (frames arrive right after detection, same video frame). */
-export type PoseStream = { onFrame(cb: (frame: PoseFrame) => void): () => void };
+/**
+ * Anything that emits pose frames for the video, e.g. CameraSource. `image`, read inside the listener, is the exact
+ * picture the frame was detected on (CameraSource detects in a worker, so the video may have moved on by then).
+ */
+export type PoseStream = { onFrame(cb: (frame: PoseFrame) => void): () => void; readonly image?: CanvasImageSource };
 
 export type ScanUpdate = ScanProgress & {
   /** The bucket whose keeper just changed, if any. */
@@ -64,6 +67,7 @@ export function scanPoses(
       const now = performance.now();
       lastFrameAt = now;
       const vw = video.videoWidth, vh = video.videoHeight;
+      const picture = poses.image ?? video;
       const offer = vw && vh ? buckets.offer(frame, now - start) : null;
       const box = offer && personBox(frame, vw, vh);
       let changed: Bucket | null = null;
@@ -71,14 +75,14 @@ export function scanPoses(
         const s = fitLongSide(box.w, box.h, sharpSide);
         probe.width = s.w;
         probe.height = s.h;
-        probeCtx.drawImage(video, box.x, box.y, box.w, box.h, 0, 0, s.w, s.h);
+        probeCtx.drawImage(picture, box.x, box.y, box.w, box.h, 0, 0, s.w, s.h);
         const sharp = laplacianVariance(toGray(probeCtx.getImageData(0, 0, s.w, s.h).data, s.w, s.h), s.w, s.h);
         if (buckets.submit(offer, sharp)) {
           const size = fitLongSide(box.w, box.h, maxSide);
           const keep = (crops[offer.bucket] ??= document.createElement('canvas'));
           keep.width = size.w;
           keep.height = size.h;
-          keep.getContext('2d')!.drawImage(video, box.x, box.y, box.w, box.h, 0, 0, size.w, size.h);
+          keep.getContext('2d')!.drawImage(picture, box.x, box.y, box.w, box.h, 0, 0, size.w, size.h);
           changed = offer.bucket;
         }
       }
