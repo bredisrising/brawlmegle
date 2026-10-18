@@ -2,7 +2,8 @@
 # Sets up the forge's GPU box: TRELLIS.2 (image -> textured 3D), MediaPipe + Blender (rig), the HTTP service.
 # Run on an AWS "Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 22.04)" instance (L40S / A10G):
 #
-#   scp -r forge/gpu ubuntu@BOX:forge-gpu && ssh ubuntu@BOX 'sudo bash forge-gpu/setup.sh'
+#   tar czf forge.tgz --exclude=data --exclude=node_modules forge && scp forge.tgz ubuntu@BOX: &&
+#   ssh ubuntu@BOX 'rm -rf forge && tar xzf forge.tgz && sudo bash forge/gpu/setup.sh'
 #
 # Safe to re-run (each step skips what's already there). Takes about 30-40 min the first time, mostly compiling
 # TRELLIS.2's CUDA extensions and downloading 17 GB of weights. The service key goes in /etc/forge3d.env
@@ -15,6 +16,7 @@ ENV=$CONDA/envs/trellis2
 PY=$ENV/bin/python
 TRELLIS_COMMIT=75fbf0183001ed9876c8dbb35de6b68552ee08bd
 BLENDER_PATH=release/Blender5.2/blender-5.2.1-linux-x64.tar.xz
+NODE_VERSION=v22.12.0
 mkdir -p $ROOT/models /var/lib/forge3d/jobs
 export DEBIAN_FRONTEND=noninteractive
 
@@ -98,6 +100,21 @@ if [ ! -x $ROOT/blender/blender ]; then
   rm -rf $ROOT/blender && mv $ROOT/blender-5.2.1-linux-x64 $ROOT/blender
 fi
 
+echo "== node + the forge's GLB optimizer"
+# The box optimizes each rigged GLB with the forge's own optimize.js (WebP textures + meshopt), so this needs the
+# whole forge/ folder copied over, not just forge/gpu.
+if [ ! -x $ROOT/node/bin/node ]; then
+  curl -sSfL https://nodejs.org/dist/$NODE_VERSION/node-$NODE_VERSION-linux-x64.tar.xz | tar -xJ -C $ROOT
+  rm -rf $ROOT/node && mv $ROOT/node-$NODE_VERSION-linux-x64 $ROOT/node
+fi
+if [ -f "$SRC/../optimize.js" ]; then
+  mkdir -p $ROOT/optimizer
+  cp "$SRC/optimize-glb.mjs" "$SRC/../optimize.js" "$SRC/../package.json" "$SRC/../package-lock.json" $ROOT/optimizer/
+  (cd $ROOT/optimizer && PATH=$ROOT/node/bin:$PATH npm ci --omit=dev --no-audit --no-fund --silent)
+else
+  echo "   forge/optimize.js not found next to forge/gpu: the box sends unoptimized GLBs (the forge optimizes them)"
+fi
+
 echo "== service"
 mkdir -p $ROOT/app
 cp "$SRC"/server.py "$SRC"/gen3d.py "$SRC"/landmarks.py "$SRC"/rig_blender.py "$SRC"/weights.py $ROOT/app/
@@ -108,9 +125,9 @@ if [ ! -f /etc/forge3d.env ]; then
 FORGE3D_KEY=$(openssl rand -hex 24)
 FORGE3D_PORT=8790
 FORGE3D_PIPELINE=1024_cascade
-FORGE3D_STEPS=12
-FORGE3D_FACES=60000
-FORGE3D_TEXTURE=2048
+FORGE3D_STEPS=8
+FORGE3D_FACES=40000
+FORGE3D_TEXTURE=1024
 EOF
   )
 fi

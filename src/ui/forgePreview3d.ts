@@ -19,10 +19,10 @@ const SWEEP = 1.2;
 /** Turntable speed, rad/s (stepped by the frame rate). */
 const SPIN = 0.9;
 /**
- * TRELLIS's front, turned to face the camera like the finished fighter (whose rigger turns it to face +x, and the game
- * then turns it to face the camera). Its voxels and shape come out facing -z here.
+ * TRELLIS's voxels and shape, turned y up, face +z: toward the camera, like the finished fighter (faces +x, turned -90°).
+ * Measured on real shapes (the feet stick out toward +z).
  */
-const TRELLIS_YAW = Math.PI;
+const TRELLIS_YAW = 0;
 
 export interface ForgePreviewView {
   showVoxels(url: string): Promise<void>;
@@ -352,7 +352,7 @@ class PreviewCanvas2D implements ForgePreviewView {
     for (const p of pts) (lo = Math.min(lo, p.y)), (hi = Math.max(hi, p.y));
     const s = 1 / Math.max(hi - lo, 1e-3);
     const mid = (lo + hi) / 2;
-    this.points = pts.map((p) => ({ x: -p.x * s, y: (p.y - mid) * s, z: -p.z * s })); // TRELLIS faces -z: turn to face us
+    this.points = pts.map((p) => ({ x: p.x * s, y: (p.y - mid) * s, z: p.z * s })); // TRELLIS faces +z: toward us
     this.kind = kind;
     this.shownAt = performance.now() / 1000;
   }

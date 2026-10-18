@@ -45,9 +45,11 @@ OPTIMIZER = os.environ.get("FORGE3D_OPTIMIZER", f"{ROOT}/optimizer/optimize-glb.
 WORK = os.environ.get("FORGE3D_WORK", "/var/lib/forge3d/jobs")
 SETTINGS = {
     "pipeline": os.environ.get("FORGE3D_PIPELINE", "1024_cascade"),
-    "steps": int(os.environ.get("FORGE3D_STEPS", 12)),
-    "faces": int(os.environ.get("FORGE3D_FACES", 60000)),
-    "texture": int(os.environ.get("FORGE3D_TEXTURE", 2048)),
+    # 8 steps, 40k faces and a 1024 texture: ~11 s faster than 12 / 60k / 2048 with the same fighter at fight distance
+    # (TRELLIS's texture detail is capped by its voxels, not the bake size). See research/forge-gpu.md.
+    "steps": int(os.environ.get("FORGE3D_STEPS", 8)),
+    "faces": int(os.environ.get("FORGE3D_FACES", 40000)),
+    "texture": int(os.environ.get("FORGE3D_TEXTURE", 1024)),
     "yaw": float(os.environ.get("FORGE3D_YAW", 0)),
 }
 MAX_QUEUED = int(os.environ.get("FORGE3D_MAX_QUEUED", 6))
@@ -204,14 +206,14 @@ def warm_sheet() -> Image.Image:
 
 
 def fake_previews(glb_path):
-    """Fake mode's voxels and shape, made from the fake GLB (faces +x, y up) in TRELLIS's frame (z up, facing -y)."""
+    """Fake mode's voxels and shape, made from the fake GLB (faces +x, y up) like TRELLIS's (y up: faces +z)."""
     import numpy as np
     import trimesh
 
     mesh = trimesh.load(glb_path, force="mesh")
     v = np.asarray(mesh.vertices, dtype=np.float32)
     v = (v - (v.min(0) + v.max(0)) / 2) / (v.max(0) - v.min(0)).max()  # into the [-0.5, 0.5] cube
-    yup = np.stack([v[:, 2], v[:, 1], -v[:, 0]], axis=1)  # turned to face -z, like TRELLIS's output here
+    yup = np.stack([-v[:, 2], v[:, 1], v[:, 0]], axis=1)  # turned to face +z, like TRELLIS's output
     trellis = np.stack([yup[:, 0], -yup[:, 2], yup[:, 1]], axis=1)  # y up -> z up (inverse of gen3d._to_y_up)
     coords = np.unique(np.clip(((trellis + 0.5) * 32).astype(int), 0, 31), axis=0).astype(np.uint8)
     return {"voxels": {"coords": coords, "resolution": 32}, "shape": {"vertices": yup, "faces": np.asarray(mesh.faces)}}
