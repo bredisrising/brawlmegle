@@ -33,7 +33,8 @@ const ALLOWED_ORIGINS = (
   .map((s) => s.trim())
   .filter(Boolean);
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
-const FILES = /^(front|left|right)\.(jpg|png)$|^(sheet|card)\.png$|^(model|rigged)\.glb$/;
+/** Files anyone may download. The raw scan photos (front/left/right) stay private: fighter ids are public. */
+const FILES = /^(sheet|card)\.png$|^(model|rigged)\.glb$/;
 const DATA = process.env.FORGE_DATA ? new URL(`file://${process.env.FORGE_DATA.replace(/\/?$/, "/")}`) : new URL("./data/", import.meta.url);
 const ACCESS_KEY = process.env.FORGE_ACCESS_KEY ?? "";
 const MAX_PER_HOUR = Number(process.env.FORGE_MAX_PER_HOUR ?? 40);
