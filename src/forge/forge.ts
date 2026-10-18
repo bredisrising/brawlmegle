@@ -49,34 +49,42 @@ async function errorText(res: Response) {
   }
 }
 
-/** Usernames are a light "log in": case-insensitive, 1–24 letters, digits, `_ . -`. Null if not usable. */
+/**
+ * Usernames are a light "log in": case-insensitive, 1–24 letters, digits, `_ . -`. Null if not usable.
+ * All dots is out: `/api/profiles/..` collapses to `/api/` in the URL, so that profile could never be found.
+ */
 export function normalizeUsername(raw: string): string | null {
   const u = raw.trim().toLowerCase();
-  return /^[a-z0-9_.-]{1,24}$/.test(u) ? u : null;
+  return /^[a-z0-9_.-]{1,24}$/.test(u) && !/^\.+$/.test(u) ? u : null;
 }
 
 /** The fighter saved under a username on the forge server, if any (null when none, or with no server). */
-export async function findProfile(username: string, api = config.forgeApi): Promise<ForgedFighter | null> {
+export async function findProfile(username: string, api = config.forgeApi, timeoutMs = 4000): Promise<ForgedFighter | null> {
   const u = normalizeUsername(username);
   if (!api || !u) return null;
-  const res = await fetch(`${trimSlash(api)}/api/profiles/${encodeURIComponent(u)}`);
+  // Bounded, so the name screen never waits forever on a hung request before it lets you scan.
+  const res = await fetch(`${trimSlash(api)}/api/profiles/${encodeURIComponent(u)}`, { signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) return null;
   const body = (await res.json()) as { fighter: Record<string, unknown> | null };
   return body.fighter ? toForgedFighter(body.fighter) : null;
 }
 
 /** Starts a forge. Returns its id. `api` defaults to config.forgeApi (empty = mock). */
-export async function submitForge(name: string, frames: ScanFrames, api = config.forgeApi, username?: string): Promise<string> {
+export async function submitForge(name: string, frames: ScanFrames, api = config.forgeApi, username?: string, timeoutMs = 45_000): Promise<string> {
   if (!api) {
     await wait(300);
     return `mock-${Date.now()}`;
   }
   const present = frames.filter(Boolean);
   if (present.length === 0) throw new Error('The scan got no frames: nobody was in view');
+  // Bounded: a stalled upload would otherwise leave the player on "Forging fighter" with no way back.
   const res = await fetch(`${trimSlash(api)}/api/forge`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-forge-key': config.forgeKey },
     body: JSON.stringify({ name, username, frames: present }),
+    signal: AbortSignal.timeout(timeoutMs),
+  }).catch((err: Error) => {
+    throw new Error(`Couldn't reach the forge: ${err.message}`);
   });
   if (!res.ok) throw new Error(`Forge rejected the scan (${res.status}): ${await errorText(res)}`);
   return ((await res.json()) as { id: string }).id;
@@ -101,12 +109,12 @@ export function toForgedFighter(raw: Record<string, unknown>, fallbackName = '')
 }
 
 /** One status check. `api` defaults to config.forgeApi (empty = mock: ready right away). */
-export async function getForge(id: string, name: string, api = config.forgeApi): Promise<ForgedFighter> {
+export async function getForge(id: string, name: string, api = config.forgeApi, signal?: AbortSignal): Promise<ForgedFighter> {
   if (!api) {
     await wait(1200);
     return { id, name, status: 'ready' };
   }
-  const res = await fetch(`${trimSlash(api)}/api/forge/${encodeURIComponent(id)}`);
+  const res = await fetch(`${trimSlash(api)}/api/forge/${encodeURIComponent(id)}`, { signal });
   if (!res.ok) throw new Error(`Forge status failed (${res.status}): ${await errorText(res)}`);
   return toForgedFighter((await res.json()) as Record<string, unknown>, name);
 }
@@ -116,6 +124,8 @@ export type ForgeOptions = {
   pollMs?: number;
   /** Give up and report 'failed' after this long (SPEC fallback ladder: 5 minutes). */
   timeoutMs?: number;
+  /** One status check that takes longer than this counts as a failed poll (a stalled request never resolves). */
+  requestTimeoutMs?: number;
   signal?: AbortSignal;
   /** Saves the fighter under this username on the server. */
   username?: string;
@@ -130,7 +140,7 @@ export async function forgeFighter(
   name: string,
   frames: ScanFrames,
   onProgress?: (fighter: ForgedFighter) => void,
-  { api = config.forgeApi, pollMs = 1500, timeoutMs = 5 * 60_000, signal, username }: ForgeOptions = {},
+  { api = config.forgeApi, pollMs = 1500, timeoutMs = 5 * 60_000, requestTimeoutMs = 10_000, signal, username }: ForgeOptions = {},
 ): Promise<ForgedFighter> {
   const id = await submitForge(name, frames, api, username);
   const started = Date.now();
@@ -140,15 +150,23 @@ export async function forgeFighter(
   for (;;) {
     if (signal?.aborted) throw signal.reason;
     try {
-      last = await getForge(id, name, api);
+      last = await getForge(id, name, api, requestSignal(requestTimeoutMs, signal));
       errors = 0;
       onProgress?.(last);
       if (last.status === 'ready' || last.status === 'failed') return last;
     } catch (err) {
+      if (signal?.aborted) throw signal.reason;
       // A dropped request or two is fine; the forge keeps running server-side.
       if (++errors >= 5) return { ...last, status: 'failed', error: String((err as Error).message ?? err) };
     }
     if (Date.now() - started > timeoutMs) return { ...last, status: 'failed', error: 'Forge timed out' };
-    await wait(pollMs);
+    // Back off while the server is unreachable (flaky venue Wi-Fi), so a short outage doesn't fail the fighter.
+    await wait(Math.min(pollMs * 2 ** errors, 15_000));
   }
+}
+
+/** Per-request timeout, also cancelled by the caller's signal. */
+function requestSignal(timeoutMs: number, outer?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return outer && typeof AbortSignal.any === 'function' ? AbortSignal.any([timeout, outer]) : timeout;
 }
