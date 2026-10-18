@@ -91,8 +91,9 @@ export class Game {
   private readonly setupGen: Record<PlayerId, number> = { p1: 0, p2: 0 };
   /** Practice mode: the CPU level to bring in for P2 once the local player is ready ('dummy' = Training). */
   private practiceLevel: CpuLevel | 'dummy' | null = null;
-  /** The CPU's fighter, picked ahead (with its model downloading) so the CPU spawns as soon as it's called in. */
-  private cpuPick: Promise<{ all: ForgedFighter[]; pick?: ForgedFighter }> | null = null;
+  /** The CPU's fighter, picked ahead with its model downloading (prepareCpu), so the CPU spawns as soon as it's in. */
+  private cpuRoster: Promise<ForgedFighter[]> | null = null;
+  private cpuPick: { opponent: string; fighter: Promise<ForgedFighter | undefined> } | null = null;
   /** Seconds left in the round (the store shows it rounded up). */
   private clock = ROUND_SECONDS;
   private hostSession: HostSession | null = null;
@@ -257,7 +258,7 @@ export class Game {
 
   /** Avatar screen: the player on THIS laptop scanned, went masked, or picked a saved fighter. */
   async chooseFighter(choice: FighterChoice) {
-    if (choice.kind === 'existing') preloadModel(choice.fighter.glbUrl, 'high');
+    if (choice.kind === 'existing') preloadModel(choice.fighter.glbUrl, 'high')?.catch(() => {});
     const { role } = useGameStore.getState();
     useGameStore.setState({ screen: role === 'client' ? 'client' : 'game' });
     // A connected client only scans + streams; the host forges and runs the fight.
@@ -277,14 +278,12 @@ export class Game {
    */
   async addCpuPlayer(id: PlayerId, level: CpuLevel | 'dummy' = 'normal') {
     updatePlayer(id, { name: 'CPU', status: 'forging', statusDetail: 'Picking a fighter' });
-    const opponent = useGameStore.getState().players[opponentOf(id)].name.toLowerCase();
-    this.prepareCpu();
-    const { all, pick: ahead } = await this.cpuPick!;
-    this.cpuPick = null; // the next CPU picks again
-    const pool = all.filter((f) => f.glbUrl && f.name.toLowerCase() !== opponent);
-    // The server lists newest first: the CPU wears one of the recent (new-style) fighters.
-    const recent = pool.slice(0, 6);
-    const pick = ahead && recent.includes(ahead) ? ahead : recent[Math.floor(Math.random() * recent.length)];
+    const opponent = useGameStore.getState().players[opponentOf(id)].name;
+    this.prepareCpu(opponent);
+    const pick = await this.cpuPick!.fighter;
+    // The next CPU gets a fresh list and pick.
+    this.cpuRoster = null;
+    this.cpuPick = null;
     const fighter: ForgedFighter = pick ?? { id: 'cpu', name: 'Sparring Bot', status: 'ready', glbUrl: `${import.meta.env.BASE_URL}models/default.glb` };
     this.input.unassign(id);
     this.cpu[id] = level === 'dummy' ? new Dummy(id) : new Cpu(id, level, Math.floor(Math.random() * 1e6));
@@ -304,14 +303,22 @@ export class Game {
     if (PLAYER_IDS.every((p) => players[p].status === 'ready')) this.startCountdown();
   }
 
-  /** Pick the CPU's fighter now and start downloading its model (low priority), unless that's already under way. */
-  private prepareCpu() {
-    this.cpuPick ??= fetchServerFighters(undefined, 10_000).then((all) => {
-      const recent = all.filter((f) => f.glbUrl).slice(0, 6);
+  /**
+   * Pick the CPU's fighter ahead and start downloading its model (low priority), so it spawns as soon as it's called
+   * in. The server's list is fetched once; the pick waits until the opponent is known (it never wears theirs).
+   */
+  private prepareCpu(opponent?: string) {
+    this.cpuRoster ??= fetchServerFighters(undefined, 10_000);
+    if (opponent === undefined || this.cpuPick?.opponent === opponent.toLowerCase()) return;
+    const against = opponent.toLowerCase();
+    const fighter = this.cpuRoster.then((all) => {
+      // The server lists newest first: the CPU wears one of the recent (new-style) fighters.
+      const recent = all.filter((f) => f.glbUrl && f.name.toLowerCase() !== against).slice(0, 6);
       const pick = recent[Math.floor(Math.random() * recent.length)];
       preloadModel(pick?.glbUrl)?.catch(() => {});
-      return { all, pick };
+      return pick;
     });
+    this.cpuPick = { opponent: against, fighter };
   }
 
   /** A fighter arrives: it prints in out of a beam of light in its player's color. */
@@ -358,8 +365,9 @@ export class Game {
     const name = choice.kind === 'existing' ? choice.fighter.name : choice.name;
     delete this.cpu[id]; // a real player takes the slot
     const gen = ++this.setupGen[id];
-    // A saved fighter's model downloads while the camera starts, instead of after.
+    // A saved fighter's model downloads while the camera starts, instead of after; in practice, the CPU's too.
     if (choice.kind === 'existing') preloadModel(choice.fighter.glbUrl, 'high')?.catch(() => {});
+    if (this.practiceLevel && id === 'p1') this.prepareCpu(name);
     try {
       updatePlayer(id, { name, status: 'scanning', statusDetail: 'Starting camera' });
       await source.start();
@@ -414,7 +422,7 @@ export class Game {
       const p2 = useGameStore.getState().players.p2;
       if (this.practiceLevel && id === 'p1' && p2.status === 'waiting') return void this.addCpuPlayer('p2', this.practiceLevel);
       // Hosting with nobody in yet: the lobby offers "Fight the CPU", so have its fighter ready.
-      if (id === 'p1' && p2.status === 'waiting') this.prepareCpu();
+      if (id === 'p1' && p2.status === 'waiting') this.prepareCpu(name);
 
       const { players } = useGameStore.getState();
       if (PLAYER_IDS.every((p) => players[p].status === 'ready')) this.startCountdown();
