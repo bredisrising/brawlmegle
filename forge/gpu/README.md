@@ -26,13 +26,22 @@ One GPU thread makes models and one CPU thread rigs them, so two forges in a row
 
 ## Run it
 
+The live box is `i-02b680f2662c0b82f` (g6e.xlarge, us-east-1d, 54.161.35.172): us-west-2 had no L40S capacity, so
+every `aws.sh` call for it needs `FORGE3D_REGION=us-east-1`. On bingus:
+
 ```
-bash forge/gpu/aws.sh launch                    # on bingus: key pair, security group, g6e.2xlarge, Elastic IP
-scp -i ~/.ssh/brawlegle-gpu.pem -r forge/gpu ubuntu@IP:forge-gpu
-bash forge/gpu/aws.sh ssh sudo bash forge-gpu/setup.sh  # ~40 min the first time; re-run to update the code
-bash forge/gpu/aws.sh ssh sudo journalctl -u forge3d -f # "ready" after the warm-up (about 2 min)
-bash forge/gpu/aws.sh stop | start | status
+export FORGE3D_REGION=us-east-1                  # where the box lives (default us-west-2)
+bash aws.sh status | stop | start                # ready ~4 min after a start
+FORGE3D_TYPE=g6e.xlarge FORGE3D_SUBNET=subnet-... bash aws.sh launch   # a new box: key pair, SG, instance, EIP
+tar czf /tmp/gpu.tgz gpu && scp -i ~/.ssh/brawlegle-gpu.pem /tmp/gpu.tgz ubuntu@IP:   # then on the box:
+#   mkdir -p forge-gpu && tar xzf gpu.tgz -C forge-gpu --strip-components=1 && sudo bash forge-gpu/setup.sh
+bash aws.sh ssh sudo journalctl -u forge3d -f    # "ready" after the warm-up
+bash aws.sh ssh 'sudo shutdown -h 09:00'         # auto-stop at 2 AM Pacific (UTC clock); `sudo shutdown -c` cancels
 ```
+
+`setup.sh` takes about an hour the first time on 4 vCPUs (CuMesh alone compiles for ~30 min) and is safe to re-run
+to update the code. The first real job after a start runs once at ~105 s while FlexGEMM tunes its kernels; the
+tuning is saved in `/root/.flex_gemm/`, so later jobs and restarts stay at ~26 s.
 
 `setup.sh` installs everything under `/opt/forge3d` (conda env, TRELLIS.2 and its CUDA extensions, 17 GB of weights,
 Blender 5.2, the app) and a systemd unit (`forge3d`, restarts on failure, starts on boot). Settings and the key are in
