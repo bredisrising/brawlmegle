@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Effects, type EffectKind } from '../director/Effects';
 import { FighterView } from '../director/FighterView';
 import { Sfx } from '../director/Sfx';
+import { Announcer } from '../director/Announcer';
 import { Fireballs } from '../director/Fireballs';
 import { Cpu, type CpuLevel } from '../fight/Cpu';
 import { FightEngine } from '../fight/FightEngine';
@@ -86,6 +87,8 @@ export class Game {
   private mirrored: MirrorFrame | null = null;
   private readonly mirrorShown: Partial<Record<PlayerId, string>> = {};
   readonly sfx = new Sfx();
+  /** Shouted barks and the crowd (pre-made clips; silent until they're generated). */
+  readonly announcer = new Announcer();
   private readonly fireballs: Fireballs;
   /** Each fighter's phase last tick, to hear a strike come out (whoosh) on both laptops. */
   private readonly heardPhase: Partial<Record<PlayerId, string>> = {};
@@ -131,10 +134,16 @@ export class Game {
     this.unsubscribe = useGameStore.subscribe((s, prev) => {
       if (s.phase === 'ko' && prev.phase !== 'ko') {
         void this.recorder.stop({ winner: s.winner, ending: s.ending });
+        this.announceFinish(s.winner, s.ending);
         if (!this.client) this.callFinish(s.winner, s.ending);
       }
       if (s.countdown === prev.countdown || s.countdown === null) return;
       this.sfx.play(s.countdown === 0 ? 'go' : 'beep');
+      if (s.countdown === COUNTDOWN_FROM) this.announcer.crowd('murmur', 0.35);
+      if (s.countdown === 0) {
+        this.announcer.bark('fight', true);
+        this.announcer.crowd('cheer', 0.4);
+      }
       // A new round: forget the last one's combos and first hit.
       if (s.countdown === 0 && !this.client && recordingEnabled()) this.startRecording();
       if (s.countdown === COUNTDOWN_FROM) {
@@ -557,6 +566,15 @@ export class Game {
     this.history = [];
   }
 
+  /** The finish, shouted: K.O. (and PERFECT if the winner took no damage), TIME or DRAW, and the crowd erupts. */
+  private announceFinish(winner: PlayerId | null, ending: string | null) {
+    this.announcer.crowd('roar', 0.55);
+    if (ending === 'time') this.announcer.bark(winner ? 'time' : 'draw', true);
+    else this.announcer.bark('ko', true);
+    const perfect = winner && useGameStore.getState().players[winner].hp >= MAX_HP;
+    if (perfect) setTimeout(() => this.announcer.bark('perfect', true), 1400);
+  }
+
   /** Round clock: when it runs out, more HP left wins (equal is a draw). */
   private tickClock() {
     if (useGameStore.getState().phase !== 'fighting') return;
@@ -594,6 +612,12 @@ export class Game {
     if (by.height === 'body' || event.move === 'knee') point.y -= 0.08;
     const heavy = event.type === 'counter' || event.damage >= 10;
     if (!replaying) this.countCombo(event, ko);
+    if (!replaying && !ko && event.type === 'counter') {
+      this.announcer.bark('counter');
+      this.announcer.crowd('ooh', 0.5);
+    } else if (!replaying && !ko && heavy && event.type !== 'blocked') {
+      this.announcer.crowd('ooh', 0.3);
+    }
     this.sfx.play(ko ? 'ko' : event.type === 'blocked' ? 'blocked' : event.type === 'counter' ? 'counter' : heavy ? 'heavy' : 'hit');
     this.effects.burst(point, event.type === 'blocked' ? 'blocked' : event.type === 'counter' ? 'counter' : 'hit');
     // Punch: impact frames on the big ones, the camera leaning into the hit.
@@ -707,11 +731,15 @@ export class Game {
     else Object.assign(c, { player: event.attacker, hits: 1 });
     c.at = now;
     if (c.hits >= 2) useGameStore.setState({ combo: { player: event.attacker, hits: c.hits, key: ++c.key } });
+    if (c.hits === 3) this.announcer.bark('combo');
+    else if (c.hits === 5) this.announcer.bark('great');
+    else if (c.hits === 7) this.announcer.bark('incredible');
     if (ko) {
       const winnerHp = useGameStore.getState().players[event.attacker].hp;
       if (winnerHp >= MAX_HP) useGameStore.setState({ callout: { text: 'Perfect', key: now } });
     } else if (!this.firstHitDone) {
       useGameStore.setState({ callout: { text: 'First attack', key: now } });
+      this.announcer.bark('first');
     }
     this.firstHitDone = true;
   }
@@ -894,7 +922,10 @@ export class Game {
     for (const id of PLAYER_IDS) {
       const s = states[id];
       if (s.phase === 'active' && this.heardPhase[id] !== 'active') {
-        if (s.move === 'fireball') this.sfx.play('fireball');
+        if (s.move === 'fireball') {
+          this.sfx.play('fireball');
+          this.announcer.bark('fireball', true);
+        }
         else this.sfx.play('whoosh', s.move === 'jab' ? 0.7 : s.move === 'kick' || s.move === 'uppercut' ? 1.3 : 1);
       }
       this.heardPhase[id] = s.phase;
@@ -905,6 +936,7 @@ export class Game {
   private onMuteKey = (e: KeyboardEvent) => {
     if (e.code !== 'KeyM' || e.target instanceof HTMLInputElement) return;
     this.sfx.muted = !this.sfx.muted;
+    this.announcer.muted = this.sfx.muted;
 
   };
 
