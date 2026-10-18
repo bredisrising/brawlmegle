@@ -7,7 +7,7 @@ memory per fighter went from 256 MiB to 32 MiB. On a 10 Mbps / 50 ms link, "Figh
 before and takes 1–6 s now; the title screen shows in about 1 s instead of 2. MediaPipe's 13 MB (pose model + wasm) now
 downloads under the title screen instead of after "Fight as".
 
-Branch `perf-assets`, rebased on main `bf1833c`. Integrator steps are [at the end](#integrator-steps).
+Branch `perf-assets`, rebased on main `7dcfea5`. Integrator steps are [at the end](#integrator-steps).
 
 ## What changed
 
@@ -85,6 +85,9 @@ The guided clip (`guided-233104.jsonl`) through the IntentReader → Resolver �
 fighters (`fightview`). The fight log is identical (jab, hit, cross, block…), and the frames match at 45.9 dB:
 
 ![fight with clip](perf-assets/fight.jpg)
+
+Main's new K.O. ragdoll, CPU vs. CPU until the K.O. with K.O. frames only, also gives an identical fight log on both
+and matches at 46.3 dB.
 
 `test/server/optimize.test.ts` checks the same on a synthetic two-bone skinned mesh. Node names, joint order,
 inverse bind matrices and rotations come out bit-identical, positions are exact, each joint's weight is within 1/255,
