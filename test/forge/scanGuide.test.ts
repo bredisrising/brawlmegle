@@ -20,7 +20,7 @@ type Script = (t: number) => PoseFrame | null;
  * Plays a script through a GuidedScan at 30 fps. Sharpness defaults to a little wobble. Returns what each slot kept
  * (the script time of its keeper), when each stage started, and the views seen.
  */
-function run(script: Script, opts: { sharp?: (t: number) => number; limit?: number; skipAt?: number } = {}) {
+function run(script: Script, opts: { sharp?: (t: number) => number; limit?: number; skipAt?: number; warmAt?: number } = {}) {
   const scan = new GuidedScan();
   const kept: Partial<Record<Slot, number>> = {};
   const stages: Partial<Record<ScanStage, number>> = { find: 0 };
@@ -28,6 +28,7 @@ function run(script: Script, opts: { sharp?: (t: number) => number; limit?: numb
   let doneAt = -1;
   for (let t = 0; t < (opts.limit ?? 60_000); t += DT) {
     if (opts.skipAt !== undefined && t >= opts.skipAt) scan.skip(t);
+    scan.warming = opts.warmAt !== undefined && t < opts.warmAt;
     const frame = script(t);
     if (frame) {
       for (const offer of scan.offer({ ...frame, t }, t)) if (scan.submit(offer, opts.sharp?.(t) ?? 100 + (Math.round(t / DT) % 7))) kept[offer.slot] = t;
@@ -226,6 +227,19 @@ describe('GuidedScan', () => {
     expect(doneAt).toBeGreaterThanOrEqual(GUIDE_DEFAULTS.nobodyMs - DT);
     expect(doneAt).toBeLessThan(GUIDE_DEFAULTS.nobodyMs + 500);
     expect(view.hint).toMatch(/nobody/i);
+  });
+
+  it('the pose model warming up is not "nobody in view": it waits, says so, then scans as usual', () => {
+    const warmAt = 6000;
+    const { views, stages, scan } = run((t) => (t < warmAt ? null : poseAt(0, { noise: 0.002 })), { warmAt });
+    expect(views[30].hint).toMatch(/warming up/i);
+    expect(stages.countdown).toBeGreaterThan(warmAt);
+    expect(scan.front).toBe('front');
+  });
+
+  it('a model that never warms up still ends', () => {
+    const { doneAt } = run(() => null, { warmAt: Infinity });
+    expect(doneAt).toBeLessThan(GUIDE_DEFAULTS.maxWarmupMs + GUIDE_DEFAULTS.nobodyMs + 500);
   });
 
   it('someone who walks off mid-countdown: the frames before they left make the photo, and it finishes', () => {

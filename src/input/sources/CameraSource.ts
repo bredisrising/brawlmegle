@@ -144,6 +144,11 @@ export class CameraSource implements InputSource {
     return this._tracking;
   }
 
+  /** The pose model has run at least once (the first detections can take a few seconds while it warms up). */
+  get warm() {
+    return this.timedFrames > 0;
+  }
+
   async start(): Promise<void> {
     if (this.running) return;
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera access is unavailable. Use localhost or HTTPS.');

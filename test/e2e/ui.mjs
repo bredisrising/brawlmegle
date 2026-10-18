@@ -182,9 +182,9 @@ await test("username: typing 'demo' and pressing Enter at once loads demo, not a
   await toName(page);
   await nameInput(page).pressSequentially("demo", { delay: 20 });
   await nameInput(page).press("Enter");
-  const t = await waitText(page, /turn slowly|starting camera|scanning|\bREADY\b|couldn't/i, 60_000);
+  const t = await waitText(page, /turn slowly|face the camera|step into view|get in position|starting camera|scanning|\bREADY\b|couldn't/i, 60_000);
   await shot(page, "enter-race");
-  assert.doesNotMatch(t, /turn slowly|scanning/i, "a fast Enter started a new scan for an existing username");
+  assert.doesNotMatch(t, /turn slowly|face the camera|step into view|get in position|scanning/i, "a fast Enter started a new scan for an existing username");
   await page.context().close();
 }, { known: "E2E-03" });
 

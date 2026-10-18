@@ -31,6 +31,8 @@ export const GUIDE_DEFAULTS = {
   nobodyMs: 12000,
   /** No front photo after this long however it goes (someone stuck right up against the camera): give up. */
   findMaxMs: 30000,
+  /** The pose model warming up doesn't count as nobody in view, for up to this long. */
+  maxWarmupMs: 20000,
   /** One countdown beat (3, 2, 1). */
   beatMs: 700,
   /** No front-facing frame by the end of the countdown: wait this much longer for one, then take the best we had. */
@@ -96,6 +98,8 @@ export type ScanView = {
 export type Offer = { slot: Slot; rank: number };
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+/** No frame for this long means they're out of view (slow laptops detect only a few times a second). */
+const LOST_MS = 900;
 const NOSE = 0, SHOULDER_L = 11, SHOULDER_R = 12, ELBOW_L = 13, ELBOW_R = 14, WRIST_L = 15, WRIST_R = 16;
 const HIP_L = 23, HIP_R = 24, KNEE_L = 25, KNEE_R = 26, ANKLE_L = 27, ANKLE_R = 28;
 const inView = (p: Landmark | undefined, minVis: number) => !!p && p.visibility >= minVis && p.x > 0 && p.x < 1 && p.y > 0 && p.y < 1;
@@ -181,6 +185,9 @@ type Keep = { rank: number; sharpness: number; tier: Tier };
  */
 export class GuidedScan {
   readonly opts: GuideOptions;
+  /** The pose model is still loading: no frames yet, but not because nobody's there. Set by the caller. */
+  warming = false;
+  private warmUntil = 0;
   private stage: ScanStage = 'find';
   private stageAt = 0;
   private now = 0;
@@ -272,9 +279,11 @@ export class GuidedScan {
     const since = this.now - this.stageAt;
     switch (this.stage) {
       case 'find': {
+        if (this.isWarming) this.warmUntil = this.now;
         // Nobody in view for a long while (never, or they walked off): give up with what we have (nothing).
-        if (this.now - Math.max(this.lastSeenAt, this.stageAt) >= o.nobodyMs || this.now >= o.findMaxMs) return this.go('done');
-        const settled = this.goodSince !== null && this.lastSeenAt - this.goodSince >= o.settleMs && this.now - this.lastSeenAt < 300;
+        const quiet = this.now - Math.max(this.lastSeenAt, this.stageAt, this.warmUntil);
+        if (quiet >= o.nobodyMs || this.now - this.warmUntil >= o.findMaxMs) return this.go('done');
+        const settled = this.goodSince !== null && this.lastSeenAt - this.goodSince >= o.settleMs && this.now - this.lastSeenAt < LOST_MS;
         if (settled || this.trackedMs >= o.patienceMs) this.go('countdown');
         break;
       }
@@ -305,7 +314,7 @@ export class GuidedScan {
       case 'turn': {
         // The minimum pace, slowed while they're in view and behind it (more so while visibly turning); never behind
         // what we've seen them do. Out of view, it just keeps going.
-        const behind = this.paced > this.real + 0.12 && this.now - this.lastSeenAt < 400;
+        const behind = this.paced > this.real + 0.12 && this.now - this.lastSeenAt < LOST_MS;
         const pace = !behind ? 1 : this.now - this.realAt < 1200 ? o.waitPace : o.idlePace;
         this.paced = Math.min(1, this.paced + (dt / o.turnMs) * pace);
         this.paced = Math.max(this.paced, this.real);
@@ -339,6 +348,10 @@ export class GuidedScan {
     return this.stage === 'done';
   }
 
+  private get isWarming() {
+    return this.warming && this.now < this.opts.maxWarmupMs && !Number.isFinite(this.lastSeenAt);
+  }
+
   get canSkip() {
     return this.frontFrom !== null && this.stage !== 'find' && this.stage !== 'countdown';
   }
@@ -346,7 +359,7 @@ export class GuidedScan {
   get view(): ScanView {
     const o = this.opts;
     const since = this.now - this.stageAt;
-    const tracked = this.now - this.lastSeenAt < 400;
+    const tracked = this.now - this.lastSeenAt < LOST_MS;
     const order: Tick[] = this.firstSide === 'left' ? ['front', 'left', 'back', 'right'] : ['front', 'right', 'back', 'left'];
     const ring = this.stage === 'outro' || this.stage === 'done' ? (this.skipped ? this.ring : 1) : this.ring;
     const frontTier: Tier = !this.frontFrom ? 0 : this.frontKeep().rank >= frontRank({ level: 2, coach: null, armsDown: false }, 2) ? 2 : 1;
@@ -357,6 +370,11 @@ export class GuidedScan {
     let coach = '';
     switch (this.stage) {
       case 'find':
+        if (this.isWarming) {
+          hint = 'Warming up the scanner…';
+          coach = 'Stand 1.5 to 2 m back, facing the camera';
+          break;
+        }
         hint = !tracked || coachKind === 'enter' ? 'Step into view' : coachKind && coachKind !== 'face' && coachKind !== 'arms' ? 'Get in position' : 'Face the camera, arms relaxed';
         coach = !tracked ? (this.everTracked ? 'Lost you: stand in front of the camera' : 'Stand 1.5 to 2 m from the camera') : coachKind ? COACH_TEXT[coachKind] : 'Hold still…';
         break;
@@ -395,7 +413,7 @@ export class GuidedScan {
       count: this.stage === 'countdown' && since < 3 * o.beatMs ? 3 - Math.floor(since / o.beatMs) : null,
       hint,
       coach,
-      coachKind: this.stage === 'find' || this.stage === 'countdown' ? coachKind : null,
+      coachKind: (this.stage === 'find' && !this.isWarming) || this.stage === 'countdown' ? coachKind : null,
       ring: Math.round(ring * 200) / 200,
       ticks: order.map((tick, i) => ({ tick, at: i / 4, hit: hit(tick) })),
       shots,

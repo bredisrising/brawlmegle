@@ -12,7 +12,12 @@ import { GuidedScan, type GuideOptions, type ScanView, type Slot } from './scanG
  * Anything that emits pose frames for the video, e.g. CameraSource. `image`, read inside the listener, is the exact
  * picture the frame was detected on (CameraSource detects in a worker, so the video may have moved on by then).
  */
-export type PoseStream = { onFrame(cb: (frame: PoseFrame) => void): () => void; readonly image?: CanvasImageSource };
+export type PoseStream = {
+  onFrame(cb: (frame: PoseFrame) => void): () => void;
+  readonly image?: CanvasImageSource;
+  /** False while the pose model is still warming up (no frames yet, but not because nobody's there). */
+  readonly warm?: boolean;
+};
 
 export type ScanUpdate = {
   view: ScanView;
@@ -73,6 +78,7 @@ export function scanPoses(
   return new Promise((resolve, reject) => {
     let finished = false;
     const emit = (changed: Bucket | null, now: number) => {
+      guide.warming = poses.warm === false;
       if (skip?.aborted && guide.canSkip) guide.skip(now - start);
       const view = guide.view;
       // Thumbnails: on a shutter right away, otherwise at most a few times a second.

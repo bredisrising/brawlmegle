@@ -1,14 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { InputSource } from '../input/InputSource';
 import type { Landmark, PoseFrame } from '../types';
 import { localPlayerId, useGameStore } from '../game/store';
 import { useGame } from './GameContext';
+import { ScanOverlay } from './ScanOverlay';
 
 const BONES: [number, number][] = [[11, 12], [11, 13], [13, 15], [12, 14], [14, 16], [11, 23], [12, 24], [23, 24], [23, 25], [25, 27], [24, 26], [26, 28], [0, 11], [0, 12]];
 
 /**
- * The player's own camera with their tracked skeleton and the last move it read. Big while scanning (so you
- * can see yourself turn), a corner picture-in-picture while fighting. C toggles it.
+ * The player's own camera with their tracked skeleton and the last move it read: the guided body scan while scanning
+ * (ScanOverlay), a corner picture-in-picture while fighting. C toggles it (not during the scan).
  */
 export function CameraPip() {
   const game = useGame();
@@ -17,8 +18,11 @@ export function CameraPip() {
   const detail = useGameStore((s) => s.players[localPlayerId(s.role)].statusDetail);
   const lastMove = useGameStore((s) => s.lastMove);
   const lobby = useGameStore((s) => s.phase === 'lobby');
+  const scan = useGameStore((s) => s.scan);
+  const localId = useGameStore((s) => localPlayerId(s.role));
   const [source, setSource] = useState<InputSource | null>(null);
   const [open, setOpen] = useState(true);
+  const skipScan = useCallback(() => game.skipScan(), [game]);
 
   useEffect(() => {
     let raf = 0;
@@ -39,25 +43,23 @@ export function CameraPip() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  if (!source?.video || !open) return null;
   const scanning = status === 'scanning';
+  if (source?.video && scanning) {
+    return <ScanOverlay source={source} id={localId} view={scan?.view ?? null} thumbs={scan?.thumbs ?? {}} detail={detail} onSkip={skipScan} />;
+  }
+  if (!source?.video || !open) return null;
   const fresh = lastMove && performance.now() - lastMove.at < 1500;
   return (
     <div
       className={`pointer-events-none fixed z-40 overflow-hidden border-2 border-paper/30 bg-black shadow-2xl ${
-        scanning
-          ? 'left-1/2 top-1/2 w-[min(92vw,720px)] -translate-x-1/2 -translate-y-1/2'
-          : lobby
-            ? 'bottom-4 left-1/2 w-[min(32vw,240px)] -translate-x-1/2' // between the two "Ready" banners
-            : 'bottom-4 left-4 w-[min(32vw,300px)]'
+        lobby
+          ? 'bottom-4 left-1/2 w-[min(32vw,240px)] -translate-x-1/2' // between the two "Ready" banners
+          : 'bottom-4 left-4 w-[min(32vw,300px)]'
       }`}
     >
       <div className="relative aspect-[4/3]">
         <SkeletonVideo source={source} />
-        {scanning && detail && (
-          <p className="absolute inset-x-0 top-3 text-center font-display text-3xl uppercase tracking-tight text-paper drop-shadow-[0_2px_6px_#000]">{detail}</p>
-        )}
-        {!scanning && fresh && (
+        {fresh && (
           <p key={lastMove!.at} className="absolute inset-x-0 bottom-2 text-center font-display text-2xl uppercase tracking-tight text-hp drop-shadow-[0_2px_6px_#000]">
             {lastMove!.text}
           </p>
