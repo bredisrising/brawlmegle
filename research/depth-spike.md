@@ -4,6 +4,7 @@
 
 - **It sees the punch; MediaPipe z doesn't.** On the boxer clip, Depth Anything V2 Small's toward-camera signal stays flat while the hands are in guard and spikes when a fist comes at the camera. MediaPipe's world z shows no punch response at all, and its values often move the wrong way.
 - **It isn't clean or cheap enough to rely on.** Moderate punches peak at about the same level as the busiest non-punch frames. The two arms get mixed up when the hands are close together, and small punches only show at 336 px or more. On a strong integrated GPU it runs at **5–9 fps next to MediaPipe** and pulls **pose down from 24 to 17–20 fps**. The WASM fallback takes 0.2–0.7 s per frame.
+- **A discrete GPU helps depth, not enough to change this.** On the RTX 4070 in Edge, depth runs at 8–11 fps next to MediaPipe and costs pose only 1–3 fps (see [Browser, RTX 4070 (Edge)](#browser-rtx-4070-edge)).
 - **Recommendation: don't integrate it now.** Keep the 2D elbow-lift/extension detector. Keep `/test/depth/` to re-check on a real webcam recording, on a laptop with a discrete GPU, or with a lighter model. If we ever add it, it should be an optional confirm signal that turns on only when WebGPU is fast enough, and the reader must behave exactly as today without it.
 
 ![signal vs MediaPipe z](depth-spike.png)
@@ -92,6 +93,39 @@ Depth was computed with PyTorch `depth-anything/Depth-Anything-V2-Small-hf` on t
 Threads need COOP/COEP headers (cross-origin isolation). This rules out a CPU fallback.
 
 `npx tsc` is clean, and `node scripts/build-depth.mjs` builds.
+
+## Browser, RTX 4070 (Edge)
+
+Windows Edge 155 in headless=new mode on this laptop, WebGPU fp16, the live `/depth/` page, the same fake-camera clip (640×360, 24 fps). Each run was 30 s in a fresh Edge instance; ranges are the 5 s readouts after the first one (the first inference takes 120–210 ms).
+
+**Which GPU.** The registry entry `HKCU\Software\Microsoft\DirectX\UserGpuPreferences` → `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe` = `GpuPreference=2;` is enough; no flags are needed. It applies only to Edge processes started after it was set. Checked four ways:
+- `navigator.gpu.requestAdapter()` in the page and the worker returned `nvidia / lovelace`, for default, `high-performance` and `low-power` alike (Edge warns that `powerPreference` is ignored on Windows).
+- WebGL (MediaPipe's backend) reports `ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Laptop GPU … D3D11)`.
+- `edge://gpu` marks GPU0 (NVIDIA, 0x2860) `*ACTIVE*` and the AMD 780M as GPU1.
+- `nvidia-smi` read 30–60 % utilization and 13–36 W during the runs, against 0 % and 2.5 W in the AMD control runs.
+
+To force the AMD chip instead, pass `--use-adapter-luid=0,81299` (the LUID from `edge://gpu`, in decimal). The control rows below use it.
+
+| run | GPU | pose fps | MediaPipe ms | depth fps | depth model ms |
+|---|---|---|---|---|---|
+| MediaPipe alone (`depth=off`) | 4070 | 18–24 | 29–34 | – | – |
+| MediaPipe alone, control | 780M | 19–23 | 29–35 | – | – |
+| depth alone, 252×196 (`bench=1`) | 4070 | – | – | 30–34 | 24–28 (28–32 total) |
+| depth alone, 336×252 | 4070 | – | – | 29–39 | 21–28 (25–35 total) |
+| depth alone, 518×392 | 4070 | – | – | 17–18 | 44–46 (54–56 total) |
+| MediaPipe + depth 252×140, every 2nd | 4070 | 19–22 | 28–35 | 8–11 | 38–44 |
+| MediaPipe + depth 252×140, every frame | 4070 | 17–21 | 29–43 | 9–11 | 35–45 |
+| MediaPipe + depth 336×196, every 2nd | 4070 | 20–23 (one dip to 14) | 30–40 | 8–9 (one dip to 6) | 41–50 |
+| MediaPipe + depth 336×196, every frame | 4070 | 17–20 | 28–39 | 7–10 | 39–47 |
+| MediaPipe + depth 336×196, every 2nd, control | 780M | 17–20 | 32–44 | 5–6 | 97–111 |
+
+- **Depth alone** is 2–2.7× faster than on the iGPU (25 vs 55 ms at 336, 46 vs 122 ms at 518). It is still about twice PyTorch's 11–13 ms, and 252 is no faster than 336, so the browser is overhead-bound too.
+- **Next to MediaPipe**, the model time rises to 40–45 ms and depth tops out at **8–11 fps whatever the resolution or `every`**. `every=1` buys nothing over `every=2`, because the worker is still busy when the next frame arrives. The 4070 is far from full (about 30 % utilization, 13–15 W). The likely limit is that WebGL and WebGPU share Chromium's GPU process, plus CPU time, not GPU compute.
+- **What it costs MediaPipe:** on the 4070, little. MediaPipe goes from 29–34 to roughly 30–35 ms, and pose drops from 21–23 to 19–21 fps. On the 780M the same run pushes MediaPipe to 32–44 ms and gets only 5–6 depth fps.
+- **MediaPipe itself gains nothing from the 4070** (about 30 ms on either GPU), because it is bound by CPU and readback. Today's Edge baseline (29–34 ms) is slower than the earlier Chrome iGPU run (22–25 ms), so compare rows within one table, not across tables.
+- **First load** on an empty profile: 12.2 s until the model was ready (the ~50 MB download plus session setup). From the cache it takes 1.9–2.3 s. In one early run the page closed about 7 s in; that did not happen again in the 12 runs after it.
+
+**Revised verdict.** On a laptop with a discrete GPU, an optional depth confirm signal is affordable: run it at 336 px with `every=2`, and it costs MediaPipe about 0–3 ms and 1–3 pose fps. It is still not fast enough to sample a punch reliably. At about 9 depth fps, a 100–150 ms straight-punch peak gets one sample, and the discrete GPU only roughly doubles the rate the iGPU gets. The planned start gate (12 fps at 336 with pose at 25 or more) would fail even on the 4070. The version that fits these numbers is **on demand**: run depth only for the 2–3 frames after an elbow onset, where a 40–50 ms answer arrives in time to confirm or cancel the strike. The recommendation stays: don't integrate it now.
 
 ## Costs and risks
 
