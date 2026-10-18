@@ -20,6 +20,7 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
   const phase = useGameStore((s) => s.phase);
   const role = useGameStore((s) => s.role);
   const roomCode = useGameStore((s) => s.roomCode);
+  const connection = useGameStore((s) => s.connection);
   const right = id === 'p2';
   const accent = ACCENT[id];
   const busy = player.status === 'scanning' || player.status === 'forging';
@@ -76,7 +77,7 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
               {accent.tag}
             </span>
             <span className="slant -mx-1 bg-paper px-4 py-1.5 font-cond text-sm font-extrabold uppercase tracking-[0.25em] text-ink [--slant:8px]">
-              {busy ? player.status : remote ? 'Waiting for challenger' : 'Waiting'}
+              {busy ? player.status : remote ? (connection === 'open' ? 'Challenger connected' : 'Waiting for challenger') : 'Waiting'}
             </span>
           </div>
 
@@ -101,7 +102,15 @@ export function PlayerSlot({ id }: { id: PlayerId }) {
           {!busy && remote && (
             <div className={`animate-rise flex flex-col gap-3 [animation-delay:160ms] ${right ? 'items-end' : 'items-start'}`}>
               <p className="font-cond text-lg font-semibold uppercase tracking-[0.15em] text-paper/70">
-                On the other laptop, tap <span className="text-paper">Connect</span> and enter
+                {connection === 'open' ? (
+                  'Picking a fighter on the other laptop'
+                ) : connection === 'reconnecting' ? (
+                  'Lost the other laptop. Rejoin with'
+                ) : (
+                  <>
+                    On the other laptop, tap <span className="text-paper">Connect</span> and enter
+                  </>
+                )}
               </p>
               <RoomCode code={roomCode} />
               {!roomCode && (
