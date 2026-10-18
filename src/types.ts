@@ -96,6 +96,8 @@ export type FightEvent = {
   move: string;
   damage?: number;
   hitstopFrames?: number;
+  /** A hit that went through the defender's guard (see FIGHT.guardBreakers). */
+  guardBreak?: boolean;
 };
 
 // ---------------------------------------------------------------------------

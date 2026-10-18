@@ -867,7 +867,10 @@ export class Game {
     if (by.height === 'body' || event.move === 'knee') point.y -= 0.08;
     const heavy = event.type === 'counter' || event.damage >= 10;
     if (!replaying) this.countCombo(event, ko);
-    if (!replaying && !ko && event.type === 'counter') {
+    if (!replaying && !ko && event.guardBreak) {
+      useGameStore.setState({ callout: { text: 'Guard break', key: performance.now() } });
+      this.announcer.crowd('ooh', 0.6);
+    } else if (!replaying && !ko && event.type === 'counter') {
       this.announcer.bark('counter');
       this.announcer.crowd('ooh', 0.5);
     } else if (!replaying && !ko && heavy && event.type !== 'blocked') {

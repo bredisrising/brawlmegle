@@ -59,6 +59,11 @@ export const FIGHT = {
    */
   blockRecovery: 7,
   blockCost: 4,
+  /**
+   * Moves a guard can't stop: they hit the blocker for full damage ("guard break"). The kick is the slowest move, so
+   * it's readable and can be punched out of: block beats punches, the kick beats block, punches beat the kick.
+   */
+  guardBreakers: ['kick'] as readonly string[],
   /** Slip and duck stay effective this many frames. */
   evadeFrames: 15,
   /** Attacks thrown while busy wait this long for the fighter to be free (or to chain), so none get lost. */

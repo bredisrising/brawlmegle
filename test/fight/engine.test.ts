@@ -172,12 +172,13 @@ describe('combos: fast punches all come out', () => {
     const e = engineAt(0.9);
     const events: { tick: number; ev: FightEvent }[] = [];
     for (let i = 0; i < 90; i++) {
-      const cmds = i === 0 ? [attack('p1', 'kick')] : i === 30 ? [attack('p1', 'jab', { hand: 'L' })] : [];
+      // The kick breaks the guard (a hit, with the longer hit-stop), so the jab comes a little later to stay buffered.
+      const cmds = i === 0 ? [attack('p1', 'kick')] : i === 40 ? [attack('p1', 'jab', { hand: 'L' })] : [];
       for (const ev of e.step(cmds, { p1: stance('p1'), p2: stance('p2', { guard: true }) })) events.push({ tick: i, ev });
     }
     const jab = events.find((x) => x.ev.type === 'startup' && x.ev.move === 'jab');
     expect(jab).toBeDefined();
-    // The kick's whole recovery (plus block hit-stop) before the jab can start.
+    // The kick's whole recovery (plus hit-stop) before the jab can start.
     expect(jab!.tick).toBeGreaterThanOrEqual(MOVES.kick.startup + MOVES.kick.active + MOVES.kick.recovery);
   });
 });
@@ -346,5 +347,26 @@ describe('blocking: hitting a guard costs the attacker', () => {
     }
     expect(startups[3]).toBeGreaterThan(startups[0]);
     expect(e.state('p1').stamina).toBeLessThan(stamina0 - 4 * (MOVES.jab.stamina + FIGHT.blockCost) + 10);
+  });
+});
+
+describe('kick breaks guard', () => {
+  test('a kick into a guard hits for full damage (guard break); a punch into a guard is still blocked', () => {
+    const kick = run(engineAt(0.9), 60, { 0: [attack('p1', 'kick', { autoLunge: true })] }, { p2: { guard: true } });
+    const hit = kick.find((e) => e.type === 'hit' || e.type === 'counter');
+    expect(hit?.guardBreak).toBe(true);
+    expect(hit?.damage).toBeGreaterThanOrEqual(MOVES.kick.damage - 1);
+    expect(kick.some((e) => e.type === 'blocked')).toBe(false);
+
+    const jab = run(engineAt(0.7), 40, { 0: [attack('p1', 'jab', { hand: 'L' })] }, { p2: { guard: true } });
+    expect(jab.some((e) => e.type === 'blocked')).toBe(true);
+    expect(jab.some((e) => e.guardBreak)).toBe(false);
+  });
+
+  test('the kick is slow enough to punch out of: a jab thrown after it starts lands first, as a counter', () => {
+    const events = run(engineAt(0.8), 60, { 0: [attack('p1', 'kick', { autoLunge: true })], 3: [attack('p2', 'jab', { hand: 'L', autoLunge: true })] });
+    const first = events.find((e) => e.type === 'hit' || e.type === 'counter');
+    expect(first?.attacker).toBe('p2');
+    expect(first?.type).toBe('counter');
   });
 });

@@ -291,7 +291,9 @@ export class FightEngine {
 
     // You can block while free or already blocking, not mid-attack or while reeling from a hit.
     const canBlock = before.phase === 'idle' || before.phase === 'blockstun';
-    if (stances[defenderId]?.guard && canBlock) {
+    const guarding = Boolean(stances[defenderId]?.guard) && canBlock;
+    const guardBreak = guarding && FIGHT.guardBreakers.includes(a.move);
+    if (guarding && !guardBreak) {
       const chip = Math.max(1, Math.round(a.spec.chip * a.scale * this.damageScale));
       g.hp = Math.max(0, g.hp - chip);
       // Into a guard: the attacker is left open (longer recovery, no chain) and pays for it (FIGHT.blockRecovery).
@@ -327,7 +329,7 @@ export class FightEngine {
     g.frame = 0;
     const stop = hitstopFrames(damage);
     this.hitstop = Math.max(this.hitstop, stop);
-    events.push({ t: this.now, type: counter ? 'counter' : 'hit', attacker: id, move: a.move, damage, hitstopFrames: stop });
+    events.push({ t: this.now, type: counter ? 'counter' : 'hit', attacker: id, move: a.move, damage, hitstopFrames: stop, ...(guardBreak ? { guardBreak: true } : {}) });
     this.knockback(defenderId, damage);
     if (g.hp <= 0) this.ko(defenderId, id, a.move, events);
   }

@@ -1,7 +1,7 @@
 import { opponentOf } from '../types';
 import type { AttackMove, Command, FighterState, Hand, PlayerId, Stance } from '../types';
 import type { FightEngine } from './FightEngine';
-import { MOVES } from './moves';
+import { FIGHT, MOVES } from './moves';
 
 /**
  * A CPU opponent: a sparring partner for someone fighting with their body through a webcam. Their inputs
@@ -316,6 +316,8 @@ export class Cpu {
     // Easy sometimes just guesses.
     if (this.level === 'easy' && this.rng() < 0.2) return (['block', 'slip', 'duck'] as const)[Math.floor(this.rng() * 3)];
     const r = this.rng();
+    // A guard doesn't stop a guard breaker (the kick): get out of its way instead.
+    if (FIGHT.guardBreakers.includes(move)) return spec.beatsDuck || r < 0.6 ? 'slip' : 'duck';
     if (spec.straight) return r < 0.4 ? 'slip' : 'block';
     if (!spec.beatsDuck) return r < 0.25 ? 'duck' : 'block';
     return 'block';
