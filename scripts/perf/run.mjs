@@ -174,6 +174,26 @@ try {
     result.probe = await page.evaluate(code);
     log("probe:", JSON.stringify(result.probe, null, 1));
   }
+  if (arg("profile", false)) {
+    // Main-thread CPU profile of a few seconds of fighting: top functions by self time.
+    await cdp.send("Profiler.enable");
+    await cdp.send("Profiler.setSamplingInterval", { interval: 200 });
+    await cdp.send("Profiler.start");
+    await sleep(8000);
+    const { profile } = await cdp.send("Profiler.stop");
+    const self = new Map();
+    const byId = new Map(profile.nodes.map((n) => [n.id, n]));
+    const total = profile.timeDeltas.reduce((a, b) => a + b, 0);
+    profile.samples.forEach((id, i) => {
+      const n = byId.get(id);
+      const f = n.callFrame;
+      const key = `${f.functionName || "(anon)"} ${(f.url || "").split("/").pop()}:${f.lineNumber + 1}`;
+      self.set(key, (self.get(key) || 0) + (profile.timeDeltas[i] || 0));
+    });
+    result.profile = [...self.entries()].sort((a, b) => b[1] - a[1]).slice(0, 40).map(([k, us]) => [k, +(us / 1000).toFixed(1), +((100 * us) / total).toFixed(1)]);
+    log(`profile (${(total / 1e6).toFixed(1)} s):`);
+    for (const [k, ms, pct] of result.profile.slice(0, 30)) log(`  ${pct}% ${ms} ms  ${k}`);
+  }
   for (const phase of PHASES) {
     if (phase === "ablate" || phase === "none") continue;
     result.phases[phase] = await measure(phase);
@@ -201,7 +221,7 @@ try {
 
 function summary(p) {
   const f = (v) => (Number.isFinite(v) ? v.toFixed(1) : "-");
-  return `fps ${f(p.perf.fps)} | frame p50 ${f(p.perf.interval.p50)} p95 ${f(p.perf.interval.p95)} p99 ${f(p.perf.interval.p99)} max ${f(p.perf.interval.max)} | hitches ${p.perf.hitches} | cpu p50 ${f(p.perf.cpu.p50)} p95 ${f(p.perf.cpu.p95)} | gpu p50 ${f(p.perf.gpu.p50)} p95 ${f(p.perf.gpu.p95)} | main ${f(p.mainMsPerFrame)} ms/frame (script ${f(p.scriptMsPerFrame)}) | calls ${p.perf.calls} tris ${p.perf.triangles} tex ${p.perf.textures} | react ${f(p.react.commitsPerSec)} commits/s ${f(p.react.rendersPerSec)} renders/s | store ${f(p.storePerSec)}/s | gc ${p.gc ? `${p.gc.count} (${f(p.gc.totalMs)} ms, max ${f(p.gc.maxMs)})` : "-"} | pose ${p.pose ? `${p.pose.runner}/${p.pose.delegate} ${p.pose.variant} ${f(p.pose.detectMs)} ms, ${f(p.pose.posesPerSec)}/s, age p50 ${f(p.pose.ageP50)} p95 ${f(p.pose.ageP95)}` : "-"} | heap ${f(p.heapMB)} MB | quality ${p.quality ? p.quality.level : "-"}`;
+  return `fps ${f(p.perf.fps)} | frame p50 ${f(p.perf.interval.p50)} p95 ${f(p.perf.interval.p95)} p99 ${f(p.perf.interval.p99)} max ${f(p.perf.interval.max)} | hitches ${p.perf.hitches} | cpu p50 ${f(p.perf.cpu.p50)} p95 ${f(p.perf.cpu.p95)} | gpu p50 ${f(p.perf.gpu.p50)} p95 ${f(p.perf.gpu.p95)} | main ${f(p.mainMsPerFrame)} ms/frame (script ${f(p.scriptMsPerFrame)}) | calls ${p.perf.calls} tris ${p.perf.triangles} tex ${p.perf.textures} | react ${f(p.react.commitsPerSec)} commits/s ${f(p.react.rendersPerSec)} renders/s | store ${f(p.storePerSec)}/s | gc ${p.gc ? `${p.gc.count} (${f(p.gc.totalMs)} ms, max ${f(p.gc.maxMs)})` : "-"} | pose ${p.pose ? `${p.pose.runner}/${p.pose.delegate} ${p.pose.variant} ${f(p.pose.detectMs)} ms, ${f(p.pose.posesPerSec)}/s, age p50 ${f(p.pose.ageP50)} p95 ${f(p.pose.ageP95)}${p.pose.singlePose ? " ONE-POSE" : ""} hipX ${JSON.stringify(p.pose.hipX)}` : "-"} | heap ${f(p.heapMB)} MB | quality ${p.quality ? p.quality.level : "-"}`;
 }
 
 async function metrics() {
@@ -221,8 +241,12 @@ async function measure(phase) {
     window.__unsubStore = window.__brawl.store.subscribe(() => window.__storeUpdates++);
     // Poses delivered for P1, and how old each is on arrival (camera frame -> landmarks in the game).
     window.__poseAges = [];
+    window.__poseHips = [];
     window.__unsubPose?.();
-    window.__unsubPose = window.__brawl.game.input.subscribe("p1", (f) => window.__poseAges.push(performance.now() - f.t));
+    window.__unsubPose = window.__brawl.game.input.subscribe("p1", (f) => {
+      window.__poseAges.push(performance.now() - f.t);
+      if (f.image[23] && f.image[24]) window.__poseHips.push((f.image[23].x + f.image[24].x) / 2);
+    });
   });
   const traceDone = startTrace();
   const m0 = await metrics();
@@ -266,6 +290,13 @@ async function measure(phase) {
         return {
           variant: source.variant, detectMs: source.stats.detectMs, cameraFps: source.stats.fps, runner: source.stats.runner, delegate: source.stats.delegate ?? source.delegate,
           posesPerSec: ages.length, ageP50: ages[Math.floor(ages.length / 2)], ageP95: ages[Math.floor(ages.length * 0.95)],
+          // Where the tracked person's hips are (image x): a jump to someone else in frame shows in the tails.
+          hipX: (() => {
+            const h = window.__poseHips.slice().sort((a, b) => a - b);
+            const q = (p) => +(h[Math.min(h.length - 1, Math.floor(p * h.length))] ?? NaN).toFixed(3);
+            return { p1: q(0.01), p5: q(0.05), p50: q(0.5), p95: q(0.95), p99: q(0.99) };
+          })(),
+          singlePose: source.stats.singlePose,
         };
       })() : null,
       phase: window.__brawl.store.getState().phase,
