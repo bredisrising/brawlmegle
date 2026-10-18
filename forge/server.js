@@ -73,7 +73,7 @@ for (const id of fs.readdirSync(DATA)) {
 // Fight records for the leaderboard: one shared record per fighter (by fighter id), so every laptop sees the same
 // standings. Kept in FORGE_DATA/records.json (a file, so the fighter-folder loader above skips it).
 const RECORDS_FILE = new URL("records.json", DATA);
-/** @type {Record<string, {wins: number, losses: number, draws: number, streak: number, bestStreak: number}>} */
+/** @type {Record<string, {wins: number, losses: number, draws: number, streak: number, bestStreak: number, recentResults?: string[]}>} */
 let records = {};
 try {
   records = JSON.parse(fs.readFileSync(RECORDS_FILE, "utf8"));
@@ -268,9 +268,11 @@ async function handle(req, res) {
       const id = typeof body?.[side] === "string" ? body[side] : null;
       if (!id || !fighters.has(id)) continue;
       const r = records[id] ?? { wins: 0, losses: 0, draws: 0, streak: 0, bestStreak: 0 };
-      if (!winner) records[id] = { ...r, draws: r.draws + 1, streak: 0 };
-      else if (winner === side) records[id] = { ...r, wins: r.wins + 1, streak: r.streak + 1, bestStreak: Math.max(r.bestStreak, r.streak + 1) };
-      else records[id] = { ...r, losses: r.losses + 1, streak: 0 };
+      // The last seven rounds, newest last (the leaderboard's recent-form tiebreaker).
+      const recentResults = [...(r.recentResults ?? []), !winner ? "draw" : winner === side ? "win" : "loss"].slice(-7);
+      if (!winner) records[id] = { ...r, draws: r.draws + 1, streak: 0, recentResults };
+      else if (winner === side) records[id] = { ...r, wins: r.wins + 1, streak: r.streak + 1, bestStreak: Math.max(r.bestStreak, r.streak + 1), recentResults };
+      else records[id] = { ...r, losses: r.losses + 1, streak: 0, recentResults };
     }
     fs.writeFile(RECORDS_FILE, JSON.stringify(records), (err) => err && console.warn("records save failed:", err.message));
     return json(res, 200, { ok: true });

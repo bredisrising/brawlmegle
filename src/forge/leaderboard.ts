@@ -8,26 +8,39 @@ import type { ForgedFighter, PlayerId } from '../types';
  */
 const KEY = 'brawlegle.leaderboard';
 
+type MatchResult = 'win' | 'loss' | 'draw';
+
 export type FighterRecord = {
   wins: number;
   losses: number;
   draws: number;
   streak: number;
   bestStreak: number;
+  /** The last seven rounds, newest last: recent form, the leaderboard's tiebreaker. */
+  recentResults: MatchResult[];
 };
 
-const emptyRecord = (): FighterRecord => ({ wins: 0, losses: 0, draws: 0, streak: 0, bestStreak: 0 });
+const RECENT = 7;
+export const emptyRecord = (): FighterRecord => ({ wins: 0, losses: 0, draws: 0, streak: 0, bestStreak: 0, recentResults: [] });
 const api = () => config.forgeApi.replace(/\/+$/, '');
 
-function isRecord(value: unknown): value is FighterRecord {
-  if (!value || typeof value !== 'object') return false;
+function toRecord(value: unknown): FighterRecord | null {
+  if (!value || typeof value !== 'object') return null;
   const record = value as Record<string, unknown>;
-  return ['wins', 'losses', 'draws', 'streak', 'bestStreak'].every((key) => typeof record[key] === 'number' && Number.isFinite(record[key]));
+  if (!['wins', 'losses', 'draws', 'streak', 'bestStreak'].every((key) => typeof record[key] === 'number' && Number.isFinite(record[key]))) return null;
+  // Records saved before recent form existed are still valid, with no recent rounds.
+  const recent = Array.isArray(record.recentResults) && record.recentResults.every((r) => r === 'win' || r === 'loss' || r === 'draw')
+    ? (record.recentResults as MatchResult[]).slice(-RECENT)
+    : [];
+  return { wins: record.wins as number, losses: record.losses as number, draws: record.draws as number, streak: record.streak as number, bestStreak: record.bestStreak as number, recentResults: recent };
 }
 
 function clean(stored: unknown): Record<string, FighterRecord> {
   if (!stored || typeof stored !== 'object') return {};
-  return Object.fromEntries(Object.entries(stored).filter(([, value]) => isRecord(value))) as Record<string, FighterRecord>;
+  return Object.fromEntries(Object.entries(stored).flatMap(([id, value]) => {
+    const record = toRecord(value);
+    return record ? [[id, record]] : [];
+  }));
 }
 
 function readRecords(): Record<string, FighterRecord> {
@@ -79,6 +92,17 @@ export function winRate(record: FighterRecord) {
   return decided ? Math.round((record.wins / decided) * 100) : 0;
 }
 
+/** Win rate over the fighter's last seven rounds (draws count as neither). */
+export function recentWinRate(record: FighterRecord) {
+  const decided = record.recentResults.filter((r) => r !== 'draw');
+  return decided.length ? Math.round((decided.filter((r) => r === 'win').length / decided.length) * 100) : 0;
+}
+
+/** Leaderboard order: most wins, then recent form, then career win rate, then fights played. */
+export function compareRecords(a: FighterRecord, b: FighterRecord) {
+  return b.wins - a.wins || recentWinRate(b) - recentWinRate(a) || winRate(b) - winRate(a) || totalMatches(b) - totalMatches(a);
+}
+
 /**
  * Save one completed round. The host is authoritative for network matches. A side left out (a CPU, which wears
  * someone else's fighter) isn't recorded; the human side still is.
@@ -89,11 +113,13 @@ export function recordMatch(fighters: Partial<Record<PlayerId, ForgedFighter>>, 
     const fighter = fighters[id];
     if (!fighter) continue;
     const previous = records[fighter.id] ?? emptyRecord();
-    if (!winner) records[fighter.id] = { ...previous, draws: previous.draws + 1, streak: 0 };
+    const result: MatchResult = !winner ? 'draw' : winner === id ? 'win' : 'loss';
+    const recentResults = [...previous.recentResults, result].slice(-RECENT);
+    if (!winner) records[fighter.id] = { ...previous, draws: previous.draws + 1, streak: 0, recentResults };
     else if (winner === id) {
       const streak = previous.streak + 1;
-      records[fighter.id] = { ...previous, wins: previous.wins + 1, streak, bestStreak: Math.max(previous.bestStreak, streak) };
-    } else records[fighter.id] = { ...previous, losses: previous.losses + 1, streak: 0 };
+      records[fighter.id] = { ...previous, wins: previous.wins + 1, streak, bestStreak: Math.max(previous.bestStreak, streak), recentResults };
+    } else records[fighter.id] = { ...previous, losses: previous.losses + 1, streak: 0, recentResults };
   }
   writeRecords(records);
   if (!config.forgeApi) return;
