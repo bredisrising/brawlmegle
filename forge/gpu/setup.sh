@@ -26,7 +26,7 @@ apt-get install -y -q git git-lfs libjpeg-dev zlib1g-dev libgl1 libglib2.0-0 lib
 # The newest CUDA 12 toolkit on the AMI compiles the extensions (torch is cu124; only the major version must match).
 CUDA_HOME=$(ls -d /usr/local/cuda-12.4 2>/dev/null || ls -d /usr/local/cuda-12.* | sort -V | tail -1)
 export CUDA_HOME PATH=$CUDA_HOME/bin:$PATH
-export TORCH_CUDA_ARCH_LIST="8.6;8.9" NVCC_APPEND_FLAGS="--extended-lambda" MAX_JOBS=$(nproc)
+export TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9" NVCC_APPEND_FLAGS="--extended-lambda" MAX_JOBS=$(nproc)
 echo "== CUDA $CUDA_HOME, $(nproc) cores"
 
 if [ ! -x $CONDA/bin/conda ]; then
@@ -48,10 +48,11 @@ if [ ! -d $ROOT/TRELLIS.2/.git ]; then
   echo "== TRELLIS.2"
   git clone -q --recursive https://github.com/microsoft/TRELLIS.2.git $ROOT/TRELLIS.2
   git -C $ROOT/TRELLIS.2 checkout -q $TRELLIS_COMMIT
+  git -C $ROOT/TRELLIS.2 submodule update -q --init --recursive
 fi
 
 echo "== python packages"
-$PIP imageio imageio-ffmpeg tqdm easydict opencv-python-headless ninja trimesh transformers tensorboard pandas lpips zstandard \
+$PIP imageio imageio-ffmpeg tqdm easydict opencv-python-headless ninja trimesh transformers pandas zstandard \
   kornia "timm>=1.0.20" pillow mediapipe huggingface_hub hf_transfer safetensors plyfile
 $PIP "git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8"
 
@@ -97,8 +98,9 @@ echo "== service"
 mkdir -p $ROOT/app
 cp "$SRC"/server.py "$SRC"/gen3d.py "$SRC"/landmarks.py "$SRC"/rig_blender.py "$SRC"/weights.py $ROOT/app/
 if [ ! -f /etc/forge3d.env ]; then
-  umask 077
-  cat > /etc/forge3d.env <<EOF
+  (
+    umask 077
+    cat > /etc/forge3d.env <<EOF
 FORGE3D_KEY=$(openssl rand -hex 24)
 FORGE3D_PORT=8790
 FORGE3D_PIPELINE=1024_cascade
@@ -106,6 +108,7 @@ FORGE3D_STEPS=12
 FORGE3D_FACES=60000
 FORGE3D_TEXTURE=2048
 EOF
+  )
 fi
 cp "$SRC"/forge3d.service /etc/systemd/system/forge3d.service
 systemctl daemon-reload
