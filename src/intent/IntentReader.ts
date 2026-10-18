@@ -87,8 +87,6 @@ type LimbState = {
   risingAt: number;
   /** Current tip travel from the anchor (to compare the two hands). */
   travel: Vec3;
-  /** Last time the hand loaded up (dipped or cocked out): what follows is a strike, not a guard coming up. */
-  loadedAt: number;
   // Debug readouts
   disp: number;
   out: number;
@@ -282,7 +280,6 @@ export class IntentReader {
       } else if (def.kind === 'arm' && windingUp(def, tTip)) {
         // Loading up (dropping for an uppercut, cocking out for a hook): the strike will start from here.
         s.anchor = clonePair(now);
-        s.loadedAt = t;
       } else if (retracting && t - s.rearmedAt < 400) {
         // Coming back from the last strike: the next one starts from wherever the retraction turns around
         // (fast combos never get back to guard).
@@ -317,12 +314,11 @@ export class IntentReader {
       // Legs must also lift (knee or foot) above where they usually sit, so stepping isn't kicking.
       const lift = Math.max(s.peak.y, s.peakMidRise);
       // Punches don't travel down: an arm straightening as the hand drops (back to the lap) isn't a strike.
-      const goingDown = def.kind === 'arm' && tTip.y < -0.15 && tTip.y < -0.5 * len(tTip);
+      const goingDown = def.kind === 'arm' && s.peak.y < -0.15 && s.peak.y < -0.5 * len(s.peak);
       const reason = s.peakDisp < needed || (def.kind === 'leg' && lift < this.config.legRise) ? 'too small'
         : goingDown ? 'going down'
-        : def.kind === 'arm' && (raisingGuard(body, s.anchorTip, tipPt.p, this.config.guard.radius)
-          || handToFace(body, s.peak, tipPt.p, this.config.guard.radius, s.since - s.faceBeforeOnset > 600 && s.since - s.loadedAt > 300)) ? 'raising guard'
-        : def.kind === 'arm' && bothHandsUp(body, name, tTip, s.since - s.faceBeforeOnset > 600 && t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 250) ? 'both hands up'
+        : def.kind === 'arm' && raisingGuard(body, s.anchorTip, tipPt.p, this.config.guard.radius) ? 'raising guard'
+        : def.kind === 'arm' && bothHandsUp(body, name, s.peak, s.since - s.faceBeforeOnset > 600 && t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 250) ? 'both hands up'
         : def.kind === 'arm' && movedTogether(s.peak, this.limbs[name === 'armL' ? 'armR' : 'armL'], t) ? 'both hands moved'
         : def.kind === 'arm' && raisedOverHead(body, s.peakTip, s.peak, midPt.p, root.p) ? 'not a punch'
         : null;
@@ -588,16 +584,6 @@ function movedTogether(travel: Vec3, other: LimbState, t: number) {
  * your guard up, not an uppercut. Real uppercuts start from guard height.
  */
 
-/**
- * A hand that hasn't been up by the face for a while and now rises into the face zone is coming up to guard
- * (or to block), not throwing an uppercut: uppercuts are thrown from guard, after a short dip at most.
- */
-function handToFace(body: Body, travel: Vec3, end: Vec3, radius: number, wasDown: boolean) {
-  if (!wasDown || travel.y < 0.12 || travel.y < 0.5 * len(travel)) return false;
-  const nose = body.points[LM.nose].p;
-  return Math.hypot(end.x - nose.x, end.y - nose.y) < radius * 1.2;
-}
-
 function raisingGuard(body: Body, start: Vec3, end: Vec3, radius: number) {
   const nose = body.points[LM.nose].p;
   const shoulderY = (body.points[LM.lShoulder].p.y + body.points[LM.rShoulder].p.y) / 2;
@@ -641,7 +627,7 @@ function windupOf(s: LimbState, dir: Vec3) {
 function newLimb(): LimbState {
   return {
     phase: 'idle', rest: null, anchor: null, since: 0, grewAt: 0, peakDisp: 0, peakSpeed: 0,
-    peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, peakMidTravel: 0, peakMidOut: 0, anchorTip: { x: 0, y: 0, z: 0 }, peakElbow: 0, history: [], typicalSpeed: 4, extended: null, lastRestDisp: 0, rearmedAt: -Infinity, nearFaceAt: -Infinity, faceBeforeOnset: -Infinity, risingAt: -Infinity, travel: { x: 0, y: 0, z: 0 }, loadedAt: -Infinity, disp: 0, out: 0,
+    peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, peakMidTravel: 0, peakMidOut: 0, anchorTip: { x: 0, y: 0, z: 0 }, peakElbow: 0, history: [], typicalSpeed: 4, extended: null, lastRestDisp: 0, rearmedAt: -Infinity, nearFaceAt: -Infinity, faceBeforeOnset: -Infinity, risingAt: -Infinity, travel: { x: 0, y: 0, z: 0 }, disp: 0, out: 0,
   };
 }
 
