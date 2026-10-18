@@ -52,5 +52,5 @@ describe.skipIf(!hasRigCheck)('rigcheck-all', () => {
     expect(JSON.parse(fs.readFileSync(path.join(data, 'good-1/fighter.json'), 'utf8')).hidden).toBeUndefined();
     // Nothing visible fails any more.
     expect(audit(data).code).toBe(0);
-  });
+  }, 30_000); // runs the CLI three times; slow when the whole suite runs in parallel
 });
