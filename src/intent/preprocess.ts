@@ -147,7 +147,8 @@ export class PosePreprocessor {
 
   /** Returns null for repeated or unusable frames; callers keep the previous Body. */
   process(frame: PoseFrame): Body | null {
-    if (frame.t <= this.lastT || frame.image.length < 33 || frame.world.length < 33) return null;
+    // Bad data (a peer's frame with nulls, NaN from a glitch) would poison the filters for good: drop it.
+    if (!usableFrame(frame) || frame.t <= this.lastT) return null;
     // Same pixels twice (camera slower than the render loop): identical landmarks, new timestamp.
     const key = rawKey(frame.image);
     if (key === this.lastRawKey) return null;
@@ -157,7 +158,7 @@ export class PosePreprocessor {
     const dt = this.prev ? (frame.t - this.lastT) / 1000 : 0;
     this.lastT = frame.t;
 
-    const aspect = frame.aspect ?? 4 / 3;
+    const aspect = frame.aspect !== undefined && frame.aspect > 0 && Number.isFinite(frame.aspect) ? frame.aspect : 4 / 3;
     let raw: Raw[] = frame.image.map((p, i) => ({
       x: p.x * aspect,
       y: p.y,
@@ -173,9 +174,11 @@ export class PosePreprocessor {
       const px = f.x.value;
       const py = f.y.value;
       const visible = point.visibility >= minVisibility;
-      // A move this fast in one frame is a tracking glitch, not a punch.
+      // A move this fast is a tracking glitch, not a punch. Judged over the time since the point was last seen:
+      // a hand that was blurred out mid-swing really did travel, and per frame it would be rejected forever.
+      const since = Math.max(dt, (frame.t - this.lastGood[i]) / 1000);
       const glitch = px !== null && py !== null && dt > 0
-        && Math.hypot(point.x - px, point.y - py) / unitGuess / dt > maxSpeed;
+        && Math.hypot(point.x - px, point.y - py) / unitGuess / since > maxSpeed;
       if (visible && !glitch) {
         this.lastGood[i] = frame.t;
         return { x: f.x.filter(point.x, dt), y: f.y.filter(point.y, dt), z: f.z.filter(point.z, dt), visibility: point.visibility };
@@ -283,6 +286,20 @@ export class PosePreprocessor {
     }
     return out;
   }
+}
+
+/** 33 image and 33 world landmarks with finite coordinates, and a finite timestamp. */
+export function usableFrame(frame: PoseFrame | null | undefined): frame is PoseFrame {
+  return !!frame && Number.isFinite(frame.t) && usablePoints(frame.image) && usablePoints(frame.world);
+}
+
+function usablePoints(points: unknown): boolean {
+  if (!Array.isArray(points) || points.length < 33) return false;
+  for (let i = 0; i < 33; i++) {
+    const p = points[i] as Landmark | null | undefined;
+    if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(p.z)) return false;
+  }
+  return true;
 }
 
 function bodyUnit(points: { x: number; y: number; visibility: number }[], useHips: boolean) {
