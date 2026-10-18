@@ -250,6 +250,61 @@ Per-prompt guided tables (before | after). Guard up/down events are left out.
 - New cancel reasons: `'both hands moved'` and `'not a punch'`. New optional config fields:
   `preprocess.unitSeconds` and `arm.confirmMs`. These show up in the tuner automatically.
 
+## Round 2: the other arm, blocks and ducks
+
+research/move-research.md (on origin/main) found that 38% of real fake strikes are the other arm moving
+during or after a real punch, and 22% are blocks and ducks with the hands up. A reach threshold can't separate
+them from real combos. I tried several rules against both guided tests, the matrix and the orchestrator test,
+and kept only the three that helped without costing combos:
+
+- **The other hand moved along.** Over this strike's own wind-up (onset to confirm), if the other hand moved the
+  same way by at least half as much (cosine > 0.8), it was both hands moving, not a punch. This catches both
+  hands lifting into a block and the body carrying both. Real follow-up punches come while the other hand pulls
+  back.
+- **Mirror-image strikes on the same frame.** Both arms "striking" on the same frame, with mirror-image hand and
+  elbow motion (cosine > 0.8 in each arm's own side-for-side frame), are cancelled. This is mostly both elbows
+  coming up as the shoulders drop into a duck with the guard up, which the image-space check missed. The super
+  (both fists held overhead) is a separate path and unaffected: `special.test.ts` still passes.
+- **A guard tuck isn't a hook.** A hand that sweeps in across the body while its elbow tucks in (moves toward
+  the center) and stays down (rises < 0.08) is the guard closing up. That's the other hand's usual move while
+  one hand punches. A hook brings the elbow up.
+
+Results (before = main at the start of this round, e8badfa):
+
+| | before | after |
+|---|---|---|
+| guided, friend: caught / fakes | 11/12 / 7 | 11/12 / 4 |
+| guided, user: caught / fakes / double strikes | 10/12 / 20 / 2 | 9/12 / 15 / 0 |
+| matrix mean: recall / precision / FP per minute | 89% / 88% / 2.9 | 89% / 89% / 2.5 |
+| matrix fast-combo recall: mean, then standing / 24 fps / sitting 15 fps | 75%: 81 / 72 / 71 | 74%: 80 / 71 / 70 |
+| orchestrator: threw / right kind | 22/24 / 18 | 22/24 / 18 |
+| 36564 / 40256 / 49576 false positives | 3 / 7 / 11 | 3 / 7 / 10 |
+
+- **The fakes removed:**
+  - The friend's duck: both arms, now gone.
+  - The user's guard pull-ins during left punches and hooks (17.2, 49.0 and 70.3 s).
+  - A double strike on the user's right hook.
+  - A hook during the user's lean left.
+- **The catch lost:** the user's left uppercut at 27.8 s. It was already read as the wrong move: the hand swept
+  in with the elbow dropping, which looks like a guard tuck. The orchestrator's "right kind" is unchanged.
+
+**Tried and dropped:**
+
+- **The torso-swing lockout** (within 900 ms of the other arm's punch, cancel a strike whose hand moves the way
+  the head moves relative to its shoulder). It cut 3–4 of the user's fakes but lost a right-kind strike in the
+  orchestrator test and every strike on 40256. The head barely moves (0.01–0.1 units), so the direction is
+  mostly noise, and a camera roll moves hand and head together. Synthetic combos also failed it until it
+  required visible head motion.
+- **Raising the bar for elbow-led strikes while the other arm is mid-punch.** The friend's fakes dropped 6 → 4,
+  but the user lost a catch and gained a fake.
+- **No arm strikes while the head drops fast.** It had no effect on these sessions.
+- **The other hand moving in mirror image, without the same-frame requirement.** It cut 2 more fakes but lost a
+  catch and an orchestrator "threw".
+
+**Note for the integrator:** on the friend's guided test the new super fires on both BLOCK prompts (20.8 and
+66.8 s): both fists up by the forehead with the elbows up. The guided scorer doesn't count `special` as a fake,
+so it doesn't show in the numbers above. A high block looks like the seated super pose.
+
 ## Still weak
 
 - **Style on real players.** Camera-facing seated hooks often read as straights. At confirm time a hook's
