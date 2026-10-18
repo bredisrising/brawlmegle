@@ -34,6 +34,22 @@ JSON messages over a WebSocket at `/ws`. Two ways to pair up: host and join by c
 
 `iceServers` includes short-lived TURN credentials, so don't hard-code TURN usernames or passwords in the app.
 
+### Find a fight (the game's matchmaking)
+
+Built on host and join by code: a quick player either joins someone who's waiting, or waits as a host itself.
+
+| Message | Direction | Means |
+|---|---|---|
+| `{type: "quick", player}` | either → server | Find me an opponent. `player` is the player's id (one per browser tab, letters, digits, `-`, `_`), so the next match can prefer someone new. |
+| `{type: "room", code, token, iceServers}` | server → player | Nobody (new) is waiting: you wait as a host. Same as the reply to `host`; the game doesn't show this code. The usual `peer-joined` follows when someone is sent to you. |
+| `{type: "quick-join", code}` | server → player | Join this waiting host: send `{type: "join", code, player}` (the game opens a fresh socket for it). The host is held for your `player` for 10 s; a join by anyone else is refused meanwhile. A waiting host can get this too (the sweep below), and then its own room is closed. |
+
+- The oldest waiting quick host that isn't your last opponent gets you.
+- Two players who just fought each other and search again both wait; if nobody new turns up in 3 s (`QUICK_REPAIR_MS`), the newer one is sent to the older one. So two people online keep getting paired.
+- A sweep every 0.5 s also pairs any two quick hosts waiting at once (e.g. the player matched with one of them never joined and its hold ran out).
+- A quick host is out of the queue once someone joins it, or when it leaves or disconnects. To search again, send `quick` again (the game opens a fresh socket).
+- `/health` counts waiting quick hosts as `quick`.
+
 ### Random strangers and named rooms
 
 Client → server:

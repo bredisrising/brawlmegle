@@ -18,7 +18,7 @@ if (!url) {
   const samples = fs.mkdtempSync(path.join(os.tmpdir(), "mm-samples-"));
   child = spawn(process.execPath, ["server.js"], {
     cwd: new URL("..", import.meta.url),
-    env: { ...process.env, PORT: String(port), TURN_HOST: "turn.test", TURN_SECRET: SECRET, SAMPLES_DIR: samples },
+    env: { ...process.env, PORT: String(port), TURN_HOST: "turn.test", TURN_SECRET: SECRET, SAMPLES_DIR: samples, QUICK_RESERVE_MS: "1500" },
     stdio: ["ignore", "pipe", "inherit"],
   });
   await new Promise((resolve) => child.stdout.once("data", resolve));
@@ -40,13 +40,23 @@ async function client() {
   await new Promise((resolve, reject) => ws.once("open", resolve).once("error", reject));
   return {
     send: (msg) => ws.send(JSON.stringify(msg)),
-    next: (type) => {
+    next: (type, timeoutMs = 3000) => {
       const i = inbox.findIndex((m) => m.type === type);
       if (i >= 0) return Promise.resolve(inbox.splice(i, 1)[0]);
       return new Promise((resolve, reject) => {
-        waiters.push({ type, resolve });
-        setTimeout(() => reject(new Error(`timed out waiting for ${type}`)), 3000);
+        const waiter = { type, resolve };
+        waiters.push(waiter);
+        setTimeout(() => {
+          const at = waiters.indexOf(waiter);
+          if (at >= 0) waiters.splice(at, 1);
+          reject(new Error(`timed out waiting for ${type}`));
+        }, timeoutMs);
       });
+    },
+    /** Whether a message of this type arrives within `ms` (left in the inbox). */
+    gets: async (type, ms) => {
+      await new Promise((r) => setTimeout(r, ms));
+      return inbox.some((m) => m.type === type);
     },
     close: () => ws.close(),
   };
@@ -176,6 +186,8 @@ try {
   console.log("ok  spectators watch a hosted room");
   for (const x of [caster, nowhere]) x.close();
 
+  await quickTests();
+
   if (httpBase) {
     // Training-sample uploads: a `null` header used to crash the whole server.
     const bad = await fetch(`${httpBase}/samples`, { method: "POST", body: "null\n" });
@@ -190,4 +202,121 @@ try {
   console.log("all passed");
 } finally {
   child?.kill("SIGTERM");
+}
+
+/** "Find a fight": quick pairing, the two-waiting-hosts race, preferring someone new, re-pairing when alone. */
+async function quickTests() {
+  const id = () => `p-${crypto.randomUUID().slice(0, 8)}`;
+  const probe = await client();
+  probe.send({ type: "quick", player: id() });
+  const first = await Promise.race([probe.next("room").catch(() => null), probe.next("error").catch(() => null)]);
+  probe.close();
+  if (first?.type === "error" && process.env.MATCHMAKER_URL) return console.log("--  quick matchmaking not on this server yet");
+  assert.equal(first?.type, "room", "quick: a lone player waits as a host");
+
+  // A and B: A waits as a host (a room whose code the game doesn't show), B is told to join A's room by its code.
+  const [pa, pb, pc, pd] = [id(), id(), id(), id()];
+  const qa = await client();
+  qa.send({ type: "quick", player: pa });
+  const roomA = (await qa.next("room")).code;
+  const qb = await client();
+  qb.send({ type: "quick", player: pb });
+  assert.equal((await qb.next("quick-join")).code, roomA);
+  console.log("ok  quick: the second player is sent to the waiting one");
+
+  // While B is on its way, A's room is held for B: a third quick player waits instead of taking it, and a join
+  // by code from anyone else is refused.
+  const qc = await client();
+  qc.send({ type: "quick", player: pc });
+  const roomC = (await qc.next("room")).code;
+  assert.notEqual(roomC, roomA);
+  const sneak = await client();
+  sneak.send({ type: "join", code: roomA, player: id() });
+  assert.match((await sneak.next("error")).message, /two players/);
+  sneak.close();
+  // B joins by code (a fresh socket, like the game's client Peer), with its player id.
+  const jb = await client();
+  qb.close();
+  jb.send({ type: "join", code: roomA, player: pb });
+  await jb.next("joined");
+  await qa.next("peer-joined");
+  console.log("ok  quick: the matched room is held for that player, who joins by code");
+
+  // The race: two quick hosts waiting at once (C, and D who comes in as a host) get paired by the sweep.
+  const qd = await client();
+  qd.send({ type: "host" }); // an ordinary room is never matched
+  await qd.next("room");
+  assert.equal(await qd.gets("quick-join", 800), false, "a code room got matched");
+  qd.send({ type: "quick", player: pd });
+  // C is waiting and new to D: D joins C straight away.
+  assert.equal((await qd.next("quick-join")).code, roomC);
+  console.log("ok  quick: a host re-listed as quick pairs with the one waiting");
+  for (const x of [qa, jb, qc, qd]) x.close();
+
+  // A and B fought; both search again. Each prefers someone new, so B waits too; with nobody else around the sweep
+  // pairs them again after a few seconds. With a newcomer around, the newcomer is preferred.
+  const a2 = await client();
+  a2.send({ type: "quick", player: pa });
+  const roomA2 = (await a2.next("room")).code;
+  const b2 = await client();
+  b2.send({ type: "quick", player: pb });
+  await b2.next("room"); // not straight to A
+  const started = Date.now();
+  assert.equal((await b2.next("quick-join", 8000)).code, roomA2);
+  const took = Date.now() - started;
+  assert.ok(took >= 2000 && took < 6000, `re-paired after ${took} ms`);
+  console.log(`ok  quick: the same two are re-paired when alone (${took} ms)`);
+  a2.close();
+  b2.close();
+
+  const a3 = await client();
+  a3.send({ type: "quick", player: pa });
+  const roomA3 = (await a3.next("room")).code;
+  const newcomer = await client();
+  const pe = id();
+  newcomer.send({ type: "quick", player: pe });
+  assert.equal((await newcomer.next("quick-join")).code, roomA3);
+  const b3 = await client();
+  b3.send({ type: "quick", player: pb });
+  await b3.next("room"); // A is held for the newcomer; B waits
+  console.log("ok  quick: a newcomer is preferred over the last opponent");
+
+  for (const x of [a3, newcomer, b3]) x.close();
+  await new Promise((r) => setTimeout(r, 200));
+
+  // A waiting host that leaves is out of the queue, so nobody is sent to a dead room.
+  const e = await client();
+  e.send({ type: "quick", player: id() });
+  await e.next("room");
+  e.close();
+  await new Promise((r) => setTimeout(r, 200));
+  const f = await client();
+  f.send({ type: "quick", player: id() });
+  await f.next("room");
+  f.close();
+  console.log("ok  quick: a host that left is out of the queue");
+
+  if (!process.env.MATCHMAKER_URL) {
+    // Two quick hosts waiting at once (the race): G was matched with H, but H never joined; once the hold runs out
+    // (1.5 s here, 10 s live), G is free again and the sweep pairs it with I, who is waiting too.
+    const g = await client();
+    g.send({ type: "quick", player: id() });
+    const roomG = (await g.next("room")).code;
+    const h = await client();
+    h.send({ type: "quick", player: id() });
+    await h.next("quick-join");
+    h.close(); // never joins
+    const i = await client();
+    i.send({ type: "quick", player: id() });
+    await i.next("room"); // G is held for H
+    assert.equal((await i.next("quick-join", 5000)).code, roomG);
+    console.log("ok  quick: two waiting hosts get paired by the sweep (a no-show's hold runs out)");
+    for (const x of [g, i]) x.close();
+  }
+
+  const bad = await client();
+  bad.send({ type: "quick", player: "no spaces!" });
+  assert.equal((await bad.next("error")).message, "bad player");
+  bad.close();
+  console.log("ok  quick: player id validation");
 }

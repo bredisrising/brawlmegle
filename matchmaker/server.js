@@ -28,6 +28,12 @@ const RATE_WINDOW_MS = 10_000;
 const RATE_MAX_MESSAGES = 200;
 const HEARTBEAT_MS = 30_000;
 const ROOM_RE = /^[A-Za-z0-9_-]{1,32}$/;
+const PLAYER_RE = /^[A-Za-z0-9_-]{1,64}$/;
+/** "Find a fight": a waiting quick host is held this long for the player it was matched with to join. */
+const QUICK_RESERVE_MS = Number(process.env.QUICK_RESERVE_MS ?? 10_000);
+/** Two quick players who just fought each other wait this long for someone new before they're paired again. */
+const QUICK_REPAIR_MS = Number(process.env.QUICK_REPAIR_MS ?? 3000);
+const QUICK_SWEEP_MS = 500;
 
 const testPage = fs.readFileSync(new URL("./public/index.html", import.meta.url));
 
@@ -121,6 +127,9 @@ function saveVideo(req, res, url) {
  * @property {Client | null} peer
  * @property {null | "queue" | string} waiting  "queue" for a random match, or a room code
  * @property {string | null} hostCode  room this client hosts (host/join flow)
+ * @property {string | null} player  "Find a fight": the player's id (one per browser tab), to avoid re-pairing the last opponent
+ * @property {number} quickSince  when this quick host started waiting (it's listed in `quickWaiting`)
+ * @property {{ player: string, until: number } | null} quickReserved  matched with a player who's on their way to join
  * @property {boolean} alive
  * @property {number} msgs
  * @property {number} windowStart
@@ -135,6 +144,15 @@ const rooms = new Map();
 /** Host/join flow: rooms keyed by a short code, held by the host for as long as it's connected. @type {Map<string, Client>} */
 const hosted = new Map();
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O or 1/I
+/**
+ * "Find a fight" (the game's matchmaking): hosts waiting for any opponent, oldest first. A quick player either joins
+ * one of them (`quick-join` with its code, then the usual join by code) or waits as one (an ordinary hosted room whose
+ * code is never shown). @type {Set<Client>}
+ */
+const quickWaiting = new Set();
+/** Each quick player's last opponent, so the next match prefers someone new. @type {Map<string, string>} */
+const lastOpponent = new Map();
+const MAX_REMEMBERED = 5000;
 /**
  * A host that loses its socket (Wi-Fi blip, server restart) sends `{type: "host", code, token}` to take its
  * code back, so the client's rejoin-with-the-same-code still finds it. With TURN_SECRET set, tokens survive restarts.
@@ -295,17 +313,91 @@ function host(client, wanted, token) {
   if (watching) send(client, { type: "watchers", count: watching });
 }
 
-function joinHosted(client, code) {
+function joinHosted(client, code, player) {
   const hostClient = hosted.get(code.toUpperCase());
   if (!hostClient || hostClient === client) return sendError(client, `No room with code ${code}`);
   if (hostClient.peer) return sendError(client, "That room already has two players");
+  // A quick host matched with someone is held for them until they arrive (or the hold runs out).
+  const held = hostClient.quickReserved;
+  if (held && held.until > Date.now() && held.player !== player) return sendError(client, "That room already has two players");
   reset(client);
+  unlistQuick(hostClient);
   hostClient.peer = client;
   client.peer = hostClient;
   // The host makes the offer. Both get fresh TURN credentials; the client can apply them with
   // pc.setConfiguration() because the offer only arrives after this message.
   send(hostClient, { type: "peer-joined", iceServers: iceServers(hostClient.id) });
   send(client, { type: "joined", code: hostClient.hostCode, iceServers: iceServers(client.id) });
+}
+
+/** "Find a fight": pair with a waiting quick host, or wait as one. */
+function quick(client, player) {
+  reset(client);
+  unlistQuick(client);
+  client.player = player;
+  const partner = quickPartner(client);
+  if (partner) return matchQuick(partner, client);
+  // Nobody new is waiting: wait as a host (an ordinary room; the game never shows its code). The sweep pairs this
+  // player with their last opponent if nobody else turns up.
+  host(client);
+  client.quickSince = Date.now();
+  quickWaiting.add(client);
+}
+
+/** Whether these two quick players just fought each other. */
+const rematched = (a, b) => lastOpponent.get(a.player) === b.player || lastOpponent.get(b.player) === a.player;
+
+/** A waiting quick host that can take an opponent right now. */
+function quickFree(c, now = Date.now()) {
+  return c.ws.readyState === c.ws.OPEN && !c.peer && !!c.hostCode && !(c.quickReserved && c.quickReserved.until > now);
+}
+
+/** The oldest waiting quick host for `client` that it didn't just fight. */
+function quickPartner(client) {
+  for (const w of quickWaiting) {
+    if (w === client || w.player === client.player || !quickFree(w)) continue;
+    if (!rematched(w, client)) return w;
+  }
+  return null;
+}
+
+/** `arrival` joins `waiter`'s room: the waiter is held for them, and they get its code to join with. */
+function matchQuick(waiter, arrival) {
+  waiter.quickReserved = { player: arrival.player, until: Date.now() + QUICK_RESERVE_MS };
+  for (const [a, b] of [[waiter.player, arrival.player], [arrival.player, waiter.player]]) {
+    lastOpponent.delete(a);
+    lastOpponent.set(a, b);
+  }
+  while (lastOpponent.size > MAX_REMEMBERED) lastOpponent.delete(lastOpponent.keys().next().value);
+  // A waiting host told to join someone else (the sweep) gives up its own room.
+  if (arrival.hostCode) {
+    unlistQuick(arrival);
+    stopHosting(arrival);
+  }
+  send(arrival, { type: "quick-join", code: waiter.hostCode });
+}
+
+function unlistQuick(client) {
+  quickWaiting.delete(client);
+  client.quickReserved = null;
+}
+
+/**
+ * Two quick hosts can end up waiting at once: two players who just fought each other (each prefers someone new), or
+ * a matched player who never joined. The newer one joins the older one, at once if they haven't just fought, or after
+ * QUICK_REPAIR_MS with nobody new around if they have (two people online keep getting paired).
+ */
+function sweepQuick() {
+  const now = Date.now();
+  const free = [...quickWaiting].filter((c) => quickFree(c, now));
+  for (let j = 1; j < free.length; j++) {
+    const b = free[j];
+    if (!quickWaiting.has(b) || !quickFree(b, now)) continue;
+    const a = free
+      .slice(0, j)
+      .find((w) => quickWaiting.has(w) && quickFree(w, now) && w.player !== b.player && (!rematched(w, b) || now - b.quickSince >= QUICK_REPAIR_MS));
+    if (a) matchQuick(a, b);
+  }
 }
 
 function stopHosting(client) {
@@ -341,7 +433,7 @@ function onMessage(client, raw) {
       break;
     case "join":
       if (typeof msg.code === "string") {
-        if (ROOM_RE.test(msg.code)) joinHosted(client, msg.code);
+        if (ROOM_RE.test(msg.code)) joinHosted(client, msg.code, typeof msg.player === "string" ? msg.player : null);
         else sendError(client, "bad room code");
         break;
       }
@@ -349,6 +441,10 @@ function onMessage(client, raw) {
       if (msg.room === undefined) joinQueue(client);
       else if (typeof msg.room === "string" && ROOM_RE.test(msg.room)) joinRoom(client, msg.room);
       else sendError(client, "bad room");
+      break;
+    case "quick":
+      if (typeof msg.player === "string" && PLAYER_RE.test(msg.player)) quick(client, msg.player);
+      else sendError(client, "bad player");
       break;
     case "signal":
       if (client.peer) send(client.peer, { type: "signal", data: msg.data });
@@ -359,6 +455,7 @@ function onMessage(client, raw) {
       break;
     case "leave":
       reset(client);
+      unlistQuick(client);
       stopHosting(client);
       break;
     default:
@@ -380,7 +477,7 @@ const server = http.createServer((req, res) => {
     saveSample(req, res);
   } else if (url.pathname === "/health") {
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ ok: true, clients: clients.size, waiting: queue.size, rooms: rooms.size, hosted: hosted.size }));
+    res.end(JSON.stringify({ ok: true, clients: clients.size, waiting: queue.size, rooms: rooms.size, hosted: hosted.size, quick: quickWaiting.size }));
   } else if (url.pathname === "/") {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     res.end(testPage);
@@ -400,12 +497,13 @@ const wss = new WebSocketServer({
 
 wss.on("connection", (ws) => {
   /** @type {Client} */
-  const client = { id: crypto.randomUUID(), ws, peer: null, waiting: null, hostCode: null, watching: null, alive: true, msgs: 0, windowStart: Date.now(), casts: 0, castWindow: 0 };
+  const client = { id: crypto.randomUUID(), ws, peer: null, waiting: null, hostCode: null, player: null, quickSince: 0, quickReserved: null, watching: null, alive: true, msgs: 0, windowStart: Date.now(), casts: 0, castWindow: 0 };
   clients.add(client);
   ws.on("pong", () => (client.alive = true));
   ws.on("message", (raw) => onMessage(client, raw));
   ws.on("close", () => {
     reset(client);
+    unlistQuick(client);
     stopHosting(client);
     clients.delete(client);
   });
@@ -424,9 +522,11 @@ const heartbeat = setInterval(() => {
     client.ws.ping();
   }
 }, HEARTBEAT_MS);
+const quickSweep = setInterval(sweepQuick, QUICK_SWEEP_MS);
 
 process.on("SIGTERM", () => {
   clearInterval(heartbeat);
+  clearInterval(quickSweep);
   for (const client of clients) client.ws.close(1001, "restarting");
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 2000).unref();
