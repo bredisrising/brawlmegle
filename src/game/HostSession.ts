@@ -100,7 +100,11 @@ export class HostSession {
 
   /** Opens the room. Resolves with its code, or '' while signaling is unreachable (the code arrives via the store later). */
   async open(): Promise<string> {
+    // Matchmade: closing the tab tells the stranger at once, so they go find someone new (no waiting for a timeout).
+    const bye = () => this.quick && this.send({ type: 'next' });
+    window.addEventListener('pagehide', bye);
     this.cleanup.push(
+      () => window.removeEventListener('pagehide', bye),
       this.peer.onMessage((msg) => this.onMessage(msg as ClientMessage)),
       this.peer.onConnected(this.onConnected),
       this.peer.onClose(this.onDrop),

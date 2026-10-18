@@ -373,6 +373,33 @@ async function runGameHost() {
     await poll(() => ((g.input.latest('p2')?.t ?? Infinity) < 100 ? true : undefined), 'restarted pose clock on the host');
   });
 
+  await test('game host (room code): a K.O. needs both rematch votes, and there is no auto-next countdown', async () => {
+    const host = g as unknown as { testSlots: Set<string> };
+    host.testSlots.clear(); // P1 counts as a person here: they have to click too
+    const from = client.inbox.length;
+    const votes = () => client.inbox.slice(from).filter((m) => m.type === 'votes') as Extract<HostMessage, { type: 'votes' }>[];
+    useGameStore.setState({ phase: 'ko', ending: 'time', winner: 'p1', countdown: null });
+    const first = await poll(() => votes()[0], 'votes on the K.O.');
+    assert(!first.votes.p1 && !first.votes.p2 && first.nextIn === null, `first votes ${JSON.stringify(first)}`);
+    g.voteRematch();
+    await poll(() => votes().find((m) => m.votes.p1), "the host's vote mirrored to the client");
+    await wait(2600); // past when a matchmade fight would start its countdown
+    assert(useGameStore.getState().phase === 'ko', 'rematched on one vote');
+    assert(votes().every((m) => m.nextIn === null), 'a room-code fight got a countdown');
+    client.peer.send({ type: 'rematch' });
+    await poll(() => (useGameStore.getState().phase === 'countdown' ? true : undefined), 'rematch once both voted');
+    assert(!useGameStore.getState().votes.p1, 'votes not reset');
+  });
+
+  await test('game host: a slot nobody sits at (CPU, test player) votes yes at once: one click rematches', async () => {
+    const host = g as unknown as { testSlots: Set<string> };
+    host.testSlots.add('p1');
+    useGameStore.setState({ phase: 'ko', ending: 'time', winner: 'p2', countdown: null });
+    await poll(() => (useGameStore.getState().votes.p1 ? true : undefined), 'P1 auto-voted');
+    client.peer.send({ type: 'rematch' });
+    await poll(() => (useGameStore.getState().phase === 'countdown' ? true : undefined), 'rematch on the one vote');
+  });
+
   await test('game host: the client leaves (back to the title): P2 frees up, the code shows again, a new player joins', async () => {
     client.peer.send({ type: 'leave' });
     await poll(() => (useGameStore.getState().players.p2.status === 'waiting' ? true : undefined), "P2's slot freed");

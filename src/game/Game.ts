@@ -287,6 +287,7 @@ export class Game {
       connected: () => {
         if (!mine()) return;
         if (this.quick) useGameStore.setState({ searching: false });
+        this.shareCamera();
         this.cam.connected();
         this.sendMatch();
         if (useGameStore.getState().phase === 'ko') this.publishVotes();
@@ -430,6 +431,7 @@ export class Game {
       events: (events) => mine() && this.mirrorEvents(events),
       local: (intents) => mine() && this.localRead(intents),
       peer: (peer) => {
+        this.shareCamera();
         this.cam.attach(peer, (hidden) => client.sendCam(hidden));
         this.cam.connected();
       },
@@ -856,8 +858,7 @@ export class Game {
 
   private update = (dt: number, frozen: boolean) => {
     this.effects.update(dt);
-    const video = this.localInputSource()?.video?.srcObject;
-    this.cam.camera(video instanceof MediaStream ? video : this.cameraOverride);
+    this.shareCamera();
     this.checkNext();
     if (this.replayIn > 0 && !frozen && (this.replayIn -= dt) <= 0) {
       this.replayIn = -1;
@@ -975,7 +976,15 @@ export class Game {
     );
   }
 
+  /** Hand this laptop's camera (whichever source tracks the player now) to the camera share. Cheap; every frame. */
+  private shareCamera() {
+    const video = this.localInputSource()?.video?.srcObject;
+    this.cam.camera(video instanceof MediaStream ? video : this.cameraOverride);
+  }
+
   private async pollLink() {
+    // Also here: frames stop in a background tab, and the opponent should still get the camera.
+    this.shareCamera();
     const stats = this.hostSession?.connected ? await this.hostSession.peer.linkStats() : this.client ? await this.client.linkStats() : null;
     const prev = useGameStore.getState().link;
     if (stats?.rttMs !== prev?.rttMs || stats?.path !== prev?.path) useGameStore.setState({ link: stats });
