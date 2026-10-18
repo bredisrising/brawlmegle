@@ -12,7 +12,7 @@ export type Intent =
   /** A limb started moving fast: start a wind-up animation now, before the strike is confirmed. */
   | { kind: 'anticipate'; limb: LimbName; t: number }
   /** The wind-up didn't turn into a strike; blend back. */
-  | { kind: 'cancel'; limb: LimbName; t: number; reason?: 'too small' | 'going down' | 'raising guard' | 'both hands up' | 'both hands moved' | 'not a punch' }
+  | { kind: 'cancel'; limb: LimbName; t: number; reason?: 'too small' | 'going down' | 'raising guard' | 'both hands up' | 'both hands moved' | 'not a punch' | 'support leg' }
   | {
       kind: 'strike';
       limb: LimbName;

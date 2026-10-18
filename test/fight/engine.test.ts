@@ -358,6 +358,9 @@ describe('kick breaks guard', () => {
     expect(hit?.damage).toBeGreaterThanOrEqual(MOVES.kick.damage - 1);
     expect(kick.some((e) => e.type === 'blocked')).toBe(false);
 
+    const knee = run(engineAt(0.45), 60, { 0: [attack('p1', 'knee', { autoLunge: true })] }, { p2: { guard: true } });
+    expect(knee.find((e) => e.type === 'hit' || e.type === 'counter')?.guardBreak).toBe(true);
+
     const jab = run(engineAt(0.7), 40, { 0: [attack('p1', 'jab', { hand: 'L' })] }, { p2: { guard: true } });
     expect(jab.some((e) => e.type === 'blocked')).toBe(true);
     expect(jab.some((e) => e.guardBreak)).toBe(false);

@@ -36,6 +36,13 @@ const MID_WEIGHT = 1.0;
 const EXT_WEIGHT = 0.6;
 /** Elbow angles from one camera wobble; ignore the first ~15° of opening. */
 const EXT_DEADBAND = 0.1;
+/**
+ * Legs are read only while the feet are in the shot: their visibility, smoothed over FEET_SECONDS, above FEET_IN_VIEW.
+ * With the feet cut off MediaPipe guesses the knees too, and the guesses jump with every punch (recorded 1v1s: all
+ * but one player had the feet out of view, ankle visibility ≤ 0.1, and their "knees" were punches 23 times in 28).
+ */
+const FEET_SECONDS = 1.5;
+const FEET_IN_VIEW = 0.2;
 const LIMB_NAMES = Object.keys(LIMBS) as LimbName[];
 const PARTNER: Record<LimbName, LimbName> = { armL: 'armR', armR: 'armL', legL: 'legR', legR: 'legL' };
 
@@ -43,7 +50,7 @@ const PARTNER: Record<LimbName, LimbName> = { armL: 'armR', armR: 'armL', legL: 
  * Tip and middle joint relative to the limb root, plus (arms) how open the elbow is, scaled by EXT_WEIGHT, and
  * (arms) where the head is relative to the same shoulder.
  */
-type Pair = { tip: Vec3; mid: Vec3; ext: number; head: Vec3 };
+type Pair = { tip: Vec3; mid: Vec3; ext: number; head: Vec3; seen: boolean };
 type LimbState = {
   phase: 'idle' | 'onset' | 'recover';
   /** Usual position (guard or relaxed); "back near rest" means ready to strike again. */
@@ -73,6 +80,8 @@ type LimbState = {
   anchorTip: Vec3;
   /** Elbow angle (degrees) at the peak. */
   peakElbow: number;
+  /** Whether the tip was in view at the peak (feet often aren't). */
+  peakTipSeen: boolean;
   history: { t: number; d: Vec3 }[];
   typicalSpeed: number;
   /** Where the limb was at its furthest after the last strike (recover phase), to see it retract. */
@@ -130,6 +139,8 @@ export class IntentReader {
   private shoulderRest: { x: number; y: number } | null = null;
   /** Usual position of the feet (full-body framing): a moving camera moves them too, a duck or a slip doesn't. */
   private feetRest: { x: number; y: number } | null = null;
+  /** Ankle visibility, smoothed (see FEET_IN_VIEW). */
+  private feetVis = 0;
   private lastCore: Record<'jump' | 'duck' | 'dodge', number> = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
   /** A head move must hold for two frames in a row: one-frame tracking glitches throw the whole skeleton around. */
   private pendingCore: Record<'jump' | 'duck' | 'dodge', number> = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
@@ -178,6 +189,7 @@ export class IntentReader {
     this.headRest = null;
     this.shoulderRest = null;
     this.feetRest = null;
+    this.feetVis = 0;
     this.guardSince = null;
     this.guardUp = false;
   }
@@ -205,6 +217,8 @@ export class IntentReader {
     if (body.dt === 0 && this.body) this.resetLimbs();
     this.body = body;
 
+    const ankles = (body.points[LM.lAnkle].visibility + body.points[LM.rAnkle].visibility) / 2;
+    this.feetVis += (1 - Math.exp(-body.dt / FEET_SECONDS)) * (ankles - this.feetVis);
     const intents: Intent[] = [];
     for (const name of LIMB_NAMES) this.updateLimb(name, body, intents);
     this.bothArmsTogether(body.t, intents);
@@ -249,23 +263,25 @@ export class IntentReader {
     const root = body.points[def.root];
     const tipPt = body.points[def.tip];
     const midPt = body.points[def.mid];
-    // Legs off-screen (upper-body framing) or a limb MediaPipe can't see: don't guess.
+    // Legs off-screen (upper-body framing) or a limb MediaPipe can't see: don't guess. Legs need the feet in the shot
+    // (FEET_IN_VIEW), then go by the knee: every knee and kick lifts it, and a kicking foot often blurs out of view.
     const visible = def.kind === 'arm'
       ? tipPt.visibility > 0.3 && root.visibility > 0.5
-      : body.fullBodyFor > 1000 && tipPt.visibility > 0.5 && midPt.visibility > 0.5;
+      : body.fullBodyFor > 1000 && this.feetVis > FEET_IN_VIEW && midPt.visibility > 0.5;
     // Arms: relative to the shoulder, so leaning and ducking don't look like punches.
     // Legs: height is measured from the usual hip height, so when the hips drop in a duck the knees
-    // don't seem to rise.
+    // don't seem to rise. Above it (a jump), from the hips: knees going up with the whole body aren't a knee strike.
     const legs = def.kind === 'leg';
+    const hipDrop = Math.min(0, body.root.y);
     const relOf = (p: BodyPoint): Vec3 => ({
       x: p.p.x - root.p.x,
-      y: legs ? p.p.y + body.root.y : p.p.y - root.p.y,
+      y: legs ? p.p.y + hipDrop : p.p.y - root.p.y,
       z: (p.p.z - root.p.z) * wz,
     });
     // Velocities come from the lightly filtered channel so onsets register a frame or two sooner.
     const velOf = (p: BodyPoint): Vec3 => ({
       x: p.vf.x - root.vf.x,
-      y: legs ? p.vf.y + body.root.vy : p.vf.y - root.vf.y,
+      y: legs ? p.vf.y + (hipDrop < 0 ? body.root.vy : 0) : p.vf.y - root.vf.y,
       z: (p.vf.z - root.vf.z) * wz,
     });
     const side = name === 'armL' ? 'L' : 'R';
@@ -273,7 +289,8 @@ export class IntentReader {
     const extV = legs ? 0 : (body.elbow[side === 'L' ? 'vL' : 'vR'] / 90) * EXT_WEIGHT;
     const nosePt = body.points[LM.nose];
     const head = legs ? ZERO : { x: nosePt.p.x - root.p.x, y: nosePt.p.y - root.p.y, z: 0 };
-    const now: Pair = { tip: relOf(tipPt), mid: relOf(midPt), ext, head };
+    // Whether the tip is really in view: feet often aren't (MediaPipe guesses where they are).
+    const now: Pair = { tip: relOf(tipPt), mid: relOf(midPt), ext, head, seen: !legs || tipPt.visibility > 0.5 };
     if (!s.rest) s.rest = clonePair(now);
     if (!s.anchor) s.anchor = clonePair(now);
     // A hand held up in guard rides along with the head: when the torso twists or leans (throwing the other hand,
@@ -285,17 +302,20 @@ export class IntentReader {
     const tipVel = velOf(tipPt);
     const vel = { tip: { x: tipVel.x - guardHand * headVel.x, y: tipVel.y - guardHand * headVel.y, z: tipVel.z }, mid: velOf(midPt) };
 
-    // Travel since the last pause, tip and middle joint together.
-    const tTip = tipTravel(now, s.anchor);
+    // Travel since the last pause, tip and middle joint together. Legs: the knee, and the foot only when it was in view
+    // at both ends (see `visible`).
+    const kneeOnly = (a: Pair, b: Pair) => legs && !(a.seen && b.seen);
+    const legReach = (a: Pair, b: Pair) => kneeOnly(a, b) ? len(sub(a.mid, b.mid)) : Math.hypot(len(sub(a.tip, b.tip)), MID_WEIGHT * len(sub(a.mid, b.mid)));
     const tMid = sub(now.mid, s.anchor.mid);
+    const tTip = kneeOnly(now, s.anchor) ? tMid : tipTravel(now, s.anchor);
     // Only opening the elbow counts (bending it back is a retraction).
     const tExt = Math.max(0, now.ext - s.anchor.ext - EXT_DEADBAND);
-    const disp = Math.hypot(len(tTip), MID_WEIGHT * len(tMid), tExt);
-    const outward = disp > 1e-3 ? (dot(vel.tip, tTip) + MID_WEIGHT * MID_WEIGHT * dot(vel.mid, tMid) + tExt * extV) / disp : 0;
+    const disp = legs ? legReach(now, s.anchor) : Math.hypot(len(tTip), MID_WEIGHT * len(tMid), tExt);
+    const outward = disp < 1e-3 ? 0 : kneeOnly(now, s.anchor) ? dot(vel.mid, tMid) / disp : (dot(vel.tip, tTip) + MID_WEIGHT * MID_WEIGHT * dot(vel.mid, tMid) + tExt * extV) / disp;
     // Resting is judged on the smooth channel: the fast one is too jittery to ever look still.
     const smoothV = (p: BodyPoint) => Math.hypot(p.v.x - root.v.x, p.v.y - root.v.y);
-    const speed = Math.hypot(smoothV(tipPt), MID_WEIGHT * smoothV(midPt));
-    const restDisp = Math.hypot(len(tipTravel(now, s.rest)), MID_WEIGHT * len(sub(now.mid, s.rest.mid)), Math.abs(now.ext - s.rest.ext));
+    const speed = legs && !now.seen ? smoothV(midPt) : Math.hypot(smoothV(tipPt), MID_WEIGHT * smoothV(midPt));
+    const restDisp = legs ? legReach(now, s.rest) : Math.hypot(len(tipTravel(now, s.rest)), MID_WEIGHT * len(sub(now.mid, s.rest.mid)), Math.abs(now.ext - s.rest.ext));
     if (!legs && Math.hypot(tipPt.p.x - nosePt.p.x, tipPt.p.y - nosePt.p.y) < this.config.guard.radius) s.nearFaceAt = t;
     if (!legs && vel.tip.y > 1.0) s.risingAt = t;
     const retracting = restDisp < s.lastRestDisp - 0.004;
@@ -303,7 +323,7 @@ export class IntentReader {
     s.disp = disp;
     s.out = outward;
     s.travel = tTip;
-    s.history.push({ t, d: tipTravel(now, s.rest) });
+    s.history.push({ t, d: kneeOnly(now, s.rest) ? sub(now.mid, s.rest.mid) : tipTravel(now, s.rest) });
     while (s.history.length && t - s.history[0].t > 500) s.history.shift();
 
     if (s.phase === 'idle') {
@@ -325,20 +345,23 @@ export class IntentReader {
       // An arm already up in the air (elbow at shoulder height, hand above it: waving, a hand on the head) isn't
       // throwing a punch, whatever it does next. Punches start from a guard, elbow down.
       const raised = def.kind === 'arm' && s.anchor.mid.y > -0.15 && s.anchor.tip.y - s.anchor.mid.y > 0.25;
-      if (visible && !dropping && !raised && outward > cfg.onsetSpeed && disp > cfg.onsetDist && (strikeLike(def, tTip, tMid, disp) || extensionStrike(def, tTip, tExt, disp))) {
+      // Mid-kick, the arms swing for balance and the standing leg shifts: neither is a strike.
+      const partner = this.limbs[PARTNER[name]];
+      const busy = legs ? partner.phase === 'recover' && t - partner.since < 500 : this.kicking(t);
+      if (visible && !dropping && !raised && !busy && outward > cfg.onsetSpeed && disp > cfg.onsetDist && (strikeLike(def, tTip, tMid, disp) || extensionStrike(def, tTip, tExt, disp))) {
         if (!legs) {
           const o = body.points[def.side === 1 ? LM.rWrist : LM.lWrist].p, os = body.points[def.side === 1 ? LM.rShoulder : LM.lShoulder].p;
           s.otherAtOnset = { x: o.x - os.x, y: o.y - os.y, z: 0 };
           s.tipAtOnset = { x: tipPt.p.x - root.p.x, y: tipPt.p.y - root.p.y, z: 0 };
         }
-        Object.assign(s, { phase: 'onset', since: t, grewAt: t, faceBeforeOnset: s.nearFaceAt, peakDisp: disp, peakSpeed: outward, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: legs ? 0 : body.elbow[side], anchorTip: { x: tipPt.p.x - tTip.x, y: tipPt.p.y - tTip.y, z: tipPt.p.z } });
+        Object.assign(s, { phase: 'onset', since: t, grewAt: t, faceBeforeOnset: s.nearFaceAt, peakDisp: disp, peakSpeed: outward, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: legs ? 0 : body.elbow[side], peakTipSeen: tipPt.visibility > 0.3, anchorTip: { x: tipPt.p.x - tTip.x, y: tipPt.p.y - tTip.y, z: tipPt.p.z } });
         out.push({ kind: 'anticipate', limb: name, t });
       }
       return;
     }
 
     if (s.phase === 'onset') {
-      if (disp > s.peakDisp) Object.assign(s, { grewAt: t, peakDisp: disp, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: legs ? 0 : body.elbow[side] });
+      if (disp > s.peakDisp) Object.assign(s, { grewAt: t, peakDisp: disp, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: legs ? 0 : body.elbow[side], peakTipSeen: tipPt.visibility > 0.3 });
       s.peakSpeed = Math.max(s.peakSpeed, outward);
       // Confirm as soon as it has traveled far enough (don't wait for the arm to slow down: that costs most
       // of the punch). Give up if it slows down short of that.
@@ -357,11 +380,13 @@ export class IntentReader {
       const slowing = t - s.grewAt >= 60;
       if (!farEnough && !slowing && t - s.since < cfg.maxWindupMs) return;
 
-      // Legs must also lift (knee or foot) above where they usually sit, so stepping isn't kicking.
-      const lift = Math.max(s.peak.y, s.peakMidRise);
+      // Legs must also lift the knee above where it usually sits, so stepping isn't kicking (a step lifts the foot).
+      const lift = s.peakMidRise;
       // Punches don't travel down: an arm straightening as the hand drops (back to the lap) isn't a strike.
       const goingDown = def.kind === 'arm' && s.peak.y < -0.15 && s.peak.y < -0.5 * len(s.peak);
       const reason = s.peakDisp < needed || (def.kind === 'leg' && lift < this.config.legRise) ? 'too small'
+        : legs && this.supportLeg(name, t) ? 'support leg'
+        : def.kind === 'arm' && this.kicking(t) ? 'not a punch'
         : goingDown ? 'going down'
         : def.kind === 'arm' && raisingGuard(body, name, s.anchorTip, tipPt.p, this.config.guard.radius, t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 400) ? 'raising guard'
         : def.kind === 'arm' && bothHandsUp(body, name, s.peak, s.since - s.faceBeforeOnset > 600 && t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 250) ? 'both hands up'
@@ -383,7 +408,7 @@ export class IntentReader {
       const features = def.kind === 'arm' ? strikeFeatures(def, s, root.p) : undefined;
       const ruleStyle: StrikeStyle = def.kind === 'arm' && Math.abs(s.peak.x) <= 0.45 && (s.peakExt > len(s.peak) || s.peakExt > 0.15 || len(s.peak) < 0.6 * s.peakMidTravel)
         ? 'straight'
-        : classify(def.kind, dir, strikeOut, s.peakTip, s.peakMid, s.peakMidOut, s.peak, s.peakMidRise, s.peakExt, s.peakElbow);
+        : classify(def.kind, dir, strikeOut, s.peakTip, s.peakMid, s.peakMidOut, s.peak, s.peakMidRise, s.peakExt, s.peakElbow, s.peakTipSeen);
       const style = features && this.matcher ? this.matcher.decide(features, ruleStyle) : ruleStyle;
       out.push({
         kind: 'strike',
@@ -405,21 +430,41 @@ export class IntentReader {
       s.phase = 'recover';
       s.since = t;
       s.extended = clonePair(now);
+      // The other leg was what this one stood on.
+      const partner = this.limbs[PARTNER[name]];
+      if (legs && partner.phase === 'onset') {
+        partner.phase = 'idle';
+        out.push({ kind: 'cancel', limb: PARTNER[name], t, reason: 'support leg' });
+      }
       return;
     }
 
     // Recover: ready again once the limb comes back near rest, or has clearly pulled back from its furthest
     // point (a combo: the next punch starts before the hand gets home), or after a timeout.
     const ext0 = s.extended ?? now;
-    const fromAnchor = (q: Pair) => Math.hypot(len(tipTravel(q, s.anchor!)), MID_WEIGHT * len(sub(q.mid, s.anchor!.mid)), Math.max(0, q.ext - s.anchor!.ext - EXT_DEADBAND));
+    const fromAnchor = (q: Pair) => legs ? legReach(q, s.anchor!) : Math.hypot(len(tipTravel(q, s.anchor!)), MID_WEIGHT * len(sub(q.mid, s.anchor!.mid)), Math.max(0, q.ext - s.anchor!.ext - EXT_DEADBAND));
     if (fromAnchor(now) > fromAnchor(ext0)) s.extended = clonePair(now);
-    const pulledBack = Math.hypot(len(tipTravel(now, s.extended!)), MID_WEIGHT * len(sub(now.mid, s.extended!.mid)), Math.abs(now.ext - s.extended!.ext));
+    const pulledBack = legs ? legReach(now, s.extended!) : Math.hypot(len(tipTravel(now, s.extended!)), MID_WEIGHT * len(sub(now.mid, s.extended!.mid)), Math.abs(now.ext - s.extended!.ext));
     const home = restDisp < cfg.returnDist;
     if (home || pulledBack > Math.max(cfg.onsetDist, 0.35 * s.peakDisp) || t - s.since > cfg.recoverMs) {
       s.phase = 'idle';
       s.anchor = clonePair(now);
       if (!home) s.rearmedAt = t;
     }
+  }
+
+  /** A leg is kicking (its knee has come up for real) or just kicked: arm swings and leans now are balance. */
+  private kicking(t: number) {
+    return (['legL', 'legR'] as const).some((n) => {
+      const l = this.limbs[n];
+      return (l.phase === 'onset' && l.peakMidRise >= this.config.legRise) || (l.phase === 'recover' && t - l.since < 400);
+    });
+  }
+
+  /** The other leg is the one striking (bigger so far, or it just struck): this one is what the player stands on. */
+  private supportLeg(name: LimbName, t: number) {
+    const other = this.limbs[PARTNER[name]];
+    return (other.phase === 'onset' && other.peakDisp > this.limbs[name].peakDisp) || (other.phase === 'recover' && t - other.since < 500);
   }
 
   private updateCore(body: Body, out: Intent[]) {
@@ -495,7 +540,9 @@ export class IntentReader {
     const leaning = Math.abs(lean) > cfg.dodge.shift * dodgeK && shoulderLean * Math.sign(lean) > 0.2 * Math.abs(lean)
       && (lean - shoulderLean) * Math.sign(lean) > 0.15 * Math.abs(lean) && headDrop < cfg.duck.drop * 0.6;
     const leaningFast = leaning && Math.sign(headV.x) === Math.sign(lean) && Math.abs(headV.x) > cfg.dodge.speed;
-    if (held('dodge', leaningFast, leaning && headV.x * Math.sign(lean) > -cfg.dodge.speed) && t - this.lastCore.dodge > cfg.coreCooldownMs) {
+    // Kicking leans the body away from the kick, for balance.
+    const kicking = this.kicking(t);
+    if (held('dodge', leaningFast && !kicking, leaning && !kicking && headV.x * Math.sign(lean) > -cfg.dodge.speed) && t - this.lastCore.dodge > cfg.coreCooldownMs) {
       this.lastCore.dodge = t;
       out.push({ kind: 'dodge', t, dir: lean > 0 ? 'L' : 'R' });
     }
@@ -692,9 +739,10 @@ function raisingGuard(body: Body, limb: LimbName, start: Vec3, end: Vec3, radius
 /** An uppercut's forearm stands within this of vertical (radians); laid over further, a rising fist is a hook. */
 const UPPER_MAX_TILT = (30 * Math.PI) / 180;
 
-function classify(kind: 'arm' | 'leg', dir: Vec3, out: number, tip: Vec3, mid: Vec3, midOut: number, travel: Vec3, midRise: number, ext = 0, elbow = 180): StrikeStyle {
-  // Kick: the foot comes up near knee height. Knee strike: the knee rises with the foot tucked under it.
-  if (kind === 'leg') return tip.y > mid.y - 0.3 ? 'kick' : 'knee';
+function classify(kind: 'arm' | 'leg', dir: Vec3, out: number, tip: Vec3, mid: Vec3, midOut: number, travel: Vec3, midRise: number, ext = 0, elbow = 180, tipSeen = true): StrikeStyle {
+  // Kick: the foot comes up near knee height. Knee strike: the knee rises with the foot tucked under it (or out of
+  // view: the fight engine picks knee or kick from the distance anyway).
+  if (kind === 'leg') return tipSeen && tip.y > mid.y - 0.3 ? 'kick' : 'knee';
   // A big sideways sweep is a hook (or a haymaker), however straight the arm.
   if (Math.abs(travel.x) > 0.45 && Math.abs(out) > 0.6) return 'hook';
   // Uppercut: the fist drives up much more than the elbow (a punch at the camera lifts the elbow more), with the forearm
@@ -731,13 +779,14 @@ function windupOf(s: LimbState, dir: Vec3) {
 function newLimb(): LimbState {
   return {
     phase: 'idle', rest: null, anchor: null, since: 0, grewAt: 0, peakDisp: 0, peakSpeed: 0,
-    peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, peakMidTravel: 0, peakMidOut: 0, anchorTip: { x: 0, y: 0, z: 0 }, peakElbow: 0, history: [], typicalSpeed: 4, extended: null, lastRestDisp: 0, rearmedAt: -Infinity, nearFaceAt: -Infinity, faceBeforeOnset: -Infinity, risingAt: -Infinity, travel: { x: 0, y: 0, z: 0 }, tipAtOnset: { x: 0, y: 0, z: 0 }, otherAtOnset: { x: 0, y: 0, z: 0 }, disp: 0, out: 0,
+    peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, peakMidTravel: 0, peakMidOut: 0, anchorTip: { x: 0, y: 0, z: 0 }, peakElbow: 0, peakTipSeen: false, history: [], typicalSpeed: 4, extended: null, lastRestDisp: 0, rearmedAt: -Infinity, nearFaceAt: -Infinity, faceBeforeOnset: -Infinity, risingAt: -Infinity, travel: { x: 0, y: 0, z: 0 }, tipAtOnset: { x: 0, y: 0, z: 0 }, otherAtOnset: { x: 0, y: 0, z: 0 }, disp: 0, out: 0,
   };
 }
 
 const ZERO: Vec3 = { x: 0, y: 0, z: 0 };
-const clonePair = (p: Pair): Pair => ({ tip: { ...p.tip }, mid: { ...p.mid }, ext: p.ext, head: { ...p.head } });
+const clonePair = (p: Pair): Pair => ({ tip: { ...p.tip }, mid: { ...p.mid }, ext: p.ext, head: { ...p.head }, seen: p.seen });
 const lerpPair = (a: Pair, b: Pair, k: number): Pair => ({
+  seen: b.seen,
   ext: a.ext + k * (b.ext - a.ext),
   head: { x: a.head.x + k * (b.head.x - a.head.x), y: a.head.y + k * (b.head.y - a.head.y), z: 0 },
   tip: { x: a.tip.x + k * (b.tip.x - a.tip.x), y: a.tip.y + k * (b.tip.y - a.tip.y), z: a.tip.z + k * (b.tip.z - a.tip.z) },
