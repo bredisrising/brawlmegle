@@ -5,6 +5,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { createArena, type Arena } from './Arena';
 import { ImpactPass } from './ImpactPass';
+import { PERF, PerfMonitor } from './PerfMonitor';
 import { config } from '../config';
 
 export type FrameCallback = (dt: number, frozen: boolean) => void;
@@ -19,6 +20,8 @@ export class Renderer {
   readonly renderer = new THREE.WebGLRenderer({ antialias: true });
   private readonly composer: EffectComposer;
   readonly arena: Arena;
+  /** Frame-time monitor (`?perf`), null otherwise. */
+  readonly perf: PerfMonitor | null;
 
   private readonly container: HTMLElement;
   private readonly callbacks = new Set<FrameCallback>();
@@ -55,6 +58,7 @@ export class Renderer {
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     container.appendChild(this.renderer.domElement);
+    this.perf = PERF ? new PerfMonitor(this.renderer) : null;
 
     // HDR pipeline: render -> bloom (only values above 1.0, i.e. emissive/sun) -> tone map + sRGB.
     // The composer's own target is multisampled since canvas antialiasing doesn't apply to it.
@@ -139,12 +143,14 @@ export class Renderer {
     this.resizeObserver.disconnect();
     this.arena.dispose();
     this.composer.dispose();
+    this.perf?.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }
 
   private loop = (now: number) => {
     this.frameId = requestAnimationFrame(this.loop);
+    this.perf?.begin(now);
     const dt = Math.min((now - this.lastTime) / 1000, 1 / 20);
     this.lastTime = now;
 
@@ -160,6 +166,7 @@ export class Renderer {
     this.updateCamera(dt);
     this.impactPass.tick(dt, this.camera.aspect);
     this.composer.render(dt);
+    this.perf?.end();
   };
 
   private updateCamera(dt: number) {

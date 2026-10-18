@@ -144,6 +144,7 @@ export class Game {
 
     this.renderer.onFrame(this.update);
     this.renderer.start();
+    if (this.renderer.perf) this.exposePerf(this.renderer.perf);
     window.addEventListener('keydown', this.onDebugKey);
     window.addEventListener('keydown', this.onMuteKey);
     // Countdown beeps, then the "go" (both laptops: the client's store follows the host's countdown).
@@ -180,6 +181,15 @@ export class Game {
     for (const id of PLAYER_IDS) this.views[id].onLand = (at) => this.effects.burst(at, 'dust');
     // Ping: how the link between the two laptops is doing, every couple of seconds.
     this.linkTimer = setInterval(() => void this.pollLink(), 2000);
+  }
+
+  /** `?perf`: the pose model's timing on the overlay, and the game for scripted measurements (scripts/perf). */
+  private exposePerf(perf: NonNullable<Renderer['perf']>) {
+    perf.extra = () => {
+      const source = this.localInputSource() as { stats?: { detectMs: number }; variant?: string } | null;
+      return source?.stats ? `pose ${source.variant ?? ''} ${source.stats.detectMs.toFixed(1)} ms` : '';
+    };
+    (window as unknown as { __brawl: unknown }).__brawl = { game: this, store: useGameStore, perf };
   }
 
   /** Current local camera or mock source, for the development pose monitor. */
