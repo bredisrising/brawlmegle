@@ -91,6 +91,8 @@ export class CameraSource implements InputSource {
     runner: 'page' as 'worker' | 'page', delegate: DELEGATE as PoseDelegate,
     /** Measured over the last two seconds: detections finished, and frames the camera delivered. */
     detectFps: 0, cameraFps: 0,
+    /** The rates above cover time with the model running (false until a window has passed since its first result). */
+    rated: false,
   };
   private rateStart = 0;
   private cameraFrames = 0;
@@ -170,6 +172,7 @@ export class CameraSource implements InputSource {
   stop() {
     this.running = false;
     this.stats.detectFps = this.stats.cameraFps = 0;
+    this.stats.rated = false;
     this.rateStart = 0;
     if (this.frameRequest && 'cancelVideoFrameCallback' in this.video) this.video.cancelVideoFrameCallback(this.frameRequest);
     else cancelAnimationFrame(this.frameRequest);
@@ -340,11 +343,17 @@ export class CameraSource implements InputSource {
     if (span < 2000) return;
     this.stats.cameraFps = (this.cameraFrames * 1000) / span;
     this.stats.detectFps = (this.detections * 1000) / span;
+    this.stats.rated = this.timedFrames > 0;
     this.rateStart = now;
     this.cameraFrames = this.detections = 0;
   }
 
   private timeDetection(took: number) {
+    // The first detection starts the rate window over, so the model's loading time doesn't read as a slow tracker.
+    if (this.timedFrames === 0) {
+      this.rateStart = performance.now();
+      this.cameraFrames = this.detections = 0;
+    }
     this.detections++;
     this.stats.detectMs += 0.1 * (took - this.stats.detectMs);
     // After a warm-up, a laptop that can't run the full model at camera rate gets the lite one: a punch is only a

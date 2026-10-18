@@ -131,7 +131,7 @@ export class QualityGovernor {
 export function poseRateOf(source: unknown): PoseRate | null {
   const stats = (source as { kind?: string; stats?: Partial<PoseRate> } | null)?.stats;
   if ((source as { kind?: string } | null)?.kind !== 'camera' || !stats || typeof stats.detectFps !== 'number') return null;
-  // Nothing to judge until the model runs (it takes a few seconds to load after the camera starts).
-  if (!stats.detectMs) return null;
+  // Nothing to judge until the model has run for a full rate window (it takes a few seconds to load).
+  if (!(stats as { rated?: boolean }).rated) return null;
   return { detectFps: stats.detectFps, cameraFps: stats.cameraFps ?? 0, detectMs: stats.detectMs ?? 0 };
 }
