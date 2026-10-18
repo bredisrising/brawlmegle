@@ -222,8 +222,10 @@ export class IntentReader {
       const other = PARTNER[name];
       const otherNow = out.some((x) => x.kind === 'strike' && x.limb === other);
       if (!movedTogether(this.limbs[name].peak, this.limbs[other], t, otherNow)) continue;
+      const special = (name === 'armL' || name === 'armR') && this.isSpecial(name, other);
       out.splice(i, 1, { kind: 'cancel', limb: name, t, reason: 'both hands moved' });
       this.limbs[name].phase = 'idle';
+      if (special) out.push({ kind: 'special', t });
       if (otherNow) {
         const j = out.findIndex((x) => x.kind === 'strike' && x.limb === other);
         out.splice(j, 1, { kind: 'cancel', limb: other, t, reason: 'both hands moved' });
@@ -231,6 +233,27 @@ export class IntentReader {
         return;
       }
     }
+  }
+
+  /**
+   * Both arms just made the same move: is it the super's push (a Hadouken), rather than the body or camera moving?
+   * The hands end close together, out in front around chest height or above (not dropping), and both arms reached
+   * well out from where they started. The engine ignores it without a full meter, so a rare false one costs nothing.
+   */
+  private isSpecial(name: LimbName, other: LimbName) {
+    const body = this.body;
+    if (!body) return false;
+    const a = this.limbs[name];
+    const b = this.limbs[other];
+    const tipA = a.peakTip;
+    const tipB = b.phase === 'onset' ? body.points[other === 'armL' ? LM.lWrist : LM.rWrist].p : b.peakTip;
+    const together = Math.hypot(tipA.x - tipB.x, tipA.y - tipB.y) < 0.75;
+    const shoulderY = (body.points[LM.lShoulder].p.y + body.points[LM.rShoulder].p.y) / 2;
+    const chestHigh = (tipA.y + tipB.y) / 2 > shoulderY - 0.9;
+    const travel = a.peak;
+    const notDropping = travel.y > -0.25 * Math.hypot(travel.x, travel.y, travel.z);
+    const far = a.peakDisp > 0.55;
+    return together && chestHigh && notDropping && far;
   }
 
   private updateLimb(name: LimbName, body: Body, out: Intent[]) {

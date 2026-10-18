@@ -201,3 +201,56 @@ describe('head start: the wind-up already on screen counts toward startup', () =
     expect(activeAt(attack('p1', 'cross', { headStart: Number.NaN }))).toBe(activeAt(attack('p1', 'cross')));
   });
 });
+
+describe('super meter and fireball', () => {
+  /** Lands jabs until p1's meter is full. */
+  function charged() {
+    const e = engineAt(0.7);
+    for (let n = 0; n < 20 && (e.state('p1').meter ?? 0) < FIGHT.maxMeter; n++) run(e, 40, { 0: [attack('p1', 'jab', { hand: 'L' })] });
+    return e;
+  }
+  const fireball = attack('p1', 'fireball');
+
+  test('landing hits fills the meter; a fireball without a full meter does nothing', () => {
+    const e = engineAt(0.7);
+    expect(run(e, 60, { 0: [fireball] }).filter((ev) => ev.type === 'startup')).toHaveLength(0);
+    const full = charged();
+    expect(full.state('p1').meter).toBe(FIGHT.maxMeter);
+  });
+
+  test('a full meter throws a fireball that flies across and hits; the meter is spent', () => {
+    const e = charged();
+    const events = run(e, 120, { 0: [fireball] });
+    expect(events.find((ev) => ev.type === 'startup')?.move).toBe('fireball');
+    expect(e.state('p1').meter).toBeLessThan(FIGHT.maxMeter);
+    const hit = events.find((ev) => ev.type === 'hit' && ev.move === 'fireball');
+    expect(hit?.damage).toBeGreaterThan(10);
+  });
+
+  test('it flies: there is a projectile in the air between the throw and the hit', () => {
+    const e = charged();
+    run(e, MOVES.fireball.startup + 2, { 0: [fireball] });
+    const shots = e.projectiles();
+    expect(shots).toHaveLength(1);
+    expect(shots[0].owner).toBe('p1');
+  });
+
+  test('a guard blocks it for chip; a duck lets it pass over', () => {
+    const blocked = charged();
+    const evB = run(blocked, 120, { 0: [fireball] }, { p2: { guard: true } });
+    expect(evB.find((ev) => ev.move === 'fireball' && ev.type === 'blocked')).toBeDefined();
+    // Duck as it gets close.
+    const ducked = charged();
+    const duck: Command = { kind: 'defend', player: 'p2', t: 0, move: 'duck' };
+    const evD: FightEvent[] = [];
+    let ducking = false;
+    for (let i = 0; i < 120; i++) {
+      const shot = ducked.projectiles()[0];
+      const close = !ducking && shot && Math.abs(ducked.state('p2').x - shot.x) < 0.3;
+      if (close) ducking = true;
+      evD.push(...ducked.step(i === 0 ? [fireball] : close ? [duck] : [], { p1: stance('p1'), p2: stance('p2') }));
+    }
+    expect(ducking).toBe(true);
+    expect(evD.find((ev) => ev.move === 'fireball' && (ev.type === 'hit' || ev.type === 'blocked'))).toBeUndefined();
+  });
+});

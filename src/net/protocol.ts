@@ -1,4 +1,4 @@
-import type { FightEvent, FighterState, ForgedFighter, Hand, Phase, PlayerId, PoseFrame } from '../types';
+import type { FightEvent, FighterState, ForgedFighter, Hand, Phase, PlayerId, PoseFrame, Projectile } from '../types';
 
 /**
  * Messages to/from the AWS signaling server (WebSocket). It only brokers the handshake.
@@ -45,6 +45,7 @@ export type MirrorFrame = {
   /** In hit-stop: hold the picture. */
   frozen: boolean;
   timeLeft: number | null;
+  projectiles?: Projectile[];
 };
 
 export type MirrorEvent =

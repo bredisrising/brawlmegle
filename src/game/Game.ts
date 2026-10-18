@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Effects, type EffectKind } from '../director/Effects';
 import { FighterView } from '../director/FighterView';
 import { Sfx } from '../director/Sfx';
+import { Fireballs } from '../director/Fireballs';
 import { Cpu, type CpuLevel } from '../fight/Cpu';
 import { FightEngine } from '../fight/FightEngine';
 import { Resolver } from '../fight/Resolver';
@@ -70,6 +71,7 @@ export class Game {
   private mirrored: MirrorFrame | null = null;
   private readonly mirrorShown: Partial<Record<PlayerId, string>> = {};
   readonly sfx = new Sfx();
+  private readonly fireballs: Fireballs;
   /** Each fighter's phase last tick, to hear a strike come out (whoosh) on both laptops. */
   private readonly heardPhase: Partial<Record<PlayerId, string>> = {};
   private readonly unsubscribe: () => void;
@@ -84,6 +86,7 @@ export class Game {
   constructor(container: HTMLElement) {
     this.renderer = new Renderer(container);
     this.effects = new Effects(this.renderer.scene, this.renderer.camera);
+    this.fireballs = new Fireballs(this.renderer.scene);
     this.views = { p1: new FighterView('p1'), p2: new FighterView('p2') };
     this.intent = { p1: new IntentReader('p1'), p2: new IntentReader('p2') };
     for (const v of Object.values(this.views)) this.renderer.scene.add(v.root);
@@ -313,6 +316,7 @@ export class Game {
     }
     for (const v of Object.values(this.views)) v.dispose();
     this.effects.dispose();
+    this.fireballs.dispose();
     this.renderer.dispose();
   }
 
@@ -324,6 +328,7 @@ export class Game {
 
   private update = (dt: number, frozen: boolean) => {
     this.effects.update(dt);
+    this.fireballs.update(dt);
     // The camera follows whoever's on stage.
     const shown = PLAYER_IDS.filter((id) => this.views[id].root.visible).map((id) => this.views[id].root.position.x);
     if (shown.length === 2) this.renderer.track((shown[0] + shown[1]) / 2, Math.abs(shown[0] - shown[1]));
@@ -392,6 +397,8 @@ export class Game {
     // Hit-stop: the picture holds on the impact while the engine does (effects and camera shake keep going).
     // (Only mid-round: the K.O. hit's hit-stop never runs out, since the engine stops stepping.)
     const frozen = useGameStore.getState().phase === 'fighting' && this.fight.frozen;
+    this.fireballs.sync(this.fight.projectiles());
+    this.showMeters({ p1: this.fight.state('p1'), p2: this.fight.state('p2') });
     this.sendFrame(stances, frozen);
     if (frozen) return;
     const distance = this.fight.distance();
@@ -534,6 +541,7 @@ export class Game {
         distance: this.fight.distance(),
         frozen,
         timeLeft,
+        projectiles: [...this.fight.projectiles()],
       },
     });
   }
@@ -573,6 +581,8 @@ export class Game {
     const { players, timeLeft, phase } = useGameStore.getState();
     if (m.timeLeft !== timeLeft) useGameStore.setState({ timeLeft: m.timeLeft });
     for (const id of PLAYER_IDS) if (players[id].hp !== m.states[id].hp) updatePlayer(id, { hp: m.states[id].hp });
+    this.fireballs.sync(m.projectiles ?? []);
+    this.showMeters(m.states);
     if (m.frozen && phase === 'fighting') return;
     this.hearStrikes(m.states);
     for (const id of PLAYER_IDS) {
@@ -588,12 +598,22 @@ export class Game {
     }
   }
 
+  /** Super meters into the store (only when the whole number changes, to spare the HUD re-renders). */
+  private showMeters(states: Record<PlayerId, Readonly<FighterState>>) {
+    const { players } = useGameStore.getState();
+    for (const id of PLAYER_IDS) {
+      const meter = Math.round(states[id].meter ?? 0);
+      if (meter !== players[id].meter) updatePlayer(id, { meter });
+    }
+  }
+
   /** A strike coming out: a whoosh, heavier for the big ones. */
   private hearStrikes(states: Record<PlayerId, Readonly<FighterState>>) {
     for (const id of PLAYER_IDS) {
       const s = states[id];
       if (s.phase === 'active' && this.heardPhase[id] !== 'active') {
-        this.sfx.play('whoosh', s.move === 'jab' ? 0.7 : s.move === 'kick' || s.move === 'uppercut' ? 1.3 : 1);
+        if (s.move === 'fireball') this.sfx.play('fireball');
+        else this.sfx.play('whoosh', s.move === 'jab' ? 0.7 : s.move === 'kick' || s.move === 'uppercut' ? 1.3 : 1);
       }
       this.heardPhase[id] = s.phase;
     }
@@ -630,6 +650,7 @@ function moveText(intents: Intent[]): string | null {
       : i.kind === 'duck' ? 'Duck'
       : i.kind === 'dodge' ? `Dodge ${i.dir === 'L' ? 'left' : 'right'}`
       : i.kind === 'jump' ? 'Jump'
+      : i.kind === 'special' ? 'Super!'
       : i.kind === 'guard' && i.up ? 'Guard up'
       : null;
     if (text) last = text;

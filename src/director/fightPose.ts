@@ -181,6 +181,9 @@ export function applyAction(pose: Pose, input: ActionInput, motion: Motion): Pos
   }
   if (input.tell > 0 && state.phase === 'idle') tell(pose, input.tell, input.tellHand);
 
+  if (state.move === 'fireball' && (state.phase === 'startup' || state.phase === 'active' || state.phase === 'recovery')) {
+    fireball(pose, state, input.lead, motion);
+  }
   const move = state.move as StrikeMove | undefined;
   if (move && move in STRIKES && (state.phase === 'startup' || state.phase === 'active' || state.phase === 'recovery')) {
     strike(pose, move, state, input.reach, motion);
@@ -282,6 +285,39 @@ function strike(pose: Pose, move: StrikeMove, st: Readonly<FighterState>, reach:
   target.lerp(guard, 1 - weight);
   solve(S, target, UPPER_ARM, FOREARM, pole, pose[elbow], pose[wrist]);
   motion.lunge = lungeFor(reach, pose[wrist].z, forward * weight);
+}
+
+/**
+ * The super: both fists drawn back to the rear hip and charged (the whole body coils and sinks), then both palms
+ * shoved out at chest height on the release frame, leaning into it, held through the start of recovery.
+ */
+function fireball(pose: Pose, st: Readonly<FighterState>, lead: 1 | -1, motion: Motion) {
+  const L = Math.max(1, st.length ?? 1);
+  const p = clamp01(st.frame / L);
+  let charge = 0;
+  let push = 0;
+  if (st.phase === 'startup') charge = smooth(p / 0.6);
+  else if (st.phase === 'active') push = 1;
+  else push = 1 - smooth((p - 0.35) / 0.65);
+  const rear = -lead; // the rear side (+x is the fighter's left)
+  if (charge > 0) {
+    twist(pose, lead * 0.5 * charge); // coil: rear shoulder back
+    crouch(pose, 0.05 * charge);
+    lean(pose, -0.02 * charge);
+  }
+  if (push > 0) {
+    twist(pose, -lead * 0.15 * push);
+    crouch(pose, 0.03 * push);
+    lean(pose, 0.06 * push);
+  }
+  for (const s of [1, -1] as const) {
+    const [shoulder, elbow, wrist] = s === 1 ? (['lShoulder', 'lElbow', 'lWrist'] as const) : (['rShoulder', 'rElbow', 'rWrist'] as const);
+    const hip = tA.set(rear * 0.13 + s * 0.035, 0.56, -0.03);
+    const out = tB.set(s * 0.035, 0.74, pose[shoulder].z + ARM * 0.95);
+    const target = tC.copy(pose[wrist]).lerp(hip, charge).lerp(out, push);
+    solve(pose[shoulder], target, UPPER_ARM, FOREARM, pole.set(s * 0.6, -1, 0), pose[elbow], pose[wrist]);
+  }
+  motion.lunge += 0.04 * push;
 }
 
 /** Step in far enough for the strike to touch the opponent's face, up to MAX_LUNGE. */

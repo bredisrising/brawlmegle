@@ -11,6 +11,8 @@ export interface PlayerState {
   /** Human-readable step while scanning/forging. */
   statusDetail: string;
   hp: number;
+  /** Super meter 0..100 (full = a fireball is ready). */
+  meter: number;
   /** Generated hero portrait (from the forge pipeline), shown in the HUD. */
   portraitUrl: string | null;
 }
@@ -65,6 +67,7 @@ const initialPlayer = (id: PlayerId): PlayerState => ({
   status: 'waiting',
   statusDetail: '',
   hp: MAX_HP,
+  meter: 0,
   portraitUrl: null,
 });
 

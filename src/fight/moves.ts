@@ -27,6 +27,8 @@ export const MOVES: Record<AttackMove, MoveSpec> = {
   uppercut: { startup: 12, active: 3, recovery: 22, damage: 13, range: 0.55, chip: 3, stamina: 12, straight: false, beatsDuck: true },
   knee: { startup: 12, active: 4, recovery: 20, damage: 11, range: 0.55, chip: 2, stamina: 10, straight: false, beatsDuck: true },
   kick: { startup: 15, active: 4, recovery: 24, damage: 14, range: 1.0, chip: 3, stamina: 14, straight: true, beatsDuck: false },
+  // The super: costs a full meter, never connects up close (range 0); it throws a projectile (FightEngine.fly).
+  fireball: { startup: 16, active: 2, recovery: 24, damage: 16, range: 0, chip: 4, stamina: 0, straight: true, beatsDuck: false },
 };
 
 export const FIGHT = {
@@ -56,6 +58,14 @@ export const FIGHT = {
    */
   maxHeadStart: 6,
   minStartup: 4,
+  /** Super meter: filled by landing hits (and a little by taking them or blocking); a full one is a fireball. */
+  maxMeter: 100,
+  meterOnHit: 12,
+  meterOnHurt: 7,
+  meterOnBlock: 4,
+  /** Fireball speed along the fight line (m/s), and how close it must get to the defender to connect. */
+  fireballSpeed: 2.2,
+  fireballReach: 0.12,
   /** Farthest a strike steps in to reach (m). Beyond that it whiffs: spacing still matters. */
   maxLunge: 0.4,
   /** Fighters can't get closer than this (m). */

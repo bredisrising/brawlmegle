@@ -31,6 +31,8 @@ export type Intent =
       features?: number[];
     }
   | { kind: 'jump'; t: number; power: number }
+  /** Both hands thrust out together, close to each other: the super (a fireball, if the meter is full). */
+  | { kind: 'special'; t: number }
   | { kind: 'duck'; t: number }
   | { kind: 'dodge'; t: number; dir: 'L' | 'R' } // the player's left or right
   | { kind: 'guard'; t: number; up: boolean };

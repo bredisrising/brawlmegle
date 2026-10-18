@@ -1,7 +1,7 @@
 import { opponentOf } from '../types';
 import type { AttackMove, Command, FighterState, Hand, PlayerId, Stance } from '../types';
 import type { FightEngine } from './FightEngine';
-import { MOVES } from './moves';
+import { FIGHT, MOVES } from './moves';
 
 /**
  * A CPU opponent: a sparring partner for someone fighting with their body through a webcam. Their inputs
@@ -63,7 +63,9 @@ const REST_UNTIL = 70;
 /** Most it steps in during a strike's startup (the resolver allows players 0.4). */
 const MAX_LUNGE = 0.25;
 /** Distance it walks in to before throwing each move: comfortably inside the move's range. */
-const IDEAL: Record<AttackMove, number> = { jab: 0.7, cross: 0.7, hook: 0.58, uppercut: 0.45, knee: 0.45, kick: 0.85 };
+/** Frames a fireball takes to cross a typical gap: the CPU holds its guard that much longer for one. */
+const FIREBALL_FLIGHT = 36;
+const IDEAL: Record<AttackMove, number> = { jab: 0.7, cross: 0.7, hook: 0.58, uppercut: 0.45, knee: 0.45, kick: 0.85, fireball: 1.1 };
 
 const SINGLES: [AttackMove, number][] = [['jab', 4], ['cross', 3], ['hook', 2.5], ['uppercut', 1.5], ['kick', 1]];
 /** Against a player standing still: heavier stuff. */
@@ -154,7 +156,7 @@ export class Cpu {
         if (this.oppIdle >= this.spec.still && this.nextAttack > tick + 24) this.nextAttack = tick + this.int([8, 24]);
         const oppSwinging = opp.phase === 'startup' || opp.phase === 'active';
         if (tick >= this.nextAttack && me.phase === 'idle' && !oppSwinging) {
-          const plan = this.choosePlan(me.stamina);
+          const plan = this.choosePlan(me.stamina, me.meter ?? 0, d);
           if (!plan.length) {
             this.enter('rest', tick);
             break;
@@ -223,7 +225,10 @@ export class Cpu {
     const swingStarted = opp.phase === 'startup' && (prev?.phase !== 'startup' || opp.frame < prev.frame);
     if (swingStarted && opp.move) {
       const move = opp.move as AttackMove;
-      if (d <= MOVES[move].range + 0.45 && this.rng() < this.spec.defendChance) {
+      if (move === 'fireball') {
+        // Seen from anywhere: put the guard up for it.
+        if (this.rng() < this.spec.defendChance) this.reactions.push({ at: tick + this.int(this.spec.reflex), kind: 'defend', move, defense: 'block' });
+      } else if (d <= MOVES[move].range + 0.45 && this.rng() < this.spec.defendChance) {
         this.reactions.push({ at: tick + this.int(this.spec.reflex), kind: 'defend', move, defense: this.pickDefense(move) });
       }
       this.reactions.push({ at: tick + this.int(this.spec.react), kind: 'punish', looks: 6 });
@@ -245,7 +250,8 @@ export class Cpu {
 
   /** Returns whether it evaded (so the guard stays down while slipping or ducking). */
   private defend(r: Extract<Reaction, { kind: 'defend' }>, me: FighterState, opp: FighterState, commands: Command[], tick: number, t: number): boolean {
-    if (opp.phase !== 'startup' && opp.phase !== 'active') return false; // too late: it already landed or missed
+    // Too late: it already landed or missed (a fireball is still on its way after the throw).
+    if (r.move !== 'fireball' && opp.phase !== 'startup' && opp.phase !== 'active') return false;
     // It saw it coming: drop the tell and deal with the punch first.
     if (this.mode === 'windup') {
       this.plan = [];
@@ -254,7 +260,8 @@ export class Cpu {
     }
     if (r.defense === 'block') {
       if (me.phase !== 'idle' && me.phase !== 'blockstun') return false;
-      const left = Math.max(0, MOVES[r.move].startup - opp.frame) + MOVES[r.move].active;
+      const flight = r.move === 'fireball' ? FIREBALL_FLIGHT : 0;
+      const left = Math.max(0, MOVES[r.move].startup - opp.frame) + MOVES[r.move].active + flight;
       this.guardUntil = Math.max(this.guardUntil, tick + left + this.int([6, 14]));
       return false;
     }
@@ -282,7 +289,9 @@ export class Cpu {
     commands.push(this.attack(move, d, t));
   }
 
-  private choosePlan(stamina: number): AttackMove[] {
+  private choosePlan(stamina: number, meter: number, d: number): AttackMove[] {
+    // A full meter from range: throw the fireball, more often than not.
+    if (meter >= FIGHT.maxMeter && d >= 0.75 && this.rng() < 0.6) return ['fireball'];
     const affordable = (plan: AttackMove[]) => stamina - plan.reduce((sum, m) => sum + MOVES[m].stamina, 0) >= STAMINA_FLOOR;
     if (this.rng() < this.spec.comboChance) {
       const combo = this.weighted(COMBOS[this.level]);
@@ -298,7 +307,7 @@ export class Cpu {
 
   private attack(move: AttackMove, d: number, t: number): Command {
     this.thrown = [...this.thrown.slice(-3), move];
-    const lunge = d > reach(move) ? Math.min(MAX_LUNGE, d - reach(move)) : 0;
+    const lunge = move !== 'fireball' && d > reach(move) ? Math.min(MAX_LUNGE, d - reach(move)) : 0;
     const body = move === 'hook' ? this.rng() < 0.35 : move === 'jab' || move === 'cross' ? this.rng() < 0.15 : false;
     const power = this.spec.power;
     return { kind: 'attack', player: this.player, t, move, hand: handFor(move), height: body ? 'body' : 'head', speed: power, windup: 1, lunge };

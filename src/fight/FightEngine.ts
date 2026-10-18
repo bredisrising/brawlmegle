@@ -1,5 +1,5 @@
 import { PLAYER_IDS, opponentOf } from '../types';
-import type { AttackMove, Command, FightEvent, FighterState, Hand, PlayerId, Stance } from '../types';
+import type { AttackMove, Command, FightEvent, FighterState, Hand, PlayerId, Projectile, Stance } from '../types';
 import { FIGHT, MOVES, hitstopFrames, hitstunFrames, type MoveSpec } from './moves';
 
 /**
@@ -32,6 +32,7 @@ type Fighter = {
   queue: { command: AttackCommand; frames: number }[];
   /** Punches chained in a row (see chainable). */
   chain: number;
+  meter: number;
   sinceAttack: number; // seconds
 };
 
@@ -44,6 +45,9 @@ export class FightEngine {
   private fighters: Record<PlayerId, Fighter> = { p1: fresh(-0.5), p2: fresh(0.5) };
   /** Global freeze after a hit: both fighters stop for a few frames so the impact lands. */
   private hitstop = 0;
+  /** Fireballs in flight. `passed`: it went over a ducking defender and can't hit any more. */
+  private shots: (Projectile & { scale: number; passed: boolean })[] = [];
+  private nextShot = 1;
   private tick = 0;
 
   /** Advance one 60 Hz tick. */
@@ -59,6 +63,7 @@ export class FightEngine {
     // Both swings resolve against the same moment, so a same-tick exchange is a trade, not a P1 win.
     const moment = this.snapshot();
     for (const id of PLAYER_IDS) this.resolve(id, stances, events, moment);
+    this.fly(stances, events);
     this.move(stances);
     return events;
   }
@@ -73,8 +78,13 @@ export class FightEngine {
       : undefined;
     return {
       x: f.x, hp: f.hp, stamina: f.stamina, phase: f.phase, move: a?.move, frame: f.frame,
-      hand: a?.hand, height: a?.height, length, evade: f.evade?.kind, evadeDir: f.evade?.dir,
+      hand: a?.hand, height: a?.height, length, evade: f.evade?.kind, evadeDir: f.evade?.dir, meter: f.meter,
     };
+  }
+
+  /** Fireballs in flight. */
+  projectiles(): readonly Projectile[] {
+    return this.shots.map(({ id, owner, x }) => ({ id, owner, x }));
   }
 
   /** In hit-stop: the fight is frozen on the impact for a few frames (the director freezes the picture too). */
@@ -95,6 +105,7 @@ export class FightEngine {
   reset(): void {
     this.fighters = { p1: fresh(-0.5), p2: fresh(0.5) };
     this.hitstop = 0;
+    this.shots = [];
     this.tick = 0;
   }
 
@@ -106,6 +117,8 @@ export class FightEngine {
     const f = this.fighters[c.player];
     if (f.phase === 'ko') return;
     if (c.kind === 'attack') {
+      // The super needs a full meter; without one the gesture does nothing (not even a queue slot).
+      if (c.move === 'fireball' && f.meter < FIGHT.maxMeter) return;
       if (f.phase === 'idle') this.start(c.player, c, events);
       else {
         f.queue.push({ command: c, frames: FIGHT.bufferFrames });
@@ -119,8 +132,10 @@ export class FightEngine {
 
   private start(id: PlayerId, c: AttackCommand, events: FightEvent[]) {
     const f = this.fighters[id];
+    if (c.move === 'fireball' && f.meter < FIGHT.maxMeter) return; // spent while it waited in the queue
     const spec = MOVES[c.move];
-    const gassed = f.stamina < FIGHT.gassedBelow;
+    // Tired fighters are slower and weaker, except for the super: a full meter is earned.
+    const gassed = f.stamina < FIGHT.gassedBelow && c.move !== 'fireball';
     // A NaN here would stick: HP that never reaches 0, a position that's always "in range".
     const speed = finiteOr(c.speed, 1);
     const windup = finiteOr(c.windup, 1);
@@ -142,6 +157,7 @@ export class FightEngine {
     f.frame = 0;
     f.evade = null;
     f.stamina = Math.max(0, f.stamina - spec.stamina);
+    if (c.move === 'fireball') f.meter = 0;
     f.sinceAttack = 0;
     events.push({ t: this.now, type: 'startup', attacker: id, move: c.move });
   }
@@ -174,6 +190,7 @@ export class FightEngine {
         if (f.frame >= a.startup) {
           f.phase = 'active';
           f.frame = 0;
+          if (a.move === 'fireball') this.throwFireball(id, a);
         }
         break;
       }
@@ -248,6 +265,8 @@ export class FightEngine {
       const chip = Math.max(1, Math.round(a.spec.chip * a.scale));
       g.hp = Math.max(0, g.hp - chip);
       a.landed = true;
+      this.gainMeter(id, FIGHT.meterOnBlock);
+      this.gainMeter(defenderId, FIGHT.meterOnBlock);
       g.phase = 'blockstun';
       g.stun = FIGHT.blockstun;
       g.frame = 0;
@@ -263,6 +282,8 @@ export class FightEngine {
     const damage = Math.round(a.spec.damage * a.scale * (counter ? FIGHT.counterMultiplier : 1));
     g.hp = Math.max(0, g.hp - damage);
     a.landed = true;
+    this.gainMeter(id, FIGHT.meterOnHit);
+    this.gainMeter(defenderId, FIGHT.meterOnHurt);
     g.attack = null;
     g.queue = [];
     g.chain = 0;
@@ -275,6 +296,70 @@ export class FightEngine {
     events.push({ t: this.now, type: counter ? 'counter' : 'hit', attacker: id, move: a.move, damage, hitstopFrames: stop });
     this.knockback(defenderId, damage);
     if (g.hp <= 0) this.ko(defenderId, id, a.move, events);
+  }
+
+  private gainMeter(id: PlayerId, amount: number) {
+    const f = this.fighters[id];
+    f.meter = Math.min(FIGHT.maxMeter, f.meter + amount);
+  }
+
+  /** The fireball leaves the hands on the first active frame (the move itself never connects up close). */
+  private throwFireball(id: PlayerId, a: Attack) {
+    const f = this.fighters[id];
+    const dir = Math.sign(this.fighters[opponentOf(id)].x - f.x) || (id === 'p1' ? 1 : -1);
+    a.done = true;
+    this.shots.push({ id: this.nextShot++, owner: id, x: f.x + dir * 0.2, scale: a.scale, passed: false });
+  }
+
+  /**
+   * Fireballs fly along the line. Reaching the defender: a duck lets it pass over, a guard (while free) blocks it
+   * for chip, anything else is a hit (a counter if they were mid-swing). Off the arena, they're gone.
+   */
+  private fly(stances: Record<PlayerId, Stance>, events: FightEvent[]) {
+    for (const s of [...this.shots]) {
+      const defenderId = opponentOf(s.owner);
+      const g = this.fighters[defenderId];
+      const dir = Math.sign(g.x - s.x) || (s.owner === 'p1' ? 1 : -1);
+      s.x += (s.owner === 'p1' ? 1 : -1) * FIGHT.fireballSpeed * DT;
+      const gone = Math.abs(s.x) > FIGHT.arenaHalfWidth + 0.4;
+      const reached = !s.passed && dir * (g.x - s.x) <= FIGHT.fireballReach;
+      if (!gone && !reached) continue;
+      if (reached && g.phase !== 'ko') {
+        if (g.evade?.kind === 'duck') {
+          s.passed = true;
+          continue;
+        }
+        const spec = MOVES.fireball;
+        if (stances[defenderId]?.guard && (g.phase === 'idle' || g.phase === 'blockstun')) {
+          const chip = Math.max(1, Math.round(spec.chip * s.scale));
+          g.hp = Math.max(0, g.hp - chip);
+          g.phase = 'blockstun';
+          g.stun = FIGHT.blockstun + 4;
+          g.frame = 0;
+          this.hitstop = Math.max(this.hitstop, 4);
+          events.push({ t: this.now, type: 'blocked', attacker: s.owner, move: 'fireball', damage: chip, hitstopFrames: 4 });
+          this.knockback(defenderId, chip * 2);
+          if (g.hp <= 0) this.ko(defenderId, s.owner, 'fireball', events);
+        } else {
+          const counter = g.phase === 'startup' || g.phase === 'recovery';
+          const damage = Math.round(spec.damage * s.scale * (counter ? FIGHT.counterMultiplier : 1));
+          g.hp = Math.max(0, g.hp - damage);
+          g.attack = null;
+          g.queue = [];
+          g.chain = 0;
+          g.evade = null;
+          g.phase = 'hitstun';
+          g.stun = hitstunFrames(damage);
+          g.frame = 0;
+          const stop = hitstopFrames(damage);
+          this.hitstop = Math.max(this.hitstop, stop);
+          events.push({ t: this.now, type: counter ? 'counter' : 'hit', attacker: s.owner, move: 'fireball', damage, hitstopFrames: stop });
+          this.knockback(defenderId, damage);
+          if (g.hp <= 0) this.ko(defenderId, s.owner, 'fireball', events);
+        }
+      }
+      this.shots = this.shots.filter((x) => x !== s);
+    }
   }
 
   private ko(loser: PlayerId, winner: PlayerId, move: AttackMove, events: FightEvent[]) {
@@ -327,7 +412,7 @@ export class FightEngine {
 function fresh(x: number): Fighter {
   return {
     x, hp: FIGHT.maxHp, stamina: FIGHT.maxStamina, phase: 'idle', frame: 0,
-    attack: null, stun: 0, evade: null, queue: [], chain: 0, sinceAttack: 10,
+    attack: null, stun: 0, evade: null, queue: [], chain: 0, meter: 0, sinceAttack: 10,
   };
 }
 

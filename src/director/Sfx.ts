@@ -3,7 +3,7 @@
  * blocks, whooshes for strikes, a boom for the K.O., countdown beeps and a shimmer when a fighter materializes.
  * Browsers only allow audio after a user gesture; the context starts on the first click or key press.
  */
-export type SfxKind = 'hit' | 'heavy' | 'counter' | 'blocked' | 'whoosh' | 'ko' | 'beep' | 'go' | 'spawn';
+export type SfxKind = 'hit' | 'heavy' | 'counter' | 'blocked' | 'whoosh' | 'ko' | 'beep' | 'go' | 'spawn' | 'fireball';
 
 export class Sfx {
   private ctx: AudioContext | null = null;
@@ -57,6 +57,12 @@ export class Sfx {
       case 'go':
         this.tone(t, 'sawtooth', 523, 1046, 0.35, 0.14);
         this.tone(t, 'square', 784, 1568, 0.35, 0.08);
+        break;
+      case 'fireball':
+        // A charged whoomph: low thump, a rising roar of noise, a bright tone on top.
+        this.thump(t, 160, 60, 0.3, 0.8);
+        this.sweep(t, 400, 2600, 0.45, 0.35);
+        this.tone(t, 'sawtooth', 220, 660, 0.4, 0.08);
         break;
       case 'spawn':
         this.sweep(t, 300, 4000, 1.2, 0.12);

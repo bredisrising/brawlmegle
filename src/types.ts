@@ -35,7 +35,7 @@ export type PoseFrame = {
 // ---------------------------------------------------------------------------
 
 export type Hand = 'L' | 'R';
-export type AttackMove = 'jab' | 'cross' | 'hook' | 'uppercut' | 'knee' | 'kick';
+export type AttackMove = 'jab' | 'cross' | 'hook' | 'uppercut' | 'knee' | 'kick' | 'fireball';
 export type DefendMove = 'block' | 'slip' | 'duck';
 
 export type Command =
@@ -81,7 +81,12 @@ export type FighterState = {
   length?: number; // total frames of the current phase, when it has a fixed length
   evade?: 'slip' | 'duck';
   evadeDir?: Hand;
+  /** Super meter, 0..FIGHT.maxMeter: a full one throws a fireball. */
+  meter?: number;
 };
+
+/** A fireball in flight, for the director. */
+export type Projectile = { id: number; owner: PlayerId; x: number };
 
 export type FightEvent = {
   t: number;
