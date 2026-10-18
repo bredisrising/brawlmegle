@@ -156,9 +156,11 @@ function Leaderboard({ fighters, records, onBack }: { fighters: ForgedFighter[] 
           <p className="grid flex-1 place-items-center px-5 text-center font-cond text-xl font-bold uppercase tracking-[0.2em] text-paper/55">Loading records…</p>
         ) : (
           <div className="mx-5 mt-4 min-h-0 flex-1 overflow-y-auto border-t border-paper/15 sm:mx-7">
+            <Podium top={ranked.slice(0, 3)} />
             {ranked.map(({ fighter, record }, index) => (
-              <div key={fighter.id} className="grid grid-cols-[2.25rem_minmax(0,1fr)] items-center gap-2 border-b border-paper/15 py-3 sm:grid-cols-[3.5rem_minmax(0,1fr)_auto_auto_auto] sm:gap-5 sm:px-2">
+              <div key={fighter.id} className="grid grid-cols-[2.25rem_3rem_minmax(0,1fr)] items-center gap-2 border-b border-paper/15 py-3 sm:grid-cols-[3.5rem_3.5rem_minmax(0,1fr)_auto_auto_auto] sm:gap-5 sm:px-2">
                 <span className={`font-display text-2xl ${index < 3 ? 'text-hp' : 'text-paper/45'} sm:text-3xl`}>#{index + 1}</span>
+                <Portrait fighter={fighter} zoom className="h-14 w-12 sm:h-[4.5rem] sm:w-14" />
                 <span className="min-w-0">
                   <span className="block truncate font-display text-xl uppercase leading-none tracking-tight sm:text-3xl">{fighter.name}</span>
                   <span className="mt-1 block font-cond text-[0.68rem] font-bold uppercase tracking-[0.1em] text-paper/55 sm:text-xs sm:tracking-[0.15em]">{totalMatches(record)} fights · {record.bestStreak} best streak <span className="sm:hidden">· {record.wins}W / {record.losses}L / {record.draws}D · last 7: {recentWinRate(record)}% · career: {winRate(record)}%</span></span>
@@ -172,6 +174,57 @@ function Leaderboard({ fighters, records, onBack }: { fighters: ForgedFighter[] 
           </div>
         )}
       </section>
+    </div>
+  );
+}
+
+/** A fighter's posed card art (from the forge), cropped to head and shoulders; their initials when there's none. */
+function Portrait({ fighter, className = '', zoom = false }: { fighter: ForgedFighter; className?: string; zoom?: boolean }) {
+  return (
+    <span className={`relative block shrink-0 overflow-hidden bg-ink-3 ${className}`}>
+      {fighter.cardUrl ? (
+        <img
+          src={fighter.cardUrl}
+          alt=""
+          loading="lazy"
+          // zoom: the card's upper part (head and fists), big enough to recognize in a list row.
+          className={zoom ? 'absolute left-1/2 top-[4%] h-[230%] w-auto max-w-none -translate-x-1/2' : 'size-full object-cover object-[50%_12%]'}
+        />
+      ) : (
+        <span className="tex-dots grid size-full place-items-center font-display text-xl uppercase text-paper/30">
+          {fighter.name.slice(0, 2)}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** The top three as big posed cards: #1 in the middle and tallest, like a podium. Hidden on phones (the list has them). */
+function Podium({ top }: { top: { fighter: ForgedFighter; record: FighterRecord }[] }) {
+  if (top.length < 3 || !top.some(({ fighter }) => fighter.cardUrl)) return null;
+  const order = [1, 0, 2];
+  return (
+    <div className="hidden items-end justify-center gap-4 border-b border-paper/15 px-2 pt-5 pb-4 sm:flex">
+      {order.map((i) => {
+        const { fighter, record } = top[i];
+        const first = i === 0;
+        return (
+          <div key={fighter.id} className={`animate-rise flex w-[30%] max-w-56 flex-col ${first ? '' : 'pt-6'}`} style={{ animationDelay: `${i * 90}ms` }}>
+            <div className={`cut ${first ? 'bg-hp' : 'bg-paper/30'} p-[3px] [--cut:12px]`}>
+              <div className={`cut relative overflow-hidden bg-ink-3 [--cut:10px] ${first ? 'aspect-[3/4]' : 'aspect-[4/5]'}`}>
+                <Portrait fighter={fighter} className="absolute inset-0 size-full" />
+                <span className={`absolute left-0 top-0 px-2.5 py-1 font-display text-xl ${first ? 'bg-hp text-ink' : 'bg-ink text-paper'}`}>#{i + 1}</span>
+                <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-ink via-ink/80 to-transparent px-3 pt-8 pb-2">
+                  <span className="block truncate font-display text-2xl uppercase leading-none tracking-tight">{fighter.name}</span>
+                  <span className="mt-1 block font-cond text-xs font-bold uppercase tracking-[0.14em] text-paper/70">
+                    <b className="text-hp">{record.wins}W</b> · {record.losses}L · {winRate(record)}%
+                  </span>
+                </span>
+              </div>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
