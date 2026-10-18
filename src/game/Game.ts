@@ -134,8 +134,8 @@ export class Game {
         show('Turn slowly');
         const frames = await captureScan(source.video, source, (p) => show(scanStatus(p)));
         updatePlayer(id, { status: 'forging', statusDetail: 'Forging fighter' });
-        // With a username, the server names the fighter (from the brief) and keeps it for that username.
-        fighter = await forgeFighter(choice.username ? '' : name, frames, (f) => show(forgeStatus(f)), { username: choice.username });
+        // The fighter goes by the player's username; the brief's playful nickname stays in brief.name for flavor.
+        fighter = await forgeFighter(name, frames, (f) => show(forgeStatus(f)), { username: choice.username });
         if (fighter.status === 'ready') saveFighter(fighter); // they said yes to "save fighter to memory card"
         // A failed forge still fights: no glbUrl means the default model (SPEC fallback ladder).
         else console.warn('forge failed, using the default fighter:', fighter.error);
