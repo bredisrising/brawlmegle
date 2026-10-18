@@ -284,8 +284,8 @@ const superPush: Move = {
     // Up fast, hold, back down.
     const k = (p < 0.25 ? smooth(p / 0.25) : p < 0.7 ? 1 : 1 - smooth((p - 0.7) / 0.3)) * amp;
     const up = (l: boolean): Record<string, V> => ({
-      [side('Wrist', l)]: lerp3(R[side('Wrist', l)], [sx(l) * 0.07, 1.9, 0.12], k),
-      [side('Elbow', l)]: lerp3(R[side('Elbow', l)], [sx(l) * 0.2, 1.72, 0.08], k),
+      [side('Wrist', l)]: lerp3(R[side('Wrist', l)], [sx(l) * 0.08, 2.02, 0.1], k),
+      [side('Elbow', l)]: lerp3(R[side('Elbow', l)], [sx(l) * 0.21, 1.8, 0.07], k),
     });
     return { ...up(true), ...up(false) };
   },

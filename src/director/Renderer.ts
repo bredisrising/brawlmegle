@@ -45,6 +45,8 @@ export class Renderer {
   private trackSpread = 0.5;
   private camX = 0;
   private zoom = 1;
+  /** K.O. replay camera: a slow low sweep around the fighters (seconds into it, and how long it lasts). */
+  private sweep: { t: number; duration: number } | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -90,6 +92,11 @@ export class Renderer {
 
   shake(amount: number) {
     this.shakeAmount = Math.max(this.shakeAmount, amount);
+  }
+
+  /** Replay camera on (a sweep around the fighters lasting `seconds`) or off. */
+  cinematic(seconds: number | null) {
+    this.sweep = seconds ? { t: 0, duration: seconds } : null;
   }
 
   /** Where the fighters are: their midpoint on x and the gap between them (world units). Call every frame. */
@@ -165,6 +172,15 @@ export class Renderer {
     this.zoom += (zoom - this.zoom) * ease;
     this.cameraHome.set(this.camX * 0.85, this.baseY, this.baseZ * this.zoom);
     this.lookTarget.set(this.camX, 0.5, 0);
+    if (this.sweep) {
+      // Low and close, swinging from one side of the fight to the other.
+      this.sweep.t += dt;
+      const k = Math.min(1, this.sweep.t / this.sweep.duration);
+      const angle = -0.75 + 1.5 * (k * k * (3 - 2 * k));
+      const r = 1.15 * (this.baseZ / 1.8);
+      this.cameraHome.set(this.camX + Math.sin(angle) * r, 0.42, Math.cos(angle) * r);
+      this.lookTarget.set(this.camX, 0.42, 0);
+    }
     this.punchAmount = Math.max(0, this.punchAmount - dt * this.punchDecay * Math.max(0.15, this.punchAmount));
     const p = this.punchAmount;
     this.camera.position.set(

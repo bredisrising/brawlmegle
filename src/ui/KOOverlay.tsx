@@ -9,7 +9,9 @@ export function KOOverlay() {
   const winner = useGameStore((s) => s.winner);
   const winnerName = useGameStore((s) => (s.winner ? s.players[s.winner].name : ''));
   const ending = useGameStore((s) => s.ending);
+  const replay = useGameStore((s) => s.replay);
   if (phase !== 'ko') return null;
+  if (replay) return <ReplayBars />;
   const accent = ACCENT[winner ?? 'p1'];
   const fromRight = winner === 'p2';
 
@@ -38,6 +40,20 @@ export function KOOverlay() {
         <ArcadeButton size="lg" onClick={() => game.rematch()}>
           Rematch
         </ArcadeButton>
+      </div>
+    </div>
+  );
+}
+
+/** During the K.O. replay: letterbox bars and a REPLAY tag, so it reads as a replay and not live play. */
+function ReplayBars() {
+  return (
+    <div className="pointer-events-none absolute inset-0">
+      <div className="absolute inset-x-0 top-0 h-[11%] bg-black" />
+      <div className="absolute inset-x-0 bottom-0 h-[11%] bg-black" />
+      <div className="absolute left-6 top-[13%] flex items-center gap-2 font-display text-2xl uppercase tracking-tight text-paper sm:text-3xl">
+        <span className="animate-blink size-3 rounded-full bg-dmg" />
+        Replay
       </div>
     </div>
   );

@@ -17,7 +17,7 @@ import { fetchServerFighters, maskedFighter, saveFighter } from '../forge/roster
 import { config } from '../config';
 import {
   PLAYER_IDS, opponentOf,
-  type Command, type FightEvent, type FighterState, type ForgedFighter, type PlayerId, type Stance,
+  type Command, type FightEvent, type FighterState, type ForgedFighter, type PlayerId, type PoseFrame, type Stance,
 } from '../types';
 import { COUNTDOWN_FROM, KO_FREEZE, MAX_HP, PLAYER_COLORS, PLAYER_NAMES, ROUND_SECONDS, SIM_DT } from './constants';
 import { ClientSession } from './ClientSession';
@@ -25,6 +25,15 @@ import type { MatchPlayer, MirrorEvent, MirrorFrame } from '../net/protocol';
 import { HostSession } from './HostSession';
 import { localPlayerId, pushPopup, updatePlayer, useGameStore } from './store';
 
+/** K.O. replay: ticks kept, ticks shown before and after the K.O., playback speed, and a hold on the end. */
+const REPLAY_KEEP = 240;
+const REPLAY_BEFORE = 80;
+const REPLAY_AFTER = 50;
+const REPLAY_SPEED = 0.35;
+const REPLAY_HOLD = 0.8;
+/** Game seconds after the K.O. (after its freeze; slowed by the slow motion) before the replay starts. */
+const REPLAY_DELAY = 1.2;
+type ReplayFrame = MirrorFrame & { live: Record<PlayerId, PoseFrame | null>; events: MirrorEvent[] };
 /** How long the VS screen shows before 2, 1, FIGHT. */
 const VS_SECONDS = 2.4;
 /** Roughly head height between the two fighters. */
@@ -77,6 +86,15 @@ export class Game {
   private readonly unsubscribe: () => void;
   /** Combo counting and the round's first hit (both laptops count from the same hit events). */
   private combo = { player: null as PlayerId | null, hits: 0, at: 0, key: 0 };
+  /**
+   * K.O. replay: the last few seconds as drawn (both laptops record what they show), played back slowly from a
+   * sweeping camera once the K.O. has landed. `tickEvents` collects this tick's moments for the recording.
+   */
+  private history: ReplayFrame[] = [];
+  private tickEvents: MirrorEvent[] = [];
+  private replay: { frames: ReplayFrame[]; pos: number; drawn: number; hold: number } | null = null;
+  /** Seconds of game time until the replay starts (counts after the K.O. freeze), or -1. */
+  private replayIn = -1;
   private firstHitDone = false;
   private accumulator = 0;
   private phaseTimer = 0;
@@ -101,6 +119,7 @@ export class Game {
       this.sfx.play(s.countdown === 0 ? 'go' : 'beep');
       // A new round: forget the last one's combos and first hit.
       if (s.countdown === COUNTDOWN_FROM) {
+        this.stopReplay();
         this.firstHitDone = false;
         this.combo.player = null;
         useGameStore.setState({ combo: null, callout: null });
@@ -292,6 +311,7 @@ export class Game {
   rematch() {
     // On the client laptop the host runs the fight: ask it.
     if (this.client) return this.client.requestRematch();
+    this.stopReplay();
     this.fight.reset();
     this.fightTicks = 0;
     for (const id of PLAYER_IDS) {
@@ -328,6 +348,10 @@ export class Game {
 
   private update = (dt: number, frozen: boolean) => {
     this.effects.update(dt);
+    if (this.replayIn > 0 && !frozen && (this.replayIn -= dt) <= 0) {
+      this.replayIn = -1;
+      this.startReplay();
+    }
     this.fireballs.update(dt);
     // The camera follows whoever's on stage.
     const shown = PLAYER_IDS.filter((id) => this.views[id].root.visible).map((id) => this.views[id].root.position.x);
@@ -343,6 +367,7 @@ export class Game {
 
   /** One fixed 60 Hz step. */
   private tick() {
+    if (this.replay) return this.replayTick();
     if (this.client) return this.mirrorTick();
     const { phase, countdown } = useGameStore.getState();
     this.phaseTimer += SIM_DT;
@@ -388,6 +413,7 @@ export class Game {
       if (c.kind !== 'anticipate') continue;
       this.views[c.player].anticipate(c.hand);
       this.outbox.push({ kind: 'anticipate', player: c.player, hand: c.hand });
+      this.tickEvents.push({ kind: 'anticipate', player: c.player, hand: c.hand });
     }
     if (phase === 'fighting') {
       this.fightTicks++;
@@ -400,6 +426,10 @@ export class Game {
     this.fireballs.sync(this.fight.projectiles());
     this.showMeters({ p1: this.fight.state('p1'), p2: this.fight.state('p2') });
     this.sendFrame(stances, frozen);
+    this.record(
+      { states: { p1: this.fight.state('p1'), p2: this.fight.state('p2') }, guard: { p1: stances.p1.guard, p2: stances.p2.guard }, distance: this.fight.distance(), frozen, timeLeft: null, projectiles: [...this.fight.projectiles()] },
+      { p1: this.cpu.p1 ? null : this.input.latest('p1'), p2: this.cpu.p2 ? null : this.input.latest('p2') },
+    );
     if (frozen) return;
     const distance = this.fight.distance();
     this.hearStrikes({ p1: this.fight.state('p1'), p2: this.fight.state('p2') });
@@ -414,6 +444,13 @@ export class Game {
         dt: SIM_DT,
       });
     }
+  }
+
+  /** Drop a pending or running K.O. replay (a rematch, a new round). */
+  private stopReplay() {
+    this.replayIn = -1;
+    if (this.replay) this.endReplay();
+    this.history = [];
   }
 
   /** Round clock: when it runs out, more HP left wins (equal is a draw). */
@@ -440,18 +477,19 @@ export class Game {
     const ko = hp <= 0;
     this.showHit(event, by, ko);
     this.outbox.push({ kind: 'fight', event, by, ko });
+    this.tickEvents.push({ kind: 'fight', event, by, ko });
     if (ko) useGameStore.setState({ phase: 'ko', ending: 'ko', winner: event.attacker, countdown: null });
   }
 
   /** The look of a hit (both laptops): the reaction, sparks, impact frames, camera punch, popup, K.O. drama. */
-  private showHit(event: FightEvent, by: Readonly<FighterState>, ko: boolean) {
+  private showHit(event: FightEvent, by: Readonly<FighterState>, ko: boolean, replaying = false) {
     if (!event.damage) return;
     const defender = opponentOf(event.attacker);
     this.views[defender].onEvent(event, by);
     const point = this.views[defender].worldJoint(by.height === 'body' || event.move === 'knee' ? 'neck' : 'head');
     if (by.height === 'body' || event.move === 'knee') point.y -= 0.08;
     const heavy = event.type === 'counter' || event.damage >= 10;
-    this.countCombo(event, ko);
+    if (!replaying) this.countCombo(event, ko);
     this.sfx.play(ko ? 'ko' : event.type === 'blocked' ? 'blocked' : event.type === 'counter' ? 'counter' : heavy ? 'heavy' : 'hit');
     this.effects.burst(point, event.type === 'blocked' ? 'blocked' : event.type === 'counter' ? 'counter' : 'hit');
     // Punch: impact frames on the big ones, the camera leaning into the hit.
@@ -478,12 +516,79 @@ export class Game {
       useGameStore.setState((s) => ({ flashKey: s.flashKey + 1 }));
     }
     if (ko) {
-      this.renderer.freeze(KO_FREEZE);
+      if (!replaying) {
+        this.renderer.freeze(KO_FREEZE);
+        this.renderer.slowMotion(KO_FREEZE + 1.4, 0.3);
+        // Then the replay of how it happened, once the slow-motion fall has played out.
+        this.replayIn = REPLAY_DELAY;
+      }
       if (config.impactFrames) this.renderer.impact(point, 0.14, '#ffffff');
       this.renderer.punch(point, 0.4, 0.7);
-      this.renderer.slowMotion(KO_FREEZE + 1.4, 0.3);
       this.effects.burst(point, 'ko');
     }
+  }
+
+  /** Keep what was drawn this tick (the last few seconds) for the K.O. replay. */
+  private record(frame: MirrorFrame, live: Record<PlayerId, PoseFrame | null>) {
+    this.history.push({ ...frame, live, events: this.tickEvents });
+    this.tickEvents = [];
+    if (this.history.length > REPLAY_KEEP) this.history.shift();
+  }
+
+  /** Play back the K.O.: the last stretch before it and the fall after, slowly, from a sweeping camera. */
+  private startReplay() {
+    if (useGameStore.getState().phase !== 'ko') return;
+    const ko = this.history.findIndex((f) => f.events.some((e) => e.kind === 'fight' && e.ko));
+    // The K.O. tick isn't recorded yet (a slow machine still frozen on it): try again shortly.
+    if (ko < 0) {
+      if (this.tickEvents.some((e) => e.kind === 'fight' && e.ko)) this.replayIn = 0.1;
+      return;
+    }
+    const frames = this.history.slice(Math.max(0, ko - REPLAY_BEFORE), ko + REPLAY_AFTER);
+    for (const id of PLAYER_IDS) this.views[id].reset();
+    this.replay = { frames, pos: 0, drawn: -1, hold: 0 };
+    this.renderer.cinematic((frames.length / 60) / REPLAY_SPEED + REPLAY_HOLD);
+    useGameStore.setState({ replay: true });
+  }
+
+  private replayTick() {
+    const r = this.replay!;
+    r.pos = Math.min(r.frames.length - 1, r.pos + REPLAY_SPEED);
+    for (let i = r.drawn + 1; i <= Math.floor(r.pos); i++) {
+      const f = r.frames[i];
+      for (const e of f.events) {
+        if (e.kind === 'fight') this.showHit(e.event, e.by, e.ko, true);
+        else if (e.kind === 'anticipate' && !e.cancel) this.views[e.player].anticipate(e.hand);
+      }
+      this.fireballs.sync(f.projectiles ?? []);
+      if (!f.frozen) {
+        for (const id of PLAYER_IDS) {
+          this.views[id].update({
+            state: f.states[id], live: f.live[id], guard: f.guard[id], distance: f.distance,
+            opponentKo: f.states[opponentOf(id)].phase === 'ko', phase: 'fighting', dt: SIM_DT, smooth: true,
+          });
+        }
+      }
+      r.drawn = i;
+    }
+    // At the end, hold on the last moment, still in slow motion (the fall finishing, the winner's pose).
+    if (r.pos >= r.frames.length - 1) {
+      const f = r.frames[r.frames.length - 1];
+      for (const id of PLAYER_IDS) {
+        this.views[id].update({
+          state: f.states[id], live: f.live[id], guard: f.guard[id], distance: f.distance,
+          opponentKo: f.states[opponentOf(id)].phase === 'ko', phase: 'fighting', dt: SIM_DT * REPLAY_SPEED, smooth: true,
+        });
+      }
+      if ((r.hold += SIM_DT) > REPLAY_HOLD) this.endReplay();
+    }
+  }
+
+  private endReplay() {
+    this.replay = null;
+    this.renderer.cinematic(null);
+    this.fireballs.sync([]);
+    useGameStore.setState({ replay: false });
   }
 
   /** Hits in a row (within ~1 s of each other, unanswered) make a combo; the round's first hit gets a callout. */
@@ -565,6 +670,7 @@ export class Game {
   /** Client: effects for what just happened on the host. */
   private mirrorEvents(events: MirrorEvent[]) {
     for (const e of events) {
+      if (e.kind !== 'move') this.tickEvents.push(e);
       if (e.kind === 'fight') this.showHit(e.event, e.by, e.ko);
       else if (e.kind === 'anticipate') {
         if (e.cancel) this.views[e.player].cancelTell(e.hand);
@@ -583,6 +689,7 @@ export class Game {
     for (const id of PLAYER_IDS) if (players[id].hp !== m.states[id].hp) updatePlayer(id, { hp: m.states[id].hp });
     this.fireballs.sync(m.projectiles ?? []);
     this.showMeters(m.states);
+    this.record(m, { p1: null, p2: this.client?.lastFrame ?? null });
     if (m.frozen && phase === 'fighting') return;
     this.hearStrikes(m.states);
     for (const id of PLAYER_IDS) {

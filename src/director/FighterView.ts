@@ -22,6 +22,8 @@ export type ViewInput = {
   /** Where the round is (the ready taunt during the countdown). */
   phase?: Phase;
   dt: number;
+  /** Draw every tick instead of stepping on twos (the slow-motion replay would otherwise stutter). */
+  smooth?: boolean;
 };
 
 /** How much of the live pose each joint takes, relative to config.liveBlend. Legs only when they're in view. */
@@ -201,7 +203,7 @@ export class FighterView {
   }
 
   /** Called every sim tick with the engine's state and the latest live frame (if any). */
-  update({ state, live, guard, distance, opponentKo, phase, dt }: ViewInput) {
+  update({ state, live, guard, distance, opponentKo, phase, dt, smooth }: ViewInput) {
     this.time += dt;
     this.introTime = phase === 'countdown' ? this.introTime + dt : 0;
     this.hurtClock += dt;
@@ -252,7 +254,7 @@ export class FighterView {
     const phaseKey = `${state.phase}:${state.move ?? ''}`;
     if (phaseKey !== this.shownPhase) this.forceStep = true;
     this.sinceStep += dt;
-    const stepped = config.animFps > 0;
+    const stepped = config.animFps > 0 && !smooth;
     if (stepped && !this.forceStep && this.sinceStep < 1 / config.animFps) {
       this.updateFlash(dt);
       return;

@@ -56,6 +56,8 @@ export interface GameState {
   flashKey: number;
   /** Hits in a row by one fighter (2+), for the combo counter. `key` changes with every hit. */
   combo: { player: PlayerId; hits: number; key: number } | null;
+  /** The K.O. replay is playing (the K.O. screen waits for it). */
+  replay: boolean;
   /** A big announcer callout ("FIRST ATTACK", "PERFECT"), `key` changes with each. */
   callout: { text: string; key: number } | null;
   /** The last move the camera read for this laptop's player (shown on the camera picture-in-picture). */
@@ -87,6 +89,7 @@ export const useGameStore = create<GameState>(() => ({
   flashKey: 0,
   combo: null,
   callout: null,
+  replay: false,
   lastMove: null,
 }));
 
