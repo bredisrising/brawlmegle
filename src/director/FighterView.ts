@@ -143,7 +143,8 @@ export class FighterView {
   /** Load a selected avatar; fighters without a model keep the joint placeholder. */
   async setFighter(fighter: ForgedFighter) {
     const version = ++this.loadVersion;
-    let url = fighter.glbUrl;
+    // A finished forge with no 3D model at all (the 3D step failed) gets the default fighter's body too.
+    let url = fighter.glbUrl ?? (fighter.status === 'ready' && fighter.id !== 'default' ? DEFAULT_MODEL : undefined);
     let model = url ? (await loadModel(url)).scene : null;
     // A forge whose rig failed (e.g. Tripo out of credits) is a statue with no bones: fight as the default fighter.
     if (model && url?.includes('/api/forge/') && !model.getObjectByProperty('isSkinnedMesh', true)) {
