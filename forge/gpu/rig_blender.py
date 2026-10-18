@@ -47,7 +47,7 @@ VOXEL = float(opts.get("--voxel", 0.008))  # proxy voxel size for a 1 m tall mod
 DEBUG_BLEND = opts.get("--debug")
 STATIC_GLB = opts.get("--static")  # also write the oriented, normalized model without a skeleton
 YAW = float(opts.get("--yaw", 0))  # degrees about +y (glTF up) that turn the generator's front to +x
-ATTEMPT = int(opts.get("--attempt", 1))  # 2+: the forge's re-rig after its rig check failed: use the envelope
+ATTEMPT = int(opts.get("--attempt", 1))  # which plan (PLANS below): the box moves on to 2 and 3 when the game's rig check fails
 PROXY_FACES = 40000
 t0 = time.time()
 marks = {}
@@ -69,12 +69,19 @@ for o in list(bpy.data.objects):
         mw = o.matrix_world.copy()
         o.parent = None
         o.matrix_world = mw
+# An old rig's bone display shapes (the importer's hidden icospheres) aren't part of the body.
+shapes = {pb.custom_shape for o in bpy.data.objects if o.type == "ARMATURE" for pb in o.pose.bones if pb.custom_shape}
 for o in list(bpy.data.objects):
-    if o.type != "MESH":
+    if o.type != "MESH" or o in shapes:
         bpy.data.objects.remove(o, do_unlink=True)
 meshes = [o for o in bpy.data.objects if o.type == "MESH" and len(o.data.vertices) > 0]
 if not meshes:
     raise SystemExit("no mesh in the input")
+for o in meshes:
+    o.hide_set(False)
+    o.hide_viewport = False
+    o.hide_select = False
+INPUT_VERTS = sum(len(o.data.vertices) for o in meshes)
 for o in meshes:
     o.modifiers.clear()
     o.vertex_groups.clear()
@@ -89,6 +96,8 @@ if len(meshes) > 1:
     bpy.ops.object.join()
 body = bpy.context.view_layer.objects.active
 body.name = "Body"
+if body.type != "MESH" or len(body.data.vertices) < 0.99 * INPUT_VERTS:
+    raise SystemExit(f"joining the input's meshes failed: {len(body.data.vertices) if body.type == 'MESH' else 0} of {INPUT_VERTS} vertices")
 # Fighters are opaque: a generator's opacity channel would make the game sort them as glass (and break the outline).
 for mat in body.data.materials:
     if not mat or not mat.node_tree:
@@ -492,7 +501,7 @@ def heat_weights(proxy):
 # surface. A vertex only takes weight from its own bone and the ones it joins (plus what the smoothing brings from
 # its neighbors on the surface), so a hand next to the thigh never takes thigh weight.
 BLEND = float(opts.get("--blend", 0.03))  # m on a 1 m model, each side of a joint
-SMOOTH = float(opts.get("--smooth", 0.02))  # m: how far the surface smoothing spreads the weights
+SMOOTH = float(opts.get("--smooth", 0.025))  # m: how far the surface smoothing spreads the weights
 
 
 def smoothstep(x):
@@ -567,16 +576,22 @@ COVER_MIN = 0.5  # share of the body within 3 voxels of the proxy (thin hair or 
 KEPT_MIN = 0.8  # share of the remesh in its biggest piece
 
 
-def solid_proxy(close):
-    mesh, info = solid_mesh(VOXEL, close)
-    proxy, pinfo = remesh_proxy(mesh, VOXEL)
+def solid_proxy(close, voxel=VOXEL):
+    mesh, info = solid_mesh(voxel, close)
+    proxy, pinfo = remesh_proxy(mesh, voxel)
     bpy.data.meshes.remove(mesh)
     return proxy, info | pinfo
 
 
+# The paths each attempt tries, in order, before the envelope (the last resort of every attempt).
+PLANS = {
+    1: [("bone-heat", lambda: remesh_proxy(body.data, VOXEL))] + [("bone-heat-retry", lambda c=c: solid_proxy(c)) for c in (1, 2)],
+    2: [],  # straight to the envelope
+    3: [("bone-heat-retry", lambda: solid_proxy(2, VOXEL * 0.75))],  # a finer, more closed solid than attempt 1's
+}
 attempts = []
 result = None
-plan = [] if ATTEMPT > 1 else [("bone-heat", lambda: remesh_proxy(body.data, VOXEL))] + [("bone-heat-retry", lambda c=c: solid_proxy(c)) for c in (1, 2)]
+plan = PLANS.get(ATTEMPT, [])
 
 for path, make in plan:
     start = time.time()

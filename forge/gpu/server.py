@@ -43,6 +43,10 @@ BLENDER = os.environ.get("FORGE3D_BLENDER", f"{ROOT}/blender/blender")
 # forge box only stores the result. Off when Node or the optimizer isn't installed.
 NODE = os.environ.get("FORGE3D_NODE", f"{ROOT}/node/bin/node")
 OPTIMIZER = os.environ.get("FORGE3D_OPTIMIZER", f"{ROOT}/optimizer/optimize-glb.mjs")
+# The forge's rig check (forge/rigcheck.js: poses the rig like the game and skins it), next to the optimizer. When a
+# rig fails it, the rigger's next attempt plan is tried (rig_blender.py PLANS), up to LAST_RIG_ATTEMPT.
+RIGCHECK = os.environ.get("FORGE3D_RIGCHECK", f"{ROOT}/optimizer/rigcheck.js")
+LAST_RIG_ATTEMPT = 3
 WORK = os.environ.get("FORGE3D_WORK", "/var/lib/forge3d/jobs")
 SETTINGS = {
     "pipeline": os.environ.get("FORGE3D_PIPELINE", "1024_cascade"),
@@ -143,6 +147,50 @@ def rig(job_dir, out_name="rigged.glb", attempt=1):
     return json.loads(report.group(1))
 
 
+def game_check(glb_path):
+    """forge/rigcheck.js on a rigged GLB: {"ok", "score", "fails"}, or None when the checker isn't installed."""
+    if not (os.path.exists(NODE) and os.path.exists(RIGCHECK)):
+        return None
+    try:
+        out = subprocess.run([NODE, RIGCHECK, glb_path, "--json"], capture_output=True, text=True, timeout=60)
+        r = json.loads(out.stdout.strip().splitlines()[-1])
+    except Exception as err:  # noqa: BLE001
+        log("rig check didn't run:", err)
+        return None
+    problems = r.get("problems", [])
+    if any(p.get("code") == "unreadable" for p in problems):  # its packages are missing (or the GLB is): unchecked
+        log("rig check couldn't read the GLB:", problems[0].get("message"))
+        return None
+    return {"ok": bool(r.get("ok")), "score": r.get("score"), "fails": [p["message"] for p in problems if p.get("level") == "fail"]}
+
+
+def rig_until_ok(job):
+    """Rigs the model with the rigger's attempt plans in turn (from the job's rigAttempt) until the game's rig check
+    passes, and keeps the best rig as rigged.glb. The report says which attempt and path made it ("rig"), its own
+    weight check ("rig_ok", "check"), the game's check ("game_check") and every try ("tries")."""
+    tries, best = [], None
+    for attempt in range(job.get("rig_attempt", 1), LAST_RIG_ATTEMPT + 1):
+        name = f"rigged.try{attempt}.glb"
+        report = rig(job["dir"], name, attempt)
+        game = report["game_check"] = game_check(os.path.join(job["dir"], name))
+        tries.append({"attempt": attempt, "rig": report.get("rig"), "rig_ok": report.get("rig_ok"),
+                      **({"score": game["score"], "ok": game["ok"]} if game else {})})
+        rank = (bool(game["ok"]) if game else bool(report.get("rig_ok", True)), (game or {}).get("score") or 0)
+        if best is None or rank > best[0]:
+            best = (rank, name, report)
+        if game is None or game["ok"]:
+            break
+    _, name, report = best
+    os.replace(os.path.join(job["dir"], name), os.path.join(job["dir"], "rigged.glb"))
+    for t in tries:
+        try:
+            os.remove(os.path.join(job["dir"], f"rigged.try{t['attempt']}.glb"))
+        except FileNotFoundError:
+            pass
+    report["tries"] = tries
+    return report
+
+
 def optimize(job):
     """rigged.glb -> its optimized version (the original stays as rigged.orig.glb). Keeps the original on failure."""
     if not (os.path.exists(NODE) and os.path.exists(OPTIMIZER)):
@@ -166,13 +214,13 @@ def rig_worker():
             job["status"] = "rig"
             start = time.time()
             job["lm_thread"].join()
-            job["report"] = report = rig(job["dir"], attempt=job.get("rig_attempt", 1))
+            job["report"] = report = rig_until_ok(job)
             job["timings"]["rig"] = round(time.time() - start, 2)
-            tried = " > ".join(a["path"] + ("" if a["ok"] else " (failed)") for a in report.get("attempts", []))
-            if not report.get("rig_ok", True):
-                log(job["id"][:8], "RIG CHECK FAILED on every path:", tried, report["check"].get("fails"))
-            elif report.get("rig") != "bone-heat":
-                log(job["id"][:8], f"rig: {report.get('rig')} (attempt {job.get('rig_attempt', 1)}: {tried})")
+            game = report.get("game_check")
+            if not report.get("rig_ok", True) or (game and not game["ok"]):
+                log(job["id"][:8], "RIG CHECK FAILED on every attempt, sending the best:", json.dumps(report["tries"]))
+            elif report.get("rig") != "bone-heat" or len(report["tries"]) > 1:
+                log(job["id"][:8], "rig:", json.dumps(report["tries"]))
             job["rigged"] = True
             optimize(job)
             job["status"] = "done"
