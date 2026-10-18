@@ -65,6 +65,18 @@ describe('forge server', () => {
     expect((await fetch(`${base}/api/forge/${id}/front.jpg`)).status).toBe(404);
   });
 
+  it.skipIf(!fs.existsSync(path.join(ROOT, 'forge/node_modules/sharp')))('sends browsers the WebP copies of the card and sheet', async () => {
+    const { base, forge, until } = await startForge();
+    const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
+    const f = await until(id, (x) => x.status !== 'scanning' && x.status !== 'forging');
+    expect(f.cardUrl).toMatch(/card\.webp$/);
+    expect(f.sheetUrl).toMatch(/sheet\.webp$/);
+    const card = await fetch(String(f.cardUrl).replace(/^https?:\/\/[^/]+/, base));
+    expect(card.headers.get('content-type')).toBe('image/webp');
+    expect((await fetch(`${base}/api/forge/${id}/card.png`)).status).toBe(200); // the original stays
+    expect((await fetch(`${base}/api/forge/${id}/rigged.orig.glb`)).status).toBe(404); // backups aren't served
+  });
+
   it('a failed card keeps the fighter (and its 3D model)', async () => {
     const { forge, until } = await startForge({ MOCK_CARD_FAIL: '1' });
     const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };

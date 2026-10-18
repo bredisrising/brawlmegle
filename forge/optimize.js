@@ -1,28 +1,15 @@
 // Shrinks what the browser downloads for a fighter: the GLB's textures are resized and re-encoded as WebP, its
-// geometry is quantized and meshopt-compressed, and the card and sheet get WebP copies. The Mixamo skeleton, the
-// skin weights and every node name (mixamorig*) stay as they are, so the game drives the rig exactly as before.
-// Why these sizes: research/perf-assets.md (side-by-side renders in the game's own lighting).
+// geometry is meshopt-compressed, and the card and sheet get WebP copies. The Mixamo skeleton, the skin weights and
+// every node name (mixamorig*) stay as they are, so the game drives the rig exactly as before.
+// Why these settings, with before/after renders in the game's own scene: research/perf-assets.md.
+//
+//   optimizeFighter(dir, fighter)  the forge pipeline (and optimize-all.js) on one fighter's folder; never throws
+//   optimizeGlb(bytes, profile)    any GLB (vite.config.ts runs it on the arena at build time)
+//
+// Its packages (gltf-transform, meshoptimizer, sharp) load on first use, so the forge still starts without them
+// (`cd forge && npm ci` installs them); fighters then just keep their original files.
 import fs from "node:fs";
 import path from "node:path";
-import { Logger, NodeIO } from "@gltf-transform/core";
-import { ALL_EXTENSIONS, EXTMeshoptCompression, EXTTextureWebP } from "@gltf-transform/extensions";
-import { dedup, listTextureSlots, prune, quantize, reorder } from "@gltf-transform/functions";
-import { MeshoptDecoder, MeshoptEncoder } from "meshoptimizer";
-import sharp from "sharp";
-
-// The forge box is a t4g.micro with a 400 MB cap on the service: one image at a time, no libvips cache.
-sharp.concurrency(1);
-sharp.cache(false);
-
-/**
- * Per texture slot: the longest side it's resized down to and the WebP quality. Fighters fill ~40% of the screen
- * (a bit more in the K.O. punch-in), where a 2048 base color is already sampled from its smaller mips.
- */
-export const FIGHTER_TEXTURES = {
-  baseColorTexture: { size: 2048, quality: 88 },
-  normalTexture: { size: 1024, quality: 90 },
-  default: { size: 1024, quality: 85 },
-};
 
 /**
  * @typedef {{size: number, quality?: number, lossless?: boolean}} TextureSetting
@@ -34,73 +21,100 @@ export const FIGHTER_TEXTURES = {
  * }} GlbProfile
  */
 
-/** @type {GlbProfile} */
 /**
+ * Forged fighters. Textures by slot: longest side and WebP quality. A fighter is ~40-90% of the screen height
+ * (fight camera to K.O. replay close-up), where 2048 base color is indistinguishable from Tripo's 4096.
  * Positions stay float: quantizing them rescales the mesh's local units (folded into the skin), and the game's ink
  * outline is pushed out along the normals in those units, so it would come out thinner.
+ * @type {GlbProfile}
  */
-export const FIGHTER = { textures: FIGHTER_TEXTURES, geometry: "meshopt", quantizePosition: false, texcoordBits: 14 };
+export const FIGHTER = {
+  textures: {
+    baseColorTexture: { size: 2048, quality: 88 },
+    normalTexture: { size: 1024, quality: 90 },
+    default: { size: 1024, quality: 85 },
+  },
+  geometry: "meshopt",
+  quantizePosition: false,
+  texcoordBits: 14,
+};
 
-let io;
-async function getIO() {
-  if (!io) {
-    await Promise.all([MeshoptEncoder.ready, MeshoptDecoder.ready]);
-    io = new NodeIO()
-      .registerExtensions(ALL_EXTENSIONS)
-      .registerDependencies({ "meshopt.encoder": MeshoptEncoder, "meshopt.decoder": MeshoptDecoder });
-  }
-  return io;
+/**
+ * The arena's baked GLBs (models/*.glb): same texture size (they're sampled with nearest filtering, so resizing would
+ * change the pixel look), 16-bit UVs so texel edges don't move, float positions (Hills.ts instances the bare
+ * geometry without its node, and Arena.ts reads positions to fix inside-out parts).
+ * @type {GlbProfile}
+ */
+export const ARENA = { textures: { default: { size: 4096, quality: 90 } }, geometry: "meshopt", quantizePosition: false, texcoordBits: 16 };
+
+let depsPromise;
+/** The optimizer's packages, loaded once on first use. */
+function deps() {
+  depsPromise ??= (async () => {
+    const [core, extensions, functions, meshopt, sharp] = await Promise.all([
+      import("@gltf-transform/core"),
+      import("@gltf-transform/extensions"),
+      import("@gltf-transform/functions"),
+      import("meshoptimizer"),
+      import("sharp").then((m) => m.default),
+    ]);
+    // The forge box is a t4g.micro (400 MB cap on the service): one thread, no libvips cache.
+    sharp.concurrency(1);
+    sharp.cache(false);
+    await Promise.all([meshopt.MeshoptEncoder.ready, meshopt.MeshoptDecoder.ready]);
+    const io = new core.NodeIO()
+      .registerExtensions(extensions.ALL_EXTENSIONS)
+      .registerDependencies({ "meshopt.encoder": meshopt.MeshoptEncoder, "meshopt.decoder": meshopt.MeshoptDecoder });
+    return { ...core, ...extensions, ...functions, ...meshopt, sharp, io };
+  })();
+  depsPromise.catch(() => (depsPromise = undefined));
+  return depsPromise;
 }
 
 /** Bytes a texture takes on the GPU once uploaded: RGBA8 plus its mip chain. */
 const gpuBytes = (w, h) => Math.round(w * h * 4 * (4 / 3));
 
-async function textureStats(doc) {
+async function textureStats(doc, d) {
   const out = [];
   for (const texture of doc.getRoot().listTextures()) {
     const image = texture.getImage();
     if (!image) continue;
-    const { width = 0, height = 0 } = await sharp(image).metadata().catch(() => ({}));
-    out.push({ slots: listTextureSlots(texture), mime: texture.getMimeType(), bytes: image.byteLength, width, height, gpu: gpuBytes(width, height) });
+    const { width = 0, height = 0 } = await d.sharp(image).metadata().catch(() => ({}));
+    out.push({ slots: d.listTextureSlots(texture), mime: texture.getMimeType(), bytes: image.byteLength, width, height, gpu: gpuBytes(width, height) });
   }
   return out;
 }
 
-/** True if this GLB already went through optimizeGlb (or was compressed some other way). */
-function isOptimized(doc) {
-  const used = doc.getRoot().listExtensionsUsed().map((e) => e.extensionName);
-  return used.includes("EXT_meshopt_compression") || used.includes("EXT_texture_webp") || used.includes("KHR_texture_basisu");
-}
-
 /**
- * Optimizes a GLB. Returns null if it's already optimized (safe to run twice), else the new bytes and what changed.
+ * Optimizes a GLB. Returns null if it's already compressed (safe to run twice), else the new bytes and what changed.
  * @param {Uint8Array} input
  * @param {GlbProfile} profile
  */
 export async function optimizeGlb(input, profile = FIGHTER) {
   const start = performance.now();
-  const io = await getIO();
-  const doc = await io.readBinary(new Uint8Array(input));
-  doc.setLogger(new Logger(Logger.Verbosity.WARN));
-  if (isOptimized(doc)) return null;
-  const before = await textureStats(doc);
+  const d = await deps();
+  const doc = await d.io.readBinary(new Uint8Array(input));
+  doc.setLogger(new d.Logger(d.Logger.Verbosity.WARN));
+  const used = doc.getRoot().listExtensionsUsed().map((e) => e.extensionName);
+  if (["EXT_meshopt_compression", "EXT_texture_webp", "KHR_texture_basisu", "KHR_draco_mesh_compression"].some((e) => used.includes(e))) return null;
+  const before = await textureStats(doc, d);
 
   // Unused data only. Leaf nodes stay (end bones like mixamorig:Head have no children), and so do all attributes.
   await doc.transform(
-    dedup({ keepUniqueNames: true }),
-    prune({ keepLeaves: true, keepAttributes: true, keepIndices: true, keepSolidTextures: true, keepExtras: true }),
+    d.dedup({ keepUniqueNames: true }),
+    d.prune({ keepLeaves: true, keepAttributes: true, keepIndices: true, keepSolidTextures: true, keepExtras: true }),
   );
 
   const settings = profile.textures ?? {};
   let webp = false;
   for (const texture of doc.getRoot().listTextures()) {
     const image = texture.getImage();
-    const mime = texture.getMimeType();
-    if (!image || !["image/png", "image/jpeg", "image/webp"].includes(mime)) continue;
-    const slots = listTextureSlots(texture);
+    if (!image || !["image/png", "image/jpeg"].includes(texture.getMimeType())) continue;
+    const slots = d.listTextureSlots(texture);
     const setting = settings[slots.find((s) => settings[s]) ?? "default"];
     if (!setting) continue;
-    const out = await sharp(image)
+    const out = await d
+      .sharp(image)
       .resize(setting.size, setting.size, { fit: "inside", withoutEnlargement: true, kernel: "lanczos3" })
       .webp(setting.lossless ? { lossless: true, effort: 4 } : { quality: setting.quality ?? 85, effort: 4, smartSubsample: true })
       .toBuffer();
@@ -108,19 +122,19 @@ export async function optimizeGlb(input, profile = FIGHTER) {
     if (texture.getURI()) texture.setURI(texture.getURI().replace(/\.(png|jpe?g)$/i, ".webp"));
     webp = true;
   }
-  if (webp) doc.createExtension(EXTTextureWebP).setRequired(true);
+  // three's GLTFLoader reads EXT_texture_webp with no setup.
+  if (webp) doc.createExtension(d.EXTTextureWebP).setRequired(true);
 
-  // Geometry: what gltf-transform's meshopt() does (reorder, quantize, EXT_meshopt_compression with filters), with
-  // a choice of whether positions are quantized: that moves a dequantize transform onto the mesh's node (or a skin's
-  // inverse bind matrices), which code that takes a mesh's geometry without its node would miss.
+  // Geometry: what gltf-transform's meshopt() does (reorder, quantize, EXT_meshopt_compression with filters), with a
+  // choice of whether positions are quantized (see FIGHTER). The game's loader has the meshopt decoder (src/forge/models.ts).
   const geometry = profile.geometry ?? "none";
   if (geometry !== "none") {
     const meshoptOn = geometry === "meshopt";
     const semantics = meshoptOn ? ["TEXCOORD", "JOINTS", "WEIGHTS", "COLOR"] : ["NORMAL", "TANGENT", "TEXCOORD", "JOINTS", "WEIGHTS", "COLOR"];
     if (profile.quantizePosition !== false) semantics.unshift("POSITION");
-    if (meshoptOn) await doc.transform(reorder({ encoder: MeshoptEncoder, target: "size" }));
+    if (meshoptOn) await doc.transform(d.reorder({ encoder: d.MeshoptEncoder, target: "size" }));
     await doc.transform(
-      quantize({
+      d.quantize({
         // With meshopt, normals stay float here and its octahedral filter packs them (8 bits).
         pattern: new RegExp(`^(${semantics.join("|")})(_\\d+)?$`),
         patternTargets: new RegExp(`^(${[...semantics, "NORMAL", "TANGENT"].join("|")})(_\\d+)?$`),
@@ -128,12 +142,12 @@ export async function optimizeGlb(input, profile = FIGHTER) {
       }),
     );
     if (meshoptOn) {
-      doc.createExtension(EXTMeshoptCompression).setRequired(true).setEncoderOptions({ method: EXTMeshoptCompression.EncoderMethod.FILTER });
+      doc.createExtension(d.EXTMeshoptCompression).setRequired(true).setEncoderOptions({ method: d.EXTMeshoptCompression.EncoderMethod.FILTER });
     }
   }
 
-  const glb = Buffer.from(await io.writeBinary(doc));
-  return { glb, before, after: await textureStats(doc), bytesBefore: input.byteLength, bytesAfter: glb.byteLength, ms: Math.round(performance.now() - start) };
+  const glb = Buffer.from(await d.io.writeBinary(doc));
+  return { glb, before, after: await textureStats(doc, d), bytesBefore: input.byteLength, bytesAfter: glb.byteLength, ms: Math.round(performance.now() - start) };
 }
 
 /**
@@ -141,6 +155,7 @@ export async function optimizeGlb(input, profile = FIGHTER) {
  * @param {Uint8Array} input
  */
 export async function optimizeImage(input, { width = 1024, height = 1536, quality = 85 } = {}) {
+  const { sharp } = await deps();
   return sharp(input).resize(width, height, { fit: "inside", withoutEnlargement: true }).webp({ quality, effort: 4 }).toBuffer();
 }
 
@@ -151,42 +166,63 @@ function writeAtomic(file, data) {
   fs.renameSync(tmp, file);
 }
 
-/** Card and sheet WebP copies: what the browser is sent (server.js points cardUrl/sheetUrl at them). */
-export const IMAGE_COPIES = { "card.png": { width: 1024, height: 1536 }, "sheet.png": { width: 1024, height: 1536 } };
+/**
+ * WebP copies browsers get instead of the PNGs (server.js points cardUrl/sheetUrl at them). The card fills the VS
+ * screen's half (~92% of the height), so it keeps its 1024x1536; the sheet is only a preview while forging.
+ */
+export const IMAGE_COPIES = { "card.png": { width: 1024, height: 1536, quality: 85 }, "sheet.png": { width: 1024, height: 1536, quality: 80 } };
+
+/** One optimization at a time in this process: each peaks at ~200 MB and up to 3 forges can finish together. */
+let queue = Promise.resolve();
 
 /**
  * Optimizes one fighter's files in place, in its folder: the GLB the game loads (rigged.glb, or model.glb when
  * rigging failed) is replaced by its optimized version, the original kept next to it as <name>.orig.glb, and the
- * card and sheet get .webp copies. Never throws: a fighter that can't be optimized just keeps its original files.
+ * card and sheet get .webp copies. A fighter that already has its backup is skipped unless `force` (then it's redone
+ * from the original). Never throws: a fighter that can't be optimized keeps its original files.
  * @param {string} dir  the fighter's folder (FORGE_DATA/<id>)
  * @param {{glbUrl?: string}} fighter
  */
-export async function optimizeFighter(dir, fighter, { log = console.log } = {}) {
+export function optimizeFighter(dir, fighter, { force = false, log = console.warn } = {}) {
+  const run = queue.then(() => optimizeFighterNow(dir, fighter, { force, log }));
+  queue = run.catch(() => {});
+  return run;
+}
+
+async function optimizeFighterNow(dir, fighter, { force, log }) {
   const report = { glb: null, images: {} };
+  try {
+    await deps();
+  } catch (err) {
+    log(`fighter optimizer unavailable (cd forge && npm ci): ${err.message}`);
+    return report;
+  }
   const glbName = typeof fighter.glbUrl === "string" ? path.basename(fighter.glbUrl) : null;
   if (glbName && /^(rigged|model)\.glb$/.test(glbName)) {
     const file = path.join(dir, glbName);
     const backup = path.join(dir, glbName.replace(/\.glb$/, ".orig.glb"));
-    try {
-      // Always optimize from the original, so a rerun never compresses twice.
-      const source = fs.readFileSync(fs.existsSync(backup) ? backup : file);
-      const result = await optimizeGlb(source);
-      if (result && result.bytesAfter < result.bytesBefore) {
-        if (!fs.existsSync(backup)) writeAtomic(backup, source);
-        writeAtomic(file, result.glb);
-        report.glb = { file: glbName, before: result.bytesBefore, after: result.bytesAfter, ms: result.ms };
+    if (force || !fs.existsSync(backup)) {
+      try {
+        // Always from the original, so a rerun never compresses twice.
+        const source = fs.readFileSync(fs.existsSync(backup) ? backup : file);
+        const result = await optimizeGlb(source);
+        if (result && result.bytesAfter < result.bytesBefore) {
+          if (!fs.existsSync(backup)) writeAtomic(backup, source);
+          writeAtomic(file, result.glb);
+          report.glb = { file: glbName, before: result.bytesBefore, after: result.bytesAfter, ms: result.ms };
+        }
+      } catch (err) {
+        log(`optimize ${glbName} failed, keeping the original: ${err.message}`);
       }
-    } catch (err) {
-      log(`optimize ${glbName} failed, keeping the original: ${err.message}`);
     }
   }
-  for (const [name, size] of Object.entries(IMAGE_COPIES)) {
+  for (const [name, settings] of Object.entries(IMAGE_COPIES)) {
     const file = path.join(dir, name);
     const copy = file.replace(/\.png$/, ".webp");
-    if (!fs.existsSync(file) || fs.existsSync(copy)) continue;
+    if (!fs.existsSync(file) || (fs.existsSync(copy) && !force)) continue;
     try {
       const source = fs.readFileSync(file);
-      const webp = await optimizeImage(source, size);
+      const webp = await optimizeImage(source, settings);
       writeAtomic(copy, webp);
       report.images[name] = { before: source.byteLength, after: webp.byteLength };
     } catch (err) {

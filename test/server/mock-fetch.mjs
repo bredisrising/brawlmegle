@@ -1,6 +1,7 @@
 // Preloaded into the forge server by test/server/forge.test.ts (node --import): stands in for OpenAI and
 // Tripo so the tests never spend credits. MOCK_DELAY_MS slows each OpenAI call; MOCK_CARD_FAIL=1 fails the card.
-const PNG = Buffer.from("89504e470d0a1a0a", "hex");
+// A real 1x1 PNG, so the optimizer can make its WebP copies.
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
 const delay = Number(process.env.MOCK_DELAY_MS ?? 0);
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

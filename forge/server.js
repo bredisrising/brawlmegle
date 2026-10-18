@@ -16,6 +16,7 @@ import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { pipeline } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { runForge, models, commentate, speak } from "./pipeline.js";
 
 if (!process.env.OPENAI_API_KEY) {
@@ -35,7 +36,7 @@ const ALLOWED_ORIGINS = (
   .filter(Boolean);
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
 /** Files anyone may download. The raw scan photos (front/left/right) stay private: fighter ids are public. */
-const FILES = /^(sheet|card)\.png$|^(model|rigged)\.glb$/;
+const FILES = /^(sheet|card)\.(png|webp)$|^(model|rigged)\.glb$/;
 const DATA = process.env.FORGE_DATA ? new URL(`file://${process.env.FORGE_DATA.replace(/\/?$/, "/")}`) : new URL("./data/", import.meta.url);
 const ACCESS_KEY = process.env.FORGE_ACCESS_KEY ?? "";
 const MAX_PER_HOUR = Number(process.env.FORGE_MAX_PER_HOUR ?? 40);
@@ -91,6 +92,7 @@ function storeFor(fighter) {
   const dir = new URL(`${fighter.id}/`, DATA);
   fs.mkdirSync(dir, { recursive: true });
   return {
+    dir: fileURLToPath(dir),
     save: () => fs.writeFileSync(new URL("fighter.json", dir), JSON.stringify(fighter, null, 2)),
     write: (file, data) => {
       fs.writeFileSync(new URL(file, dir), data);
@@ -108,9 +110,24 @@ function decodeImage(value) {
   return null;
 }
 
+/** Card/sheet WebP copies that exist (optimize.js writes them, the pipeline or optimize-all.js). */
+const webpCopies = new Set();
+/** The WebP copy of a card or sheet PNG when there is one: ~15x smaller, and what every browser can show. */
+function preferWebp(url) {
+  const m = /^\/api\/forge\/([\w-]+)\/(card|sheet)\.png$/.exec(url ?? "");
+  if (!m) return url;
+  const file = `${m[1]}/${m[2]}.webp`;
+  if (!webpCopies.has(file)) {
+    if (!fs.existsSync(new URL(file, DATA))) return url;
+    webpCopies.add(file);
+  }
+  return url.replace(/\.png$/, ".webp");
+}
+
 /** Fighter JSON with absolute URLs, so the game can use them directly. */
 function view(fighter, base) {
   const out = { ...fighter };
+  for (const key of ["sheetUrl", "cardUrl"]) if (out[key]) out[key] = preferWebp(out[key]);
   for (const key of ["sheetUrl", "cardUrl", "glbUrl", "modelUrl"]) if (out[key]?.startsWith("/")) out[key] = base + out[key];
   return out;
 }
@@ -347,8 +364,9 @@ async function handle(req, res) {
     if (parts.length === 4 && FILES.test(parts[3])) {
       const file = new URL(`${fighter.id}/${parts[3]}`, DATA);
       if (!fs.existsSync(file)) return json(res, 404, { error: "not ready" });
-      const type = parts[3].endsWith(".png") ? "image/png" : parts[3].endsWith(".glb") ? "model/gltf-binary" : "image/jpeg";
-      // A forge's files are written once and never change (a rescan is a new id): browsers can keep them.
+      const type = { png: "image/png", webp: "image/webp", glb: "model/gltf-binary" }[parts[3].split(".").pop()] ?? "image/jpeg";
+      // A forge's files are written once and never change (a rescan is a new id): browsers can keep them. (Only
+      // optimize-all.js swaps an old GLB for its optimized version, once; a cached original still works.)
       res.writeHead(200, {
         "content-type": type,
         "content-length": fs.statSync(file).size,

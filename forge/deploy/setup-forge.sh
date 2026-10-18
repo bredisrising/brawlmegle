@@ -7,8 +7,10 @@ SRC="$(cd "$(dirname "$0")/.." && pwd)"
 APP=/opt/brawlegle/forge
 [ -s /etc/brawlegle/forge.env ] || { echo "missing /etc/brawlegle/forge.env"; exit 1; }
 install -d "$APP"
-cp "$SRC"/{server.js,pipeline.js,prompts.js,env.js,package.json} "$APP/"
+cp "$SRC"/{server.js,pipeline.js,prompts.js,env.js,optimize.js,optimize-all.js,package.json,package-lock.json} "$APP/"
 rm -rf "$APP/public" && cp -r "$SRC/public" "$APP/public"
+# The fighter optimizer's packages (gltf-transform, meshoptimizer, sharp with its prebuilt arm64 libvips).
+(cd "$APP" && npm ci --omit=dev --no-audit --no-fund --silent)
 
 cat > /etc/systemd/system/brawlegle-forge.service <<'UNIT'
 [Unit]
@@ -25,7 +27,8 @@ Environment=FORGE_BIND=127.0.0.1 FORGE_PORT=8787 FORGE_DATA=/var/lib/brawlegle/f
 ExecStart=/usr/bin/node server.js
 Restart=always
 RestartSec=2
-MemoryMax=400M
+# A fighter optimization (optimize.js, one at a time) peaks at ~200 MB on top of the server.
+MemoryMax=600M
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

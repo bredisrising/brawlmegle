@@ -1,6 +1,7 @@
 // The forge pipeline: scan frames -> brief -> model sheet -> card art, next to (back view ->) 3D model -> rig.
 // Settings below were picked in research/forge-quality.md (2026-10-17); every one can be overridden from the env.
 import { BRIEF_PROMPT, STYLE, sheetPrompt, cardPrompt, backPrompt } from "./prompts.js";
+import { optimizeFighter } from "./optimize.js";
 
 const API = "https://api.openai.com/v1";
 const BRIEF_MODEL = process.env.FORGE_BRIEF_MODEL ?? "gpt-5.4-mini";
@@ -346,6 +347,8 @@ export async function runForge(job, frames, store) {
           })
       : Promise.resolve();
     await Promise.all([cardJob, modelJob]);
+    // Before "ready", so no browser ever caches the 10 MB original: WebP textures + meshopt GLB, WebP card (optimize.js).
+    if (store.dir) await timed("optimize", () => optimizeFighter(store.dir, job));
 
     job.status = "ready";
     delete job.step;
