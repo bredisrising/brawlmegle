@@ -41,8 +41,14 @@ const ACCESS_KEY = process.env.FORGE_ACCESS_KEY ?? "";
 const MAX_PER_HOUR = Number(process.env.FORGE_MAX_PER_HOUR ?? 40);
 const MAX_PER_DAY = Number(process.env.FORGE_MAX_PER_DAY ?? 200);
 const USERNAME = /^[a-z0-9_.-]{1,24}$/;
-/** Usernames are case-insensitive and trimmed. Returns null if it isn't a usable username. */
-const normalizeUsername = (u) => (typeof u === "string" && USERNAME.test(u.trim().toLowerCase()) ? u.trim().toLowerCase() : null);
+/**
+ * Usernames are case-insensitive and trimmed. Returns null if it isn't a usable username. All dots is out:
+ * `/api/profiles/..` collapses to `/api/` in the URL, so that profile could never be looked up.
+ */
+const normalizeUsername = (raw) => {
+  const u = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  return USERNAME.test(u) && !/^\.+$/.test(u) ? u : null;
+};
 const devPage = fs.readFileSync(new URL("./public/index.html", import.meta.url));
 
 /** @type {Map<string, object>} */
