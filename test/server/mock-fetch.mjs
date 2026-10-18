@@ -20,6 +20,15 @@ globalThis.fetch = async (input, init = {}) => {
       if (process.env.MOCK_CARD_FAIL && model === (process.env.FORGE_CARD_MODEL ?? "gpt-image-2.5-flare")) {
         return json({ error: { message: "Your request was rejected by the safety system" } }, 400);
       }
+      // The sheet streams (stream=true): one partial image, then the final one, like gpt-image-2.5-sunburst.
+      // MOCK_STREAM=refuse answers it with a 400 like a model that can't stream.
+      if (init.body.get("stream") === "true") {
+        if (process.env.MOCK_STREAM === "refuse") return json({ error: { message: "stream is not supported for this model", param: "stream" } }, 400);
+        const b64 = PNG.toString("base64");
+        const sse = `event: image_edit.partial_image\ndata: ${JSON.stringify({ type: "image_edit.partial_image", partial_image_index: 0, b64_json: b64 })}\n\n` +
+          `event: image_edit.completed\ndata: ${JSON.stringify({ type: "image_edit.completed", b64_json: b64 })}\n\n`;
+        return new Response(sse, { headers: { "content-type": "text/event-stream" } });
+      }
       return json({ data: [{ b64_json: PNG.toString("base64") }] });
     }
   }
@@ -54,12 +63,21 @@ globalThis.fetch = async (input, init = {}) => {
     if (url.endsWith("/health")) return json({ ok: true, ready: process.env.MOCK_GPU !== "cold", queued: 0 });
     if (new Headers(init.headers).get("x-forge3d-key") !== "gpu-key") return json({ error: "bad key" }, 403);
     if (url.endsWith("/jobs")) return json({ id: "g1" }, 202);
-    if (url.endsWith(".glb")) return new Response(Buffer.from(url.endsWith("/rigged.glb") ? "glTF-local-rigged" : "glTF-local"));
+    if (url.endsWith("/voxels.bin")) return new Response(Buffer.from([32, 0, 1, 2, 3]));
+    if (url.endsWith("/shape.glb")) return new Response(Buffer.from("glTF-shape"));
+    if (url.endsWith(".glb")) {
+      const file = url.split("/").pop();
+      return new Response(Buffer.from({ "rigged.glb": "glTF-local-rigged", "rigged.orig.glb": "glTF-local-orig" }[file] ?? "glTF-local"));
+    }
     gpuPolls++;
     if (process.env.MOCK_GPU === "fail") return json({ status: "failed", error: "rig: blender exited 1" });
     if (process.env.MOCK_GPU === "hang") return json({ status: "model", timings: {} });
-    const status = gpuPolls < 2 ? "model" : gpuPolls < 3 ? "rig" : "done";
-    return json({ status, timings: { generate: 9.1, export: 3.2, model: 12.4, rig: 3.0 }, rigged: status === "done" });
+    // MOCK_GPU=previews: the box shows its voxels, then its shape, and sends an optimized GLB.
+    const steps = process.env.MOCK_GPU === "previews" ? 5 : 3;
+    const status = gpuPolls < steps - 1 ? "model" : gpuPolls < steps ? "rig" : "done";
+    const previews = process.env.MOCK_GPU === "previews" ? { "voxels.bin": 1.2, ...(gpuPolls > 1 ? { "shape.glb": 4.1 } : {}) } : {};
+    const optimized = process.env.MOCK_GPU === "previews" && status === "done";
+    return json({ status, timings: { generate: 9.1, export: 3.2, model: 12.4, rig: 3.0 }, rigged: status === "done", previews, optimized });
   }
   throw new Error(`mock-fetch: unexpected ${url}`);
 };

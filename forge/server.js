@@ -37,8 +37,9 @@ const ALLOWED_ORIGINS = (
   .map((s) => s.trim())
   .filter(Boolean);
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
-/** Files anyone may download. The raw scan photos (front/left/right) stay private: fighter ids are public. */
-const FILES = /^(sheet|card)\.(png|webp)$|^(model|rigged)\.glb$/;
+/** Files anyone may download. The raw scan photos (front/left/right) stay private: fighter ids are public. The preview-*
+ * and sheet-partial-* files are the forging screen's live preview (see pipeline.js). */
+const FILES = /^(sheet|card)\.(png|webp)$|^(model|rigged)\.glb$|^preview-(voxels\.bin|shape\.glb)$|^sheet-partial-\d\.webp$/;
 const DATA = process.env.FORGE_DATA ? new URL(`file://${process.env.FORGE_DATA.replace(/\/?$/, "/")}`) : new URL("./data/", import.meta.url);
 const ACCESS_KEY = process.env.FORGE_ACCESS_KEY ?? "";
 const MAX_PER_HOUR = Number(process.env.FORGE_MAX_PER_HOUR ?? 40);
@@ -130,7 +131,9 @@ function preferWebp(url) {
 function view(fighter, base) {
   const out = { ...fighter };
   for (const key of ["sheetUrl", "cardUrl"]) if (out[key]) out[key] = preferWebp(out[key]);
-  for (const key of ["sheetUrl", "cardUrl", "glbUrl", "modelUrl"]) if (out[key]?.startsWith("/")) out[key] = base + out[key];
+  for (const key of ["sheetUrl", "cardUrl", "glbUrl", "modelUrl", "sheetPartialUrl", "previewVoxelsUrl", "previewMeshUrl"]) {
+    if (out[key]?.startsWith("/")) out[key] = base + out[key];
+  }
   // Files are cached as immutable, so a GLB re-optimized in place (optimize-all.js) gets a new URL by its write time.
   for (const key of ["glbUrl", "modelUrl"]) {
     if (!out[key]) continue;
@@ -378,7 +381,7 @@ async function handle(req, res) {
     if (parts.length === 4 && FILES.test(parts[3])) {
       const file = new URL(`${fighter.id}/${parts[3]}`, DATA);
       if (!fs.existsSync(file)) return json(res, 404, { error: "not ready" });
-      const type = { png: "image/png", webp: "image/webp", glb: "model/gltf-binary" }[parts[3].split(".").pop()] ?? "image/jpeg";
+      const type = { png: "image/png", webp: "image/webp", glb: "model/gltf-binary", bin: "application/octet-stream" }[parts[3].split(".").pop()] ?? "image/jpeg";
       // A forge's files are written once and never change (a rescan is a new id): browsers can keep them. (Only
       // optimize-all.js swaps an old GLB for its optimized version, once; a cached original still works.)
       res.writeHead(200, {

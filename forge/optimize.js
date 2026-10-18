@@ -181,17 +181,18 @@ let queue = Promise.resolve();
  * Optimizes one fighter's files in place, in its folder: the GLB the game loads (rigged.glb, or model.glb when
  * rigging failed) is replaced by its optimized version, the original kept next to it as <name>.orig.glb, and the
  * card and sheet get .webp copies. A fighter that already has its backup is skipped unless `force` (then it's redone
- * from the original). Never throws: a fighter that can't be optimized keeps its original files.
+ * from the original). `glb: false` only makes the image copies (the GPU box already optimized the GLB). Never throws:
+ * a fighter that can't be optimized keeps its original files.
  * @param {string} dir  the fighter's folder (FORGE_DATA/<id>)
  * @param {{glbUrl?: string}} fighter
  */
-export function optimizeFighter(dir, fighter, { force = false, log = console.warn } = {}) {
-  const run = queue.then(() => optimizeFighterNow(dir, fighter, { force, log }));
+export function optimizeFighter(dir, fighter, { force = false, log = console.warn, glb = true } = {}) {
+  const run = queue.then(() => optimizeFighterNow(dir, fighter, { force, log, glb }));
   queue = run.catch(() => {});
   return run;
 }
 
-async function optimizeFighterNow(dir, fighter, { force, log }) {
+async function optimizeFighterNow(dir, fighter, { force, log, glb }) {
   const report = { glb: null, images: {} };
   try {
     await deps();
@@ -200,7 +201,7 @@ async function optimizeFighterNow(dir, fighter, { force, log }) {
     return report;
   }
   const glbName = typeof fighter.glbUrl === "string" ? path.basename(fighter.glbUrl) : null;
-  if (glbName && /^(rigged|model)\.glb$/.test(glbName)) {
+  if (glb && glbName && /^(rigged|model)\.glb$/.test(glbName)) {
     const file = path.join(dir, glbName);
     const backup = path.join(dir, glbName.replace(/\.glb$/, ".orig.glb"));
     if (force || !fs.existsSync(backup)) {

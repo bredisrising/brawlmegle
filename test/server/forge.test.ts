@@ -105,9 +105,41 @@ describe('forge server', () => {
     expect((await forge({ name: 'A', frames: [JPEG] })).status).toBe(202);
   });
 
+  it('streams the sheet: a partial image shows while it draws', async () => {
+    const { forge, until } = await startForge();
+    const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
+    const f = await until(id, (x) => x.status === 'ready' && Boolean(x.sheetPartialUrl));
+    expect(f.sheetPartialUrl).toMatch(/sheet-partial-1\.webp$/);
+    expect((await fetch(String(f.sheetPartialUrl))).status).toBe(200);
+  });
+
+  it('draws the sheet the plain way when the model refuses to stream', async () => {
+    const { forge, until } = await startForge({ MOCK_STREAM: 'refuse' });
+    const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
+    const f = await until(id, (x) => x.status !== 'scanning' && x.status !== 'forging');
+    expect(f.status).toBe('ready');
+    expect(f.sheetUrl).toBeTruthy();
+    expect(f.sheetPartialUrl).toBeUndefined();
+  });
+
   describe('FORGE_3D=local (the GPU box)', () => {
     const gpu = { FORGE_3D: 'local', FORGE_3D_URL: 'http://gpu.mock', FORGE_3D_KEY: 'gpu-key' };
     const done = (x: Record<string, unknown>) => x.status !== 'scanning' && x.status !== 'forging';
+
+    it("relays the box's previews and keeps its optimized GLB as it is", async () => {
+      const { base, data, forge, until } = await startForge({ ...gpu, MOCK_GPU: 'previews' });
+      const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
+      const f = await until(id, done);
+      expect(f.engine3d).toBe('local');
+      expect(f.previewVoxelsUrl).toMatch(/preview-voxels\.bin$/);
+      expect(f.previewMeshUrl).toMatch(/preview-shape\.glb$/);
+      expect([...new Uint8Array(await (await fetch(String(f.previewVoxelsUrl))).arrayBuffer())]).toEqual([32, 0, 1, 2, 3]);
+      expect(f.glbOptimized).toBe(true);
+      expect(await (await fetch(`${base}/api/forge/${id}/rigged.glb`)).text()).toBe('glTF-local-rigged');
+      // The unoptimized original follows in the background, after the fighter is ready.
+      for (let i = 0; i < 40 && !fs.existsSync(path.join(data, id, 'rigged.orig.glb')); i++) await new Promise((r) => setTimeout(r, 50));
+      expect(fs.readFileSync(path.join(data, id, 'rigged.orig.glb'), 'utf8')).toBe('glTF-local-orig');
+    });
 
     it('builds the rigged model on the GPU box, not Tripo', async () => {
       const { base, forge, until } = await startForge(gpu);

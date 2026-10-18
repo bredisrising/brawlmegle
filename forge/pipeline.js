@@ -1,7 +1,7 @@
 // The forge pipeline: scan frames -> brief -> model sheet -> card art, next to (back view ->) 3D model -> rig.
 // Settings below were picked in research/forge-quality.md (2026-10-17); every one can be overridden from the env.
 import { BRIEF_PROMPT, STYLE, sheetPrompt, cardPrompt, backPrompt } from "./prompts.js";
-import { optimizeFighter } from "./optimize.js";
+import { optimizeFighter, optimizeImage } from "./optimize.js";
 
 const API = "https://api.openai.com/v1";
 const BRIEF_MODEL = process.env.FORGE_BRIEF_MODEL ?? "gpt-5.4-mini";
@@ -26,6 +26,8 @@ const CARD_SIZE = "1024x1536";
  * behind. Off by default for speed (+20 s on the player's wait); FORGE_MULTIVIEW=1 turns it on.
  */
 const MULTIVIEW = flag("FORGE_MULTIVIEW", false);
+/** Partial sheet images streamed for the forging screen's preview (0 turns streaming off). */
+const SHEET_PARTIALS = Number(process.env.FORGE_SHEET_PARTIALS ?? 2);
 
 // --- Tripo (model sheet -> textured 3D model -> Mixamo-rigged GLB) ---------------------------------------
 // https://developers.tripo3d.ai/llms.txt. Output URLs expire after 5 minutes, so models are downloaded at once.
@@ -89,17 +91,18 @@ async function local(path, init = {}, timeoutMs = 20_000) {
  * timings. Throws on any failure, or if it isn't done within FORGE_3D_TIMEOUT, so the caller can fall back to Tripo.
  * With `model` (a GLB), the box only rigs that model (forge/gpu/rescue.mjs).
  */
-export async function makeModelLocal(sheet, onStep, model = null) {
+export async function makeModelLocal(sheet, onStep, model = null, { onPreview, settings } = {}) {
   const deadline = Date.now() + LOCAL_TIMEOUT_MS;
   // A stopped box doesn't refuse the connection, it just never answers: find out in 3 s, not 20.
   const health = await (await local("/health", {}, 3_000)).json();
   if (!health.ready) throw new Error(`GPU box not ready: ${health.error ?? "warming up"}`);
-  const { id } = await (
-    await local("/jobs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ image: sheet.toString("base64"), model: model?.toString("base64") }) })
-  ).json();
+  const request = { image: sheet.toString("base64"), model: model?.toString("base64"), settings };
+  const { id } = await (await local("/jobs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request) })).json();
   onStep("model");
+  const get = async (file, timeoutMs = 60_000) => Buffer.from(await (await local(`/jobs/${id}/${file}`, {}, timeoutMs)).arrayBuffer());
   let step = "model";
   let misses = 0;
+  const relayed = new Set();
   for (;;) {
     if (Date.now() > deadline) throw new Error(`GPU job timed out after ${LOCAL_TIMEOUT_MS / 1000} s`);
     await new Promise((r) => setTimeout(r, 500));
@@ -111,12 +114,22 @@ export async function makeModelLocal(sheet, onStep, model = null) {
       if (++misses > 5) throw err;
       continue;
     }
+    // The forging screen's preview: the sparse voxels, then the untextured shape, as soon as the box has them.
+    for (const name of Object.keys(job.previews ?? {})) {
+      if (!onPreview || relayed.has(name)) continue;
+      relayed.add(name);
+      get(name, 10_000)
+        .then((data) => onPreview(name, data))
+        .catch((err) => console.warn(`preview ${name} failed:`, err.message));
+    }
     if (job.status === "rig" && step !== "rig") onStep((step = "rig"));
     if (job.status === "failed") throw new Error(`GPU job failed: ${job.error}`);
     if (job.status === "done") {
-      const get = async (file) => Buffer.from(await (await local(`/jobs/${id}/${file}`, {}, 60_000)).arrayBuffer());
-      const [rigged, model] = await Promise.all([get("rigged.glb"), get("model.glb")]);
-      return { model, rigged, timings: job.timings };
+      // An optimized GLB (the box ran optimize.js) is ~2 MB instead of ~11: only that is on the critical path. The
+      // unrigged model isn't used by the game, so it's skipped; the unoptimized original comes later via `original`.
+      const rigged = await get("rigged.glb");
+      if (job.optimized) return { model: null, rigged, optimized: true, timings: job.timings, original: () => get("rigged.orig.glb") };
+      return { model: await get("model.glb"), rigged, timings: job.timings };
     }
   }
 }
@@ -382,7 +395,7 @@ export async function speak(text, voice) {
 }
 
 /** Generates a new image from reference images plus a prompt. Returns PNG bytes. */
-export async function editImage(refs, prompt, model = IMAGE_MODEL, size = SHEET_SIZE) {
+export async function editImage(refs, prompt, model = IMAGE_MODEL, size = SHEET_SIZE, onPartial = null) {
   const form = new FormData();
   form.append("model", model);
   form.append("prompt", prompt);
@@ -390,8 +403,69 @@ export async function editImage(refs, prompt, model = IMAGE_MODEL, size = SHEET_
   form.append("quality", IMAGE_QUALITY);
   if (INPUT_FIDELITY && model.startsWith("gpt-image-1")) form.append("input_fidelity", INPUT_FIDELITY);
   refs.forEach((ref, i) => form.append("image[]", new Blob([ref.data], { type: ref.type }), `ref${i}.${ref.type.split("/")[1]}`));
+  if (onPartial) {
+    try {
+      return await streamImage(form, onPartial);
+    } catch (err) {
+      // Streaming is only for the preview: if it's refused, draw the image the plain way.
+      if (!err.refused) throw err;
+      console.warn("partial images refused, drawing without them:", err.message);
+      form.delete("stream");
+      form.delete("partial_images");
+    }
+  }
   const body = await openai("/images/edits", { method: "POST", body: form }, 180_000);
   return Buffer.from(body.data[0].b64_json, "base64");
+}
+
+/**
+ * The same edit, streamed: OpenAI sends a partial image or two before the final one (sunburst sends one ~5 s before
+ * the end, already close to final). `onPartial(png, index)` gets each; returns the final PNG.
+ */
+async function streamImage(form, onPartial) {
+  form.set("stream", "true");
+  form.set("partial_images", String(SHEET_PARTIALS));
+  const res = await fetch(API + "/images/edits", {
+    method: "POST",
+    headers: { authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+    body: form,
+    signal: AbortSignal.timeout(180_000),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const err = new Error(`OpenAI /images/edits ${res.status}: ${body.error?.message ?? "no details"}`);
+    err.refused = res.status === 400 && /stream|partial/i.test(body.error?.message ?? body.error?.param ?? "");
+    throw err;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) throw new Error("OpenAI image stream ended without an image");
+    buffer += decoder.decode(value, { stream: true });
+    let end;
+    while ((end = buffer.indexOf("\n\n")) >= 0) {
+      const block = buffer.slice(0, end);
+      buffer = buffer.slice(end + 2);
+      const data = /^data: *(.*)$/m.exec(block)?.[1];
+      if (!data || data === "[DONE]") continue;
+      const event = JSON.parse(data);
+      if (event.type === "error" || event.error) throw new Error(`OpenAI image stream: ${event.error?.message ?? "error"}`);
+      if (!event.b64_json) continue;
+      const png = Buffer.from(event.b64_json, "base64");
+      if (event.type?.endsWith("partial_image")) {
+        try {
+          onPartial(png, event.partial_image_index ?? 0);
+        } catch (err) {
+          console.warn("partial image handler failed:", err.message);
+        }
+      } else {
+        reader.cancel().catch(() => {});
+        return png;
+      }
+    }
+  }
 }
 
 /**
@@ -401,6 +475,8 @@ export async function editImage(refs, prompt, model = IMAGE_MODEL, size = SHEET_
  * @param {{save: () => void, write: (file: string, data: Buffer) => string}} store
  */
 export async function runForge(job, frames, store) {
+  /** Fetches the GPU box's unoptimized GLB, when the box sent an optimized one (kept after the fighter is ready). */
+  let original = null;
   const timed = async (key, fn) => {
     const start = Date.now();
     const result = await fn();
@@ -416,8 +492,22 @@ export async function runForge(job, frames, store) {
 
     job.step = "sheet";
     store.save();
-    const sheet = await timed("sheet", () => editImage(frames, sheetPrompt(job.brief)));
+    // The forging screen shows the sheet developing: each partial OpenAI streams goes out as a small WebP.
+    let partials = 0;
+    const onPartial = (png) => {
+      const n = ++partials;
+      optimizeImage(png, { width: 512, height: 768, quality: 70 })
+        .then((webp) => {
+          job.sheetPartialUrl = store.write(`sheet-partial-${n}.webp`, webp);
+          store.save();
+        })
+        .catch((err) => console.warn("sheet partial failed:", err.message));
+    };
+    const sheet = await timed("sheet", () => editImage(frames, sheetPrompt(job.brief), IMAGE_MODEL, SHEET_SIZE, SHEET_PARTIALS > 0 ? onPartial : null));
     job.sheetUrl = store.write("sheet.png", sheet);
+    // Its WebP copy right away, next to the 3D step, instead of at the end (optimize.js skips copies that exist).
+    const webpCopies = () => (store.dir ? optimizeFighter(store.dir, {}, { glb: false }) : Promise.resolve());
+    webpCopies();
 
     // The card and the 3D model both only need the sheet, so they run side by side. Without a Tripo key (or if
     // it fails) glbUrl stays empty and the game uses its default fighter.
@@ -429,6 +519,7 @@ export async function runForge(job, frames, store) {
       .then((card) => {
         job.cardUrl = store.write("card.png", card);
         store.save();
+        webpCopies();
       })
       .catch((err) => {
         job.cardError = String(err.message ?? err);
@@ -448,11 +539,21 @@ export async function runForge(job, frames, store) {
     // Our GPU service first (FORGE_3D=local or gradio). On any failure or timeout Tripo builds the model as before;
     // the GPU's try stays in timings.localTry so the wait it added shows up.
     const localStart = Date.now();
+    // The box's intermediates for the forging screen: stage 1's sparse voxels, then the untextured shape.
+    const PREVIEWS = { "voxels.bin": ["preview-voxels.bin", "previewVoxelsUrl"], "shape.glb": ["preview-shape.glb", "previewMeshUrl"] };
+    const onPreview = (name, data) => {
+      if (!PREVIEWS[name] || job.status !== "forging") return;
+      const [file, key] = PREVIEWS[name];
+      job[key] = store.write(file, data);
+      store.save();
+    };
     const localModel = () =>
-      timed("model", () => (ENGINE_3D === "gradio" ? makeModelGradio : makeModelLocal)(sheet, onStep))
+      timed("model", () => (ENGINE_3D === "gradio" ? makeModelGradio(sheet, onStep) : makeModelLocal(sheet, onStep, null, { onPreview })))
         .then((out) => {
           job.engine3d = ENGINE_3D;
           job.gpuTimings = out.timings;
+          job.glbOptimized = Boolean(out.optimized);
+          original = out.original ?? null;
           return out;
         })
         .catch((err) => {
@@ -480,7 +581,8 @@ export async function runForge(job, frames, store) {
         : Promise.resolve();
     await Promise.all([cardJob, modelJob]);
     // Before "ready", so no browser ever caches the 10 MB original: WebP textures + meshopt GLB, WebP card (optimize.js).
-    if (store.dir) await timed("optimize", () => optimizeFighter(store.dir, job));
+    // The GPU box already optimizes the GLB (and faster), so then only the card and sheet copies are left, if any.
+    if (store.dir) await timed("optimize", () => optimizeFighter(store.dir, job, { glb: !job.glbOptimized }));
 
     job.status = "ready";
     delete job.step;
@@ -492,5 +594,11 @@ export async function runForge(job, frames, store) {
     store.save();
   } catch (err) {
     console.error("could not save fighter", job.id, err.message);
+  }
+  // Keep the unoptimized original next to it, like optimize.js does, without making the player wait for it.
+  if (original && job.status === "ready" && job.glbUrl?.endsWith("/rigged.glb")) {
+    original()
+      .then((glb) => store.write("rigged.orig.glb", glb))
+      .catch((err) => console.warn("original GLB not kept:", err.message));
   }
 }
