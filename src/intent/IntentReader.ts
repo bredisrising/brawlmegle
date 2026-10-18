@@ -200,8 +200,32 @@ export class IntentReader {
 
     const intents: Intent[] = [];
     for (const name of LIMB_NAMES) this.updateLimb(name, body, intents);
+    this.bothArmsTogether(body.t, intents);
     this.updateCore(body, intents);
     return { commands: toCommands(this.player, intents), stance: this.stance, intents, body, debug: this.debug };
+  }
+
+  /**
+   * A strike this frame while the other hand made the same move at the same time (both just struck, or the other
+   * is mid wind-up going the same way) is the body or the camera moving, not two punches. Checked after both
+   * arms are up to date, so the comparison isn't a frame stale.
+   */
+  private bothArmsTogether(t: number, out: Intent[]) {
+    for (const name of ['armL', 'armR'] as const) {
+      const i = out.findIndex((x) => x.kind === 'strike' && x.limb === name);
+      if (i < 0) continue;
+      const other = name === 'armL' ? 'armR' : 'armL';
+      const otherNow = out.some((x) => x.kind === 'strike' && x.limb === other);
+      if (!movedTogether(this.limbs[name].peak, this.limbs[other], t, otherNow)) continue;
+      out.splice(i, 1, { kind: 'cancel', limb: name, t, reason: 'both hands moved' });
+      this.limbs[name].phase = 'idle';
+      if (otherNow) {
+        const j = out.findIndex((x) => x.kind === 'strike' && x.limb === other);
+        out.splice(j, 1, { kind: 'cancel', limb: other, t, reason: 'both hands moved' });
+        this.limbs[other].phase = 'idle';
+        return;
+      }
+    }
   }
 
   private updateLimb(name: LimbName, body: Body, out: Intent[]) {
@@ -305,7 +329,10 @@ export class IntentReader {
       const fromLow = s.anchorTip.y < shoulderY - 0.8;
       // Same bar with the guard up: people fight from their guard, and a punch out of it is still a punch.
       const needed = cfg.strikeDist;
-      const farEnough = def.kind === 'arm' && !fromLow && s.peakDisp >= needed && t - s.since >= (cfg.confirmMs ?? 60);
+      // A hand going up with the elbow coming up to the shoulder may be heading over the head (a scratch, a wave):
+      // wait for it to peak to see where it ends. Uppercuts keep the elbow down and don't wait.
+      const raising = def.kind === 'arm' && tTip.y > 0.6 * len(tTip) && midPt.p.y > root.p.y - 0.15;
+      const farEnough = def.kind === 'arm' && !fromLow && !raising && s.peakDisp >= needed && t - s.since >= (cfg.confirmMs ?? 60);
       // Peaked: the reach hasn't grown for 60 ms. (Not "the speed dropped": the fast signal wobbles mid-punch,
       // and judging then cuts the punch short.)
       const slowing = t - s.grewAt >= 60;
@@ -319,7 +346,6 @@ export class IntentReader {
         : goingDown ? 'going down'
         : def.kind === 'arm' && raisingGuard(body, name, s.anchorTip, tipPt.p, this.config.guard.radius, t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 400) ? 'raising guard'
         : def.kind === 'arm' && bothHandsUp(body, name, s.peak, s.since - s.faceBeforeOnset > 600 && t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 250) ? 'both hands up'
-        : def.kind === 'arm' && movedTogether(s.peak, this.limbs[name === 'armL' ? 'armR' : 'armL'], t) ? 'both hands moved'
         : def.kind === 'arm' && raisedOverHead(body, s.peakTip, s.peak, midPt.p, root.p) ? 'not a punch'
         : null;
       if (reason) {
@@ -569,8 +595,8 @@ function raisedOverHead(body: Body, end: Vec3, travel: Vec3, elbow: Vec3, should
  * Both hands moving the same way at the same time is the body (or the tracking) moving, not two punches:
  * ducking or twisting with the guard up, or MediaPipe jumping the whole skeleton for a frame.
  */
-function movedTogether(travel: Vec3, other: LimbState, t: number) {
-  const busy = other.phase === 'onset' || (other.phase === 'recover' && t - other.since < 100);
+function movedTogether(travel: Vec3, other: LimbState, t: number, otherStruckNow = false) {
+  const busy = otherStruckNow || other.phase === 'onset' || (other.phase === 'recover' && t - other.since < 100);
   if (!busy) return false;
   const o = other.phase === 'onset' ? other.travel : other.peak;
   const a = Math.hypot(travel.x, travel.y);
