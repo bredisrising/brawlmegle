@@ -53,7 +53,12 @@ export function mergeRosters(...lists: ForgedFighter[][]): ForgedFighter[] {
 }
 
 export async function listFighters(api = config.forgeApi): Promise<ForgedFighter[]> {
-  return mergeRosters(await fetchServerFighters(api), readSaved(), HOUSE_FIGHTERS);
+  const server = await fetchServerFighters(api);
+  // A rescan replaces your fighter: the server lists one per username, so an older copy saved in this browser (same
+  // name) doesn't come back as a duplicate.
+  const key = (f: ForgedFighter) => f.name.trim().toLowerCase();
+  const onServer = new Set(server.map(key));
+  return mergeRosters(server, readSaved().filter((f) => !onServer.has(key(f))), HOUSE_FIGHTERS);
 }
 
 export function saveFighter(fighter: ForgedFighter) {

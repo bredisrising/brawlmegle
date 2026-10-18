@@ -127,6 +127,40 @@ function preferWebp(url) {
   return url.replace(/\.png$/, ".webp");
 }
 
+/**
+ * The memory card: ready fighters, newest first, one per username. A rescan replaces your fighter (its newest ready
+ * one wins; the earlier ones stay on disk and keep working by id). `hidden: true` in a fighter.json takes it off the
+ * list (e.g. a broken rig waiting for a fix), so the one before it shows instead.
+ */
+function current() {
+  const seen = new Set();
+  return [...fighters.values()]
+    .filter((f) => f.status === "ready" && !f.hidden)
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .filter((f) => !f.username || (!seen.has(f.username) && seen.add(f.username)));
+}
+
+/** Records with each username's earlier fighters folded into the one the memory card shows (see current()). */
+function withLineage(all) {
+  const out = { ...all };
+  const shown = new Map(current().filter((f) => f.username).map((f) => [f.username, f.id]));
+  for (const f of fighters.values()) {
+    const head = f.username && shown.get(f.username);
+    const r = all[f.id];
+    if (!head || head === f.id || !r) continue;
+    const h = out[head] ?? { wins: 0, losses: 0, draws: 0, streak: 0, bestStreak: 0 };
+    out[head] = {
+      ...h,
+      wins: h.wins + r.wins,
+      losses: h.losses + r.losses,
+      draws: h.draws + r.draws,
+      bestStreak: Math.max(h.bestStreak, r.bestStreak),
+      recentResults: h.recentResults?.length ? h.recentResults : r.recentResults ?? [],
+    };
+  }
+  return out;
+}
+
 /** Fighter JSON with absolute URLs, so the game can use them directly. */
 function view(fighter, base) {
   const out = { ...fighter };
@@ -245,13 +279,10 @@ async function handle(req, res) {
     return null;
   }
 
-  if (req.method === "GET" && url.pathname === "/api/fighters") {
-    const ready = [...fighters.values()].filter((f) => f.status === "ready").sort((a, b) => b.createdAt - a.createdAt);
-    return json(res, 200, ready.map((f) => view(f, base)));
-  }
+  if (req.method === "GET" && url.pathname === "/api/fighters") return json(res, 200, current().map((f) => view(f, base)));
 
-  // Leaderboard: every fighter's record.
-  if (req.method === "GET" && url.pathname === "/api/records") return json(res, 200, { records });
+  // Leaderboard: every fighter's record. A rescan's record carries the earlier fighters' under that username too.
+  if (req.method === "GET" && url.pathname === "/api/records") return json(res, 200, { records: withLineage(records) });
 
   // The host reports a finished round. Only forged fighters on this server get records (not the CPU's or stand-ins).
   if (req.method === "POST" && url.pathname === "/api/matches") {
