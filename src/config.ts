@@ -1,6 +1,10 @@
 export type InputKind = 'mock' | 'camera';
 
 const params = new URLSearchParams(window.location.search);
+/** A phone (touch-first, small screen): it runs MediaPipe and the 3D on one small GPU, so it gets a lighter game. */
+const phone = typeof matchMedia === 'function' && matchMedia('(pointer: coarse) and (max-width: 900px)').matches;
+/** `?quality=low|high` overrides; phones default to low. */
+const lowPower = params.get('quality') ? params.get('quality') === 'low' : phone;
 const env = import.meta.env;
 const turnUrl = env.VITE_TURN_URL as string | undefined;
 
@@ -31,8 +35,10 @@ export const config = {
    * Key frames (a strike landing, a hit) always show on the frame they happen. `?fps=` overrides.
    */
   animFps: Math.max(0, Number(params.get('fps') ?? 12) || 0),
-  /** Ink outline around the fighters (`?outline=0` turns it off). */
-  outline: params.get('outline') !== '0',
+  /** Phones (or `?quality=low`): lower resolution, no bloom, shadows or outlines. */
+  lowPower,
+  /** Ink outline around the fighters (`?outline=0` turns it off; off in low power). */
+  outline: params.get('outline') ? params.get('outline') !== '0' : !lowPower,
   /** Full-screen impact frames on big hits (`?fx=low` turns them off, e.g. for flashing-light sensitivity). */
   impactFrames: params.get('fx') !== 'low',
 };

@@ -5,6 +5,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { createArena, type Arena } from './Arena';
 import { ImpactPass } from './ImpactPass';
+import { config } from '../config';
 
 export type FrameCallback = (dt: number, frozen: boolean) => void;
 
@@ -39,6 +40,7 @@ export class Renderer {
   private readonly lookNow = new THREE.Vector3();
   /** Fighting-game camera: follows the fighters' midpoint and pushes in as they close (see track()). */
   private baseZ = 1.8;
+  private baseY = 0.62;
   private trackX = 0;
   private trackSpread = 0.5;
   private camX = 0;
@@ -46,8 +48,8 @@ export class Renderer {
 
   constructor(container: HTMLElement) {
     this.container = container;
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.shadowMap.enabled = true;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, config.lowPower ? 1.25 : 2));
+    this.renderer.shadowMap.enabled = !config.lowPower;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     container.appendChild(this.renderer.domElement);
@@ -56,10 +58,10 @@ export class Renderer {
     // The composer's own target is multisampled since canvas antialiasing doesn't apply to it.
     this.composer = new EffectComposer(
       this.renderer,
-      new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }),
+      new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: config.lowPower ? 0 : 4 }),
     );
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.4, 1));
+    if (!config.lowPower) this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.4, 1));
     this.composer.addPass(new OutputPass());
     this.composer.addPass(this.impactPass);
 
@@ -161,7 +163,7 @@ export class Renderer {
     this.camX += (this.trackX - this.camX) * ease;
     const zoom = 0.86 + 0.3 * THREE.MathUtils.clamp((this.trackSpread - 0.3) / 0.6, 0, 1);
     this.zoom += (zoom - this.zoom) * ease;
-    this.cameraHome.set(this.camX * 0.85, 0.62, this.baseZ * this.zoom);
+    this.cameraHome.set(this.camX * 0.85, this.baseY, this.baseZ * this.zoom);
     this.lookTarget.set(this.camX, 0.5, 0);
     this.punchAmount = Math.max(0, this.punchAmount - dt * this.punchDecay * Math.max(0.15, this.punchAmount));
     const p = this.punchAmount;
@@ -182,8 +184,10 @@ export class Renderer {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     // Narrow screens (a phone held upright): back the camera off until the fight line fits across.
-    const halfWidth = 0.75;
+    const halfWidth = 0.6;
     const z = halfWidth / (Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * this.camera.aspect);
     this.baseZ = Math.max(1.8, z);
+    // ...and up, looking down onto the floor, so the tall frame shows arena rather than the sky and the drop below.
+    this.baseY = 0.62 + (this.baseZ - 1.8) * 0.45;
   }
 }
