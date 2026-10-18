@@ -21,6 +21,16 @@ it like Connect (the role flips; the camera and fighter come along: as client th
 masked stays masked). A stranger leaving (or closing the tab) sends the other straight back to searching; there's no
 rejoin. Protocol in matchmaker/README.md.
 
+Walking away (Game.onVisibility / walkAway / watchPeer): a match with someone on another laptop (walkout, countdown or
+the round) is called off for both, with no result and no highlight, when either player leaves: closes the tab, goes back
+to the title, or hides the tab (switched away, minimized) for more than 2 s (measured from timestamps: a hidden tab's
+timers run late). No word at all from the other laptop for 3 s mid-match (its tab frozen) counts too. Matchmade: the one
+who stayed searches again ("Your opponent left"); the one who hid doesn't until the tab's back ("You left the match").
+Room code: both go back to the lobby with the room and their fighters; it restarts once the player's back. Each side
+tells the other when its tab is hidden or visible (`presence`; the client also once a second), and the host only starts
+a round when both tabs are visible: a hidden tab's game loop doesn't run, so a countdown there would leave the other
+player on the walkout's VS. Matched while hidden: the tab's title says "⚔ Opponent found!"; a stranger waits 8 s.
+
 After a K.O. a rematch needs both players' votes (the host counts them; a CPU votes yes at once). Matchmade fights
 show "Next opponent in 4…" once the replay has played; without both votes, both go find someone new.
 
