@@ -1,7 +1,7 @@
 import { opponentOf } from '../types';
 import type { AttackMove, Command, FighterState, Hand, PlayerId, Stance } from '../types';
 import type { FightEngine } from './FightEngine';
-import { FIGHT, MOVES } from './moves';
+import { MOVES } from './moves';
 
 /**
  * A CPU opponent: a sparring partner for someone fighting with their body through a webcam. Their inputs
@@ -156,7 +156,7 @@ export class Cpu {
         if (this.oppIdle >= this.spec.still && this.nextAttack > tick + 24) this.nextAttack = tick + this.int([8, 24]);
         const oppSwinging = opp.phase === 'startup' || opp.phase === 'active';
         if (tick >= this.nextAttack && me.phase === 'idle' && !oppSwinging) {
-          const plan = this.choosePlan(me.stamina, me.meter ?? 0, d);
+          const plan = this.choosePlan(me.stamina);
           if (!plan.length) {
             this.enter('rest', tick);
             break;
@@ -289,9 +289,7 @@ export class Cpu {
     commands.push(this.attack(move, d, t));
   }
 
-  private choosePlan(stamina: number, meter: number, d: number): AttackMove[] {
-    // A full meter from range: throw the fireball, more often than not.
-    if (meter >= FIGHT.maxMeter && d >= 0.75 && this.rng() < 0.6) return ['fireball'];
+  private choosePlan(stamina: number): AttackMove[] {
     const affordable = (plan: AttackMove[]) => stamina - plan.reduce((sum, m) => sum + MOVES[m].stamina, 0) >= STAMINA_FLOOR;
     if (this.rng() < this.spec.comboChance) {
       const combo = this.weighted(COMBOS[this.level]);

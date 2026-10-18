@@ -208,7 +208,6 @@ export class IntentReader {
     const intents: Intent[] = [];
     for (const name of LIMB_NAMES) this.updateLimb(name, body, intents);
     this.bothArmsTogether(body.t, intents);
-    this.superPush(body, intents);
     this.updateCore(body, intents);
     return { commands: toCommands(this.player, intents), stance: this.stance, intents, body, debug: this.debug };
   }
@@ -237,45 +236,6 @@ export class IntentReader {
         this.limbs[other].phase = 'idle';
         return;
       }
-    }
-  }
-
-  /** Since when both fists have been up over the head together (the super's power pose), and if it already fired. */
-  private overheadSince = -1;
-  private overheadFired = false;
-  private overheadSeenAt = -Infinity;
-
-  /**
-   * The super: both fists raised over the head, close together, held for a moment (a power-up pose). Clear to a
-   * webcam from any angle, sitting or standing, and rare by accident mid-fight. Fires once per raise; the
-   * resolver only turns it into a fireball with a full meter, so a stray one costs nothing.
-   */
-  private superPush(body: Body, out: Intent[]) {
-    const nose = body.points[LM.nose].p;
-    const lw = body.points[LM.lWrist];
-    const rw = body.points[LM.rWrist];
-    const le = body.points[LM.lElbow];
-    const re = body.points[LM.rElbow];
-    // Over the top of the head, not by the forehead (that's a high guard: fists by the brow, elbows up).
-    const up = lw.p.y > nose.y + SUPER_ABOVE_NOSE && rw.p.y > nose.y + SUPER_ABOVE_NOSE;
-    const together = Math.hypot(lw.p.x - rw.p.x, lw.p.y - rw.p.y) < 1.1;
-    // Seated close to a laptop the fists leave the top of the frame: only then do the elbows (up past the face,
-    // hands above them) stand in for the fists.
-    const fistsOut = Math.max(lw.visibility, rw.visibility) < 0.4;
-    const seen = Math.min(lw.visibility, rw.visibility) > 0.4
-      || (fistsOut && Math.min(le.visibility, re.visibility) > 0.5 && le.p.y > nose.y - 0.1 && re.p.y > nose.y - 0.1 && lw.p.y > le.p.y && rw.p.y > re.p.y);
-    if (!(up && together && seen)) {
-      // Re-arm once the hands come back down below the face (a guard holds them about there).
-      if (lw.p.y < nose.y && rw.p.y < nose.y) this.overheadFired = false;
-      // A frame or two of flicker (fists at the frame edge) doesn't restart the hold.
-      if (body.t - this.overheadSeenAt > 150) this.overheadSince = -1;
-      return;
-    }
-    this.overheadSeenAt = body.t;
-    if (this.overheadSince < 0) this.overheadSince = body.t;
-    if (!this.overheadFired && body.t - this.overheadSince >= SUPER_HOLD_MS) {
-      out.push({ kind: 'special', t: body.t });
-      this.overheadFired = true;
     }
   }
 
@@ -699,10 +659,6 @@ function otherHandAlong(body: Body, def: LimbDef, s: LimbState, tip: Vec3, shoul
  * Both hands moving the same way at the same time is the body (or the tracking) moving, not two punches:
  * ducking or twisting with the guard up, or MediaPipe jumping the whole skeleton for a frame.
  */
-/** How long both fists must stay up over the head for the super (ms). */
-const SUPER_HOLD_MS = 250;
-/** How far above the nose (body units) both fists must be: above the top of the head. */
-const SUPER_ABOVE_NOSE = 0.35;
 
 function movedTogether(travel: Vec3, other: LimbState, t: number, otherStruckNow = false) {
   const busy = otherStruckNow || other.phase === 'onset' || (other.phase === 'recover' && t - other.since < 100);

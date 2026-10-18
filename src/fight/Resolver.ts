@@ -38,11 +38,6 @@ export class Resolver {
         return intent.up ? { kind: 'defend', player, t: intent.t, move: 'block' } : null;
       case 'strike':
         return this.strike(player, intent, engine);
-      case 'special':
-        // Only with a full meter (the engine checks too); otherwise the gesture is nothing.
-        return (engine.state(player).meter ?? 0) >= FIGHT.maxMeter
-          ? { kind: 'attack', player, t: intent.t, move: 'fireball', hand: 'R', height: 'head', speed: 1, windup: 1 }
-          : null;
       default:
         // jump: no aerial moves yet. cancel: the director handles it.
         return null;

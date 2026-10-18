@@ -1049,7 +1049,6 @@ function moveText(intents: Intent[]): string | null {
       : i.kind === 'duck' ? 'Duck'
       : i.kind === 'dodge' ? `Dodge ${i.dir === 'L' ? 'left' : 'right'}`
       : i.kind === 'jump' ? 'Jump'
-      : i.kind === 'special' ? 'Super!'
       : i.kind === 'guard' && i.up ? 'Guard up'
       : null;
     if (text) last = text;

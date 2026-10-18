@@ -61,7 +61,6 @@ function PlayerHUD({ id }: { id: PlayerId }) {
       <div className={`flex min-w-0 flex-1 flex-col gap-1.5 sm:gap-2 ${right ? 'items-end' : 'items-start'}`}>
         <div className="w-full">
           <HealthBar hp={player.hp} side={right ? 'right' : 'left'} />
-          <SuperMeter value={player.meter} right={right} color={accent.bg} />
         </div>
         <div className={`flex max-w-full items-stretch ${right ? 'flex-row-reverse' : ''}`}>
           <span className={`slant ${accent.bg} grid place-items-center px-3 font-display text-xs leading-none text-ink [--slant:6px] sm:text-sm`}>
@@ -85,22 +84,3 @@ function PlayerHUD({ id }: { id: PlayerId }) {
   );
 }
 
-/** Super meter under the health bar: fills as you land hits; full, it glows and says how to throw the fireball. */
-function SuperMeter({ value, right, color }: { value: number; right: boolean; color: string }) {
-  const full = value >= 100;
-  return (
-    <div className={`mt-1 flex items-center gap-2 ${right ? 'flex-row-reverse' : ''}`}>
-      <div className={`relative h-2 w-1/2 overflow-hidden bg-ink/80 sm:h-2.5 ${right ? 'ml-auto' : ''}`}>
-        <div
-          className={`absolute inset-y-0 ${right ? 'right-0' : 'left-0'} ${full ? 'animate-blink bg-paper' : color} transition-[width] duration-150`}
-          style={{ width: `${Math.min(100, value)}%` }}
-        />
-      </div>
-      {full && (
-        <span className="animate-slam whitespace-nowrap bg-paper px-1.5 font-display text-[0.65rem] uppercase leading-tight text-ink sm:text-xs">
-          Super! fists up high
-        </span>
-      )}
-    </div>
-  );
-}
