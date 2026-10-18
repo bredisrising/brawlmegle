@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useGameStore } from '../game/store';
 import { TextButton } from './ArcadeButton';
 import { useGame } from './GameContext';
+import { recordingEnabled, setRecordingEnabled } from '../game/MatchRecorder';
 
 /**
  * Bottom-right during a match (above the move guide chip): the link to the other laptop (ping, direct or relayed) and a small menu
@@ -14,6 +15,7 @@ export function GameMenu() {
   const connection = useGameStore((s) => s.connection);
   const replay = useGameStore((s) => s.replay);
   const [open, setOpen] = useState(false);
+  const [recording, setRecording] = useState(recordingEnabled);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen((o) => !o);
@@ -30,6 +32,17 @@ export function GameMenu() {
       {open && (
         <div className="animate-rise flex flex-col items-end gap-3 bg-ink/90 px-4 py-3">
           {role !== 'client' && <TextButton onClick={() => (setOpen(false), game.changeFighter())}>Change fighter</TextButton>}
+          {role !== 'client' && (
+            <TextButton
+              title="Saves both players' movement points (no video) after each round, to improve move detection"
+              onClick={() => {
+                setRecordingEnabled(!recording);
+                setRecording(!recording);
+              }}
+            >
+              Record for training: {recording ? 'on' : 'off'}
+            </TextButton>
+          )}
           <TextButton onClick={() => window.location.reload()}>Back to title</TextButton>
         </div>
       )}

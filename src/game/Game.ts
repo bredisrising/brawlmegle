@@ -23,6 +23,7 @@ import { COUNTDOWN_FROM, KO_FREEZE, MAX_HP, PLAYER_COLORS, PLAYER_NAMES, ROUND_S
 import { ClientSession } from './ClientSession';
 import type { MatchPlayer, MirrorEvent, MirrorFrame } from '../net/protocol';
 import { HostSession } from './HostSession';
+import { MatchRecorder, recordingEnabled } from './MatchRecorder';
 import { localPlayerId, pushPopup, updatePlayer, useGameStore } from './store';
 
 /** K.O. replay: ticks kept, ticks shown before and after the K.O., playback speed, and a hold on the end. */
@@ -85,6 +86,8 @@ export class Game {
   private readonly heardPhase: Partial<Record<PlayerId, string>> = {};
   private readonly unsubscribe: () => void;
   private readonly linkTimer: ReturnType<typeof setInterval>;
+  /** Real matches recorded for improving the move reader (host only, when turned on). */
+  private readonly recorder = new MatchRecorder();
   /** Combo counting and the round's first hit (both laptops count from the same hit events). */
   private combo = { player: null as PlayerId | null, hits: 0, at: 0, key: 0 };
   /**
@@ -116,9 +119,11 @@ export class Game {
     window.addEventListener('keydown', this.onMuteKey);
     // Countdown beeps, then the "go" (both laptops: the client's store follows the host's countdown).
     this.unsubscribe = useGameStore.subscribe((s, prev) => {
+      if (s.phase === 'ko' && prev.phase !== 'ko') void this.recorder.stop({ winner: s.winner, ending: s.ending });
       if (s.countdown === prev.countdown || s.countdown === null) return;
       this.sfx.play(s.countdown === 0 ? 'go' : 'beep');
       // A new round: forget the last one's combos and first hit.
+      if (s.countdown === 0 && !this.client && recordingEnabled()) this.startRecording();
       if (s.countdown === COUNTDOWN_FROM) {
         this.stopReplay();
         this.firstHitDone = false;
@@ -407,6 +412,7 @@ export class Game {
           this.views[id].cancelTell(hand);
           this.outbox.push({ kind: 'anticipate', player: id, hand, cancel: true });
         }
+        this.recorder.intents(id, out.intents);
         const text = moveText(out.intents);
         if (text && id === localPlayerId(useGameStore.getState().role)) useGameStore.setState({ lastMove: { text, at: performance.now() } });
         else if (text) this.outbox.push({ kind: 'move', player: id, text });
@@ -421,12 +427,16 @@ export class Game {
     }
     if (phase === 'fighting') {
       this.fightTicks++;
-      for (const event of this.fight.step(commands, stances)) this.applyEvent(event);
+      for (const event of this.fight.step(commands, stances)) {
+        this.recorder.event(event);
+        this.applyEvent(event);
+      }
       this.tickClock();
     }
     // Hit-stop: the picture holds on the impact while the engine does (effects and camera shake keep going).
     // (Only mid-round: the K.O. hit's hit-stop never runs out, since the engine stops stepping.)
     const frozen = useGameStore.getState().phase === 'fighting' && this.fight.frozen;
+    for (const id of PLAYER_IDS) this.recorder.frame(id, this.cpu[id] ? null : this.input.latest(id));
     this.fireballs.sync(this.fight.projectiles());
     this.showMeters({ p1: this.fight.state('p1'), p2: this.fight.state('p2') });
     this.sendFrame(stances, frozen);
@@ -448,6 +458,15 @@ export class Game {
         dt: SIM_DT,
       });
     }
+  }
+
+  private startRecording() {
+    const { players } = useGameStore.getState();
+    const cam = this.input.source('p1') as { video?: HTMLVideoElement } | null;
+    this.recorder.start(
+      { p1: { name: players.p1.name, cpu: !!this.cpu.p1 }, p2: { name: players.p2.name, cpu: !!this.cpu.p2 } },
+      (cam?.video?.srcObject as MediaStream | null) ?? null,
+    );
   }
 
   private async pollLink() {
