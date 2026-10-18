@@ -127,6 +127,7 @@ export class Walkout {
 
   private start() {
     if (!walkoutEnabled) return;
+    if (import.meta.env.DEV) console.debug('[walkout] start', performance.now().toFixed(0));
     const { players } = useGameStore.getState();
     this.kinds = entranceKinds(players.p1.name, players.p2.name);
     this.t = 0;
@@ -150,6 +151,7 @@ export class Walkout {
   /** `next`: the countdown carries on (ROUND 1), as opposed to the round being abandoned. */
   private stop(next: boolean) {
     if (this.t < 0) return;
+    if (import.meta.env.DEV) console.debug('[walkout] stop at', this.t.toFixed(2), next);
     const early = this.t < WALKOUT.end - 0.05;
     this.t = -1;
     // The original track ends on its own at the hit; a skip or a longer custom track fades out.
@@ -170,6 +172,8 @@ export class Walkout {
   /** Any key or click on the host skips (after a moment, so the click that started the fight doesn't). */
   private onKey = (e: Event) => {
     if (this.t < 0.3 || !this.onSkip) return;
+    // Any key but mute (M), a lone modifier, or a key held down from before.
+    if (e instanceof KeyboardEvent && (e.repeat || e.code === 'KeyM' || ['Shift', 'Control', 'Alt', 'Meta'].includes(e.key))) return;
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     if (useGameStore.getState().role === 'client') return;
     this.onSkip();
@@ -205,7 +209,10 @@ export class Walkout {
     }
     if (this.crossed(W.p2Slam)) this.slam('p2');
     if (this.crossed(W.wipe2)) this.sfx.play('whoosh', 1.3);
-    if (this.crossed(W.readyBark)) this.announcer.bark('ready', true);
+    if (this.crossed(W.readyBark)) {
+      this.announcer.bark('ready', true);
+      this.music?.duck(0.6, 0.12); // under "ARE YOU READY?"
+    }
     if (this.crossed(W.vs)) {
       this.views.p1.setVisible(true);
       p1.target = 0.6;
@@ -223,6 +230,17 @@ export class Walkout {
       p1.target = p2.target = 0.85;
     }
     if (this.crossed(W.flash)) p1.target = p2.target = 0.3;
+    // The host ends it on the music's last hit (the countdown's own timer runs on game time, which lags on a slow
+    // frame rate); the client laptop follows the host's countdown.
+    if (this.crossed(W.end) && this.hold === null) this.onSkip?.();
+  }
+
+  /** A fighter's model arrived mid-walkout (loaded late): show it only if it's in the current shot, printing in. */
+  adopt(id: PlayerId) {
+    const W = WALKOUT;
+    const onScreen = id === 'p1' ? this.t < W.p2 || this.t >= W.vs : this.t >= W.p2Spawn;
+    this.views[id].setVisible(onScreen);
+    if (onScreen) this.views[id].materialize();
   }
 
   /** A fighter's shot begins: they print in out of a beam, standing in fire. */

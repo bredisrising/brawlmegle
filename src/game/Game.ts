@@ -331,6 +331,8 @@ export class Game {
 
   /** A fighter arrives: it prints in out of a beam of light in its player's color. */
   private spawn(id: PlayerId) {
+    // A model that finishes loading mid-walkout (the client laptop loading the host's pick) joins its shots instead.
+    if (this.walkout.active) return this.walkout.adopt(id);
     this.views[id].setVisible(true);
     this.views[id].materialize();
     this.sfx.play('spawn');

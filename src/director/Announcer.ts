@@ -85,6 +85,12 @@ export class Announcer {
     }
     return {
       clock: () => (src && ctx?.state === 'running' && !stopped ? ctx.currentTime - calledAt : null),
+      /** Ease the level to `level` (of the starting volume) over `seconds`: ducking under a bark. */
+      duck: (level: number, seconds = 0.15) => {
+        if (!gain || !ctx || stopped) return;
+        gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(volume * level, ctx.currentTime + seconds);
+      },
       stop: (fade = 0.12) => {
         stopped = true;
         if (!src || !gain || !this.ctx) return;
