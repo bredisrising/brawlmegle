@@ -1,8 +1,8 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import type { FightEvent, FighterState, ForgedFighter, Hand, Phase, PlayerId, PoseFrame } from '../types';
 import { FIGHTER_SCALE, FIGHTER_SPACING, FIGHT_LINE_SCALE, PLAYER_COLORS } from '../game/constants';
 import { config } from '../config';
+import { loadModel } from '../forge/models';
 import { disposeObject } from './dispose';
 import { BONES, GUARD_POSE, JOINTS, copyPose, createPose, type JointName, type Pose } from './pose';
 import { LivePoseMapper } from './livePose';
@@ -141,7 +141,7 @@ export class FighterView {
   /** Load a selected avatar; fighters without a model keep the joint placeholder. */
   async setFighter(fighter: ForgedFighter) {
     const version = ++this.loadVersion;
-    const model = fighter.glbUrl ? (await new GLTFLoader().loadAsync(fighter.glbUrl)).scene : null;
+    const model = fighter.glbUrl ? (await loadModel(fighter.glbUrl)).scene : null;
     if (version !== this.loadVersion) {
       if (model) disposeObject(model);
       return;
