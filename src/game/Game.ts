@@ -72,6 +72,9 @@ const NEXT_REPLAY_BACKSTOP_MS = 12_000;
 /** One id per tab for the matchmaker (it prefers a new opponent over the last one). */
 const playerId = () => (crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+/** Big moments with a template line ready for each side (Commentary TEMPLATES). */
+const MOMENTS = ['first', 'counter', 'combo', 'guardBreak', 'danger', 'ko', 'time'] as const;
+type Moment = (typeof MOMENTS)[number];
 
 const ARENA_CENTER = new THREE.Vector3(0, 0.5, 0);
 const ARENA_FLOOR = new THREE.Vector3(0, 0.01, 0);
@@ -149,6 +152,15 @@ export class Game {
   private lastCall = 0;
   private firstCalled = false;
   private dangerCalled: Partial<Record<PlayerId, boolean>> = {};
+  /** The next line for each big moment and side, picked (and its voice fetched) ahead so it plays on the hit. */
+  private nextLines: Partial<Record<Moment, Partial<Record<PlayerId, Line>>>> = {};
+  /** Live color: when the LLM was last asked mid-round, whether it's still answering, and what it has said. */
+  private liveAt = -Infinity;
+  private liveBusy = false;
+  private blockStreak = { defender: null as PlayerId | null, n: 0, called: false };
+  private guardBroken = false;
+  private bigLead: PlayerId | null = null;
+  private clockCalled = false;
   /** Combo counting and the round's first hit (both laptops count from the same hit events). */
   private combo = { player: null as PlayerId | null, hits: 0, at: 0, key: 0 };
   /**
@@ -237,6 +249,10 @@ export class Game {
         this.commentary.hush();
         this.firstCalled = false;
         this.dangerCalled = {};
+        this.blockStreak = { defender: null, n: 0, called: false };
+        this.guardBroken = false;
+        this.bigLead = null;
+        this.clockCalled = false;
         if (!this.mirroring) this.callIntro();
         this.stopReplay();
         this.firstHitDone = false;
@@ -1103,7 +1119,10 @@ export class Game {
     if (training) return this.refill();
     this.clock -= SIM_DT;
     const shown = Math.max(0, Math.ceil(this.clock));
-    if (shown !== useGameStore.getState().timeLeft) useGameStore.setState({ timeLeft: shown });
+    if (shown !== useGameStore.getState().timeLeft) {
+      useGameStore.setState({ timeLeft: shown });
+      this.clockTick(shown);
+    }
     if (this.clock > 0) return;
     const [a, b] = [this.fight.state('p1').hp, this.fight.state('p2').hp];
     useGameStore.setState({ phase: 'ko', ending: 'time', winner: a === b ? null : a > b ? 'p1' : 'p2', countdown: null });
@@ -1308,39 +1327,117 @@ export class Game {
     return { p1: { id: this.fighters.p1?.id, name: spoken(players.p1.name) }, p2: { id: this.fighters.p2?.id, name: spoken(players.p2.name) } };
   }
 
-  /** The big moments get a line. */
+  /** The template line for a moment, by the side it's about (attacker, or the winner), as {a}/{d}/{w}. */
+  private momentVars(side: PlayerId) {
+    const { players } = useGameStore.getState();
+    const a = spoken(players[side].name);
+    const d = spoken(players[opponentOf(side)].name);
+    return { a, d, w: a };
+  }
+
+  /** The line picked ahead for this moment and side; the next one is picked (and fetched) straight away. */
+  private momentLine(moment: Moment, side: PlayerId): Line {
+    const ready = this.nextLines[moment]?.[side];
+    const line = ready ?? fill(TEMPLATES[moment], this.momentVars(side));
+    this.prepareLine(moment, side);
+    return line;
+  }
+
+  private prepareLine(moment: Moment, side: PlayerId) {
+    const line = fill(TEMPLATES[moment], this.momentVars(side));
+    (this.nextLines[moment] ??= {})[side] = line;
+    void this.commentary.prefetch([line]);
+  }
+
+  /** Before the round: a line ready for every big moment either fighter might have. */
+  private prepareLines() {
+    this.nextLines = {};
+    for (const moment of MOMENTS) for (const side of ['p1', 'p2'] as const) this.prepareLine(moment, side);
+  }
+
+  /** The big moments get a line; a few live situations get one the LLM writes. */
   private react(event: FightEvent) {
     const { players } = useGameStore.getState();
-    const d = opponentOf(event.attacker);
-    const vars = { a: spoken(players[event.attacker].name), d: spoken(players[d].name) };
-    if (event.type === 'startup') {
-      if (event.move === 'fireball') this.call([fill(TEMPLATES.fireball, vars)], true);
-      return;
-    }
+    const a = event.attacker;
+    const d = opponentOf(a);
     if (!event.damage || useGameStore.getState().phase !== 'fighting') return;
-    if (event.move === 'fireball') return this.call([fill(event.type === 'blocked' ? TEMPLATES.fireballBlocked : TEMPLATES.fireballHit, vars)], true);
-    if (event.type === 'blocked') return;
+    if (event.type === 'blocked') return this.blocked(d);
+    this.blockStreak = { defender: null, n: 0, called: false };
+    if (event.guardBreak && !this.guardBroken) {
+      this.guardBroken = true;
+      return this.call([this.momentLine('guardBreak', a)], true);
+    }
     if (!this.firstCalled) {
       this.firstCalled = true;
-      return this.call([fill(TEMPLATES.first, vars)]);
+      return this.call([this.momentLine('first', a)]);
     }
-    if (event.type === 'counter') return this.call([fill(TEMPLATES.counter, vars)]);
-    if (this.combo.player === event.attacker && (this.combo.hits === 3 || this.combo.hits === 5)) {
-      return this.call([fill(TEMPLATES.combo, { ...vars, n: this.combo.hits })], true);
+    if (event.type === 'counter') return this.call([this.momentLine('counter', a)]);
+    if (this.combo.player === a && (this.combo.hits === 3 || this.combo.hits === 5)) {
+      return this.call([this.momentLine('combo', a)], true);
     }
     if (players[d].hp < 25 && !this.dangerCalled[d]) {
       this.dangerCalled[d] = true;
-      this.call([fill(TEMPLATES.danger, vars)]);
+      return this.call([this.momentLine('danger', a)]);
     }
+    // A comeback: whoever was down big has taken the lead.
+    const lead = players.p1.hp - players.p2.hp;
+    if (Math.abs(lead) >= 30) this.bigLead = lead > 0 ? 'p1' : 'p2';
+    else if (this.bigLead && (lead > 0 ? 'p1' : lead < 0 ? 'p2' : null) === opponentOf(this.bigLead)) {
+      const back = spoken(players[opponentOf(this.bigLead)].name);
+      this.bigLead = null;
+      this.live(`Comeback: ${back} was down by 30 and has just taken the lead.`);
+    }
+  }
+
+  /** Punches into a guard: after four in a row, the analyst says what beats a block. */
+  private blocked(defender: PlayerId) {
+    const streak = this.blockStreak;
+    if (streak.defender !== defender) Object.assign(streak, { defender, n: 0, called: false });
+    if (++streak.n < 4 || streak.called) return;
+    streak.called = true;
+    const { players } = useGameStore.getState();
+    this.live(`${spoken(players[defender].name)} has blocked ${streak.n} punches in a row from ${spoken(players[opponentOf(defender)].name)}. A kick or a knee breaks a block.`);
+  }
+
+  /** The clock: a close round with 15 seconds left gets a call. */
+  private clockTick(timeLeft: number | null) {
+    if (timeLeft !== 15 || this.clockCalled || this.mirroring) return;
+    const { players } = useGameStore.getState();
+    if (Math.abs(players.p1.hp - players.p2.hp) > 20) return;
+    this.clockCalled = true;
+    this.live('Fifteen seconds left and it is close. Who takes it?');
+  }
+
+  /**
+   * Live color: the LLM writes a line about what's happening (one ask at a time, at most every 9 s), and it's said
+   * once its voice is in, if the round is still on. Mid-round lines are a few seconds behind the moment, like a
+   * broadcast's analyst.
+   */
+  private live(moment: string) {
+    const now = performance.now();
+    if (this.mirroring || this.liveBusy || now - this.liveAt < 9000) return;
+    this.liveAt = now;
+    this.liveBusy = true;
+    const { players, timeLeft } = useGameStore.getState();
+    const state = `${spoken(players.p1.name)} ${Math.round(players.p1.hp)} HP, ${spoken(players.p2.name)} ${Math.round(players.p2.hp)} HP${timeLeft !== null ? `, ${timeLeft} s left` : ''}.`;
+    void this.commentary
+      .write(`${moment} ${state}`, this.cast())
+      .then(async (lines) => {
+        await Promise.race([this.commentary.prefetch(lines), wait(3500)]);
+        if (useGameStore.getState().phase === 'fighting') this.call(lines);
+      })
+      .finally(() => (this.liveBusy = false));
   }
 
   /** Round start: the LLM writes the intro (it lands during the countdown); a template if it's slow or down. */
   private callIntro() {
     const cast = this.cast();
     const vars = { a: cast.p1.name, d: cast.p2.name };
+    this.prepareLines();
     void this.commentary
-      .write('The round is about to start: introduce the two fighters with some trash talk.', cast)
+      .write('The round is about to start: introduce the two fighters.', cast)
       .then(async (lines) => {
+        await Promise.race([this.commentary.prefetch(lines), wait(4000)]);
         // Not over the walkout's music and announcer: they speak once it's done.
         await afterWalkout();
         if (useGameStore.getState().phase !== 'countdown' && useGameStore.getState().phase !== 'fighting') return;
@@ -1354,11 +1451,14 @@ export class Game {
     const w = winner ? spoken(players[winner].name) : '';
     const l = winner ? spoken(players[opponentOf(winner)].name) : '';
     if (!winner) this.call([fill(TEMPLATES.draw, {})], true);
-    else this.call([fill(ending === 'time' ? TEMPLATES.time : TEMPLATES.ko, { w, d: l })], true);
+    else this.call([this.momentLine(ending === 'time' ? 'time' : 'ko', winner)], true);
     const moment = !winner
-      ? 'Time ran out and it is a draw. Roast both of them.'
-      : `${ending === 'time' ? 'Time ran out' : 'K.O.'}: ${w} beat ${l} with ${players[winner].hp} HP left. Hype the winner, roast the loser.`;
-    void this.commentary.write(moment, this.cast()).then((lines) => lines.length && this.call(lines, true));
+      ? 'Time ran out and it is a draw.'
+      : `${ending === 'time' ? 'Time ran out' : 'K.O.'}: ${w} beat ${l} with ${Math.round(players[winner].hp)} HP left. Call the finish and what won it.`;
+    void this.commentary.write(moment, this.cast()).then(async (lines) => {
+      await Promise.race([this.commentary.prefetch(lines), wait(4000)]);
+      if (lines.length) this.call(lines, true);
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -1495,6 +1595,7 @@ export class Game {
     if (e.code !== 'KeyM' || e.target instanceof HTMLInputElement) return;
     this.sfx.muted = !this.sfx.muted;
     this.announcer.muted = this.sfx.muted;
+    this.commentary.silenced = this.sfx.muted;
 
   };
 

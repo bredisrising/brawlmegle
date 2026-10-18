@@ -25,6 +25,7 @@ export function GameMenu() {
   const rec = useGameStore((s) => s.recordingVideo);
   const quick = useGameStore((s) => s.quick);
   const camHidden = useGameStore((s) => s.camHidden);
+  const [voices, setVoices] = useState(() => !game.commentary.muted);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen((o) => !o);
@@ -51,6 +52,15 @@ export function GameMenu() {
               My camera: {camHidden ? 'off' : 'on'}
             </TextButton>
           )}
+          <TextButton
+            title="The two commentators' voices (captions stay either way)"
+            onClick={() => {
+              game.commentary.setMuted(voices);
+              setVoices(!voices);
+            }}
+          >
+            Commentary: {voices ? 'on' : 'off'}
+          </TextButton>
           {role === 'host' && (
             <TextButton
               title="Saves both players' movement points (no video) after each round, to improve move detection"

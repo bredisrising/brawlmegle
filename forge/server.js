@@ -196,10 +196,42 @@ function limiter(max, windowMs) {
     return true;
   };
 }
-const commentaryAllowed = limiter(Number(process.env.FORGE_MAX_COMMENTARY ?? 60), 10 * 60_000);
+const commentaryAllowed = limiter(Number(process.env.FORGE_MAX_COMMENTARY ?? 120), 10 * 60_000);
 const ttsAllowed = limiter(Number(process.env.FORGE_MAX_TTS ?? 200), 10 * 60_000);
-/** TTS clips by voice + text: template lines repeat every match, so most calls are free and instant. */
+/**
+ * TTS clips by voice + text, in memory and on disk (FORGE_DATA/tts): the same lines come back match after match, and
+ * each new one costs voice credits. Both laptops ask for a line at about the same time: one voice call.
+ */
 const ttsCache = new Map();
+const ttsPending = new Map();
+const TTS_DIR = new URL("tts/", DATA);
+fs.mkdirSync(TTS_DIR, { recursive: true });
+function ttsRemember(key, audio) {
+  ttsCache.set(key, audio);
+  if (ttsCache.size > 400) ttsCache.delete(ttsCache.keys().next().value);
+}
+async function ttsClip(text, voice) {
+  const key = `${voice}|${text}`;
+  const cached = ttsCache.get(key);
+  if (cached) return cached;
+  const file = new URL(`${crypto.createHash("sha1").update(key).digest("hex")}.mp3`, TTS_DIR);
+  if (fs.existsSync(file)) {
+    const audio = fs.readFileSync(file);
+    ttsRemember(key, audio);
+    return audio;
+  }
+  if (!ttsPending.has(key)) {
+    if (!ttsAllowed()) throw Object.assign(new Error("voices are resting"), { status: 429 });
+    const job = speak(text, voice).then((audio) => {
+      ttsRemember(key, audio);
+      fs.writeFile(file, audio, (err) => err && console.warn("tts save failed:", err.message));
+      return audio;
+    });
+    ttsPending.set(key, job);
+    job.finally(() => ttsPending.delete(key)).catch(() => {});
+  }
+  return ttsPending.get(key);
+}
 
 function readJson(req) {
   return new Promise((resolve, reject) => {
@@ -339,7 +371,7 @@ async function handle(req, res) {
       cast[id] = { name: f.name.slice(0, 40), ...(brief ? { brief: JSON.stringify(brief).slice(0, 1200) } : {}) };
     }
     try {
-      const lines = await commentate({ moment: body.moment.slice(0, 400), fighters: cast, hour: new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Los_Angeles" }) });
+      const lines = await commentate({ moment: body.moment.slice(0, 400), fighters: cast });
       return json(res, 200, { lines });
     } catch (err) {
       console.warn("commentary failed:", err.message);
@@ -352,18 +384,13 @@ async function handle(req, res) {
     const text = (url.searchParams.get("text") ?? "").slice(0, 160);
     const voice = url.searchParams.get("voice") === "B" ? "B" : "A";
     if (!text.trim()) return json(res, 400, { error: "no text" });
-    const key = `${voice}|${text}`;
-    let audio = ttsCache.get(key);
-    if (!audio) {
-      if (!ttsAllowed()) return json(res, 429, { error: "voices are resting" });
-      try {
-        audio = await speak(text, voice);
-      } catch (err) {
-        console.warn("tts failed:", err.message);
-        return json(res, 502, { error: "voice unavailable" });
-      }
-      ttsCache.set(key, audio);
-      if (ttsCache.size > 400) ttsCache.delete(ttsCache.keys().next().value);
+    let audio;
+    try {
+      audio = await ttsClip(text, voice);
+    } catch (err) {
+      if (err.status === 429) return json(res, 429, { error: err.message });
+      console.warn("tts failed:", err.message);
+      return json(res, 502, { error: "voice unavailable" });
     }
     res.writeHead(200, { "content-type": "audio/mpeg", "content-length": audio.length, "cache-control": "public, max-age=86400" });
     return res.end(audio);

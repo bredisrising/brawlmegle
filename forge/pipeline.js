@@ -383,13 +383,15 @@ export async function makeBrief(frames) {
 const TTS_MODEL = process.env.FORGE_TTS_MODEL ?? "gpt-4o-mini-tts";
 /** Play-by-play (A) and color (B). */
 const VOICES = { A: process.env.FORGE_VOICE_A ?? "onyx", B: process.env.FORGE_VOICE_B ?? "coral" };
-const COMMENTARY_PROMPT = `You are two fighting-game commentators calling a webcam fighting game at a college hackathon
-(DubHacks, late at night). A is the hype play-by-play announcer, B is the dry, roasting color commentator.
-Write 1 or 2 short lines (max 14 words each) for the moment described. Call each fighter by their "name" exactly
-(it's their username); the brief's nickname and details are only flavor for the jokes. Start each line with one
-delivery tag for the voice actor: A uses [shouting] or [excited], B uses [deadpan], [sarcastic] or [laughs]. Be funny and
-specific: roast the fighting, the outfits and costume details, the hour, the record. NEVER comment on bodies,
-faces, weight, skin, age or anything a person can't change. Keep it PG-13. Reply as JSON:
+const COMMENTARY_PROMPT = `You are the two commentators on a live fighting-game broadcast, like the casters at EVO.
+A is the play-by-play: fast, loud, calls exactly what just happened. B is the analyst: calm and sharp, says why it
+worked or what has to change, with the odd dry line. Write 1 or 2 lines (max 12 words each) for the moment described.
+Call each fighter by their "name" exactly, and by name rather than he or she. A fighter's brief (archetype, outfit, signature details) can make a call
+specific now and then, but it's a fight, not a fashion show. Talk like real fight commentators: no internet slang,
+memes or catchphrases ("left the chat", "cooking", "ghosted", "Wi-Fi", "airplane mode", "NPC", "touch grass"), no
+jokes about the time, sleep, the hackathon or the players' lives, nothing mean. NEVER comment on bodies, faces,
+weight, skin, age or anything a person can't change. Start each line with one delivery tag for the voice: A uses
+[shouting] or [excited], B uses [calm], [serious] or [impressed]. Reply as JSON:
 {"lines":[{"voice":"A"|"B","text":"..."}]}`;
 
 /** @param {{moment: string, fighters: Record<string, {name: string, brief?: unknown}>}} ctx */
@@ -420,11 +422,11 @@ export async function commentate(ctx) {
 }
 
 /**
- * ElevenLabs voices (much more alive than OpenAI's for this): A = Ed, the arena announcer who also does the barks,
- * B = Blue, a dry Gen-Z sports commentator. eleven_v3 reads [tags] like [excited] or [sarcastic] as delivery.
+ * ElevenLabs voices (much more alive than OpenAI's for this): A = Phil, an explosive play-by-play commentator, B = Blue,
+ * the analyst. eleven_v3 reads [tags] like [shouting] or [calm] as delivery. (The barks, FIGHT! and K.O., are Ed.)
  */
 const ELEVEN_VOICES = {
-  A: process.env.ELEVEN_VOICE_A ?? "dHd5gvgSOzSfduK4CvEg",
+  A: process.env.ELEVEN_VOICE_A ?? "LG95yZDEHg6fCZdQjLqj",
   B: process.env.ELEVEN_VOICE_B ?? "kfU9VUUMjY4PWNoUfZ45",
 };
 

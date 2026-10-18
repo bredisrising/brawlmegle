@@ -2,11 +2,12 @@ import { config } from '../config';
 import { useGameStore } from './store';
 
 /**
- * The commentators (SPEC "Commentators"): A calls the play, B roasts. Big moments get an instant line from a
- * template (no waiting on a network), the round intro and the K.O. get lines a fast LLM writes on the forge
- * server from both fighters' names and forge briefs. Every line is captioned; voices come from the server's TTS
- * (cached by text, so template lines are instant after the first time), falling back to the browser's voice.
- * One line at a time: a queue keeps them from talking over each other, and stale lines are dropped.
+ * The commentators (SPEC "Commentators"), voiced like a fight broadcast: A calls the play, B (the analyst) says why
+ * it worked. Big moments get a template line whose voice was fetched before the round (so it plays the instant the
+ * hit lands); the round intro, the finish and a few live moments get lines a fast LLM writes on the forge server
+ * from both fighters' names and forge briefs, voiced before they're queued. Every line is captioned; voices come from
+ * the server's TTS (cached there by text), falling back to the browser's voice. One line at a time: a queue keeps
+ * them from talking over each other, and stale lines are dropped.
  */
 export type Voice = 'A' | 'B';
 export type Line = { voice: Voice; text: string };
@@ -14,13 +15,30 @@ export type Line = { voice: Voice; text: string };
 const MAX_QUEUE = 2;
 /** A queued line older than this is old news: dropped. */
 const STALE_MS = 3500;
+/** Voices on unless turned off in the menu (remembered here) or `?voices=0`. */
+const VOICES_KEY = 'brawlmegle.voices';
+
+const api = () => config.forgeApi.replace(/\/+$/, '');
+const keyOf = (line: Line) => `${line.voice}|${line.text}`;
 
 export class Commentary {
   private queue: (Line & { at: number })[] = [];
   private speaking = false;
   private audio: HTMLAudioElement | null = null;
-  /** Voices are off unless `?voices=1` (the TTS voices weren't hype enough): captions only. */
-  muted = new URLSearchParams(window.location.search).get('voices') !== '1';
+  /** Fetched voice clips by voice + text (object URLs), or the fetch in flight. */
+  private clips = new Map<string, Promise<string | null>>();
+  /** Captions only: the player turned voices off (the menu's Commentary switch, remembered). */
+  muted = voicesOff();
+  /** The M key's mute-everything (not remembered). */
+  silenced = false;
+
+  setMuted(muted: boolean) {
+    this.muted = muted;
+    if (muted) this.audio?.pause();
+    try {
+      localStorage.setItem(VOICES_KEY, muted ? '0' : '1');
+    } catch {}
+  }
 
   /** Say a line (or two) soon. `urgent` jumps the queue (a K.O. beats a combo call). */
   say(lines: Line[], urgent = false) {
@@ -31,11 +49,17 @@ export class Commentary {
     void this.next();
   }
 
+  /** Fetch these lines' voices now, so saying them later is instant. Resolves when they're in (or failed). */
+  prefetch(lines: Line[]): Promise<unknown> {
+    if (this.muted || !config.forgeApi) return Promise.resolve();
+    return Promise.all(lines.map((l) => this.clip(l)));
+  }
+
   /** Lines written by the LLM on the forge server; nothing (and no fuss) if it's slow or down. */
   async write(moment: string, fighters: Record<string, { id?: string; name: string }>): Promise<Line[]> {
     if (!config.forgeApi) return [];
     try {
-      const res = await fetch(`${config.forgeApi.replace(/\/+$/, '')}/api/commentary`, {
+      const res = await fetch(`${api()}/api/commentary`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-forge-key': config.forgeKey },
         body: JSON.stringify({ moment, fighters }),
@@ -67,7 +91,7 @@ export class Commentary {
     // [tags] are delivery directions for the voice, not words to show.
     useGameStore.setState({ caption: { voice: line.voice, text: line.text.replace(/\[[^\]]*\]\s*/g, ''), key: now } });
     try {
-      if (!this.muted) await this.voice(line);
+      if (!this.muted && !this.silenced) await this.voice(line);
       else await wait(1200 + line.text.length * 35);
     } finally {
       this.speaking = false;
@@ -79,35 +103,45 @@ export class Commentary {
     }
   }
 
-  /** Server voice (OpenAI TTS), else the browser's own, else just the caption's reading time. */
-  private async voice(line: Line) {
-    try {
-      const res = await fetch(`${config.forgeApi.replace(/\/+$/, '')}/api/tts?voice=${line.voice}&text=${encodeURIComponent(line.text)}`, {
+  /** The line's voice clip (an object URL), fetched once. */
+  private clip(line: Line): Promise<string | null> {
+    const key = keyOf(line);
+    let clip = this.clips.get(key);
+    if (!clip) {
+      clip = fetch(`${api()}/api/tts?voice=${line.voice}&text=${encodeURIComponent(line.text)}`, {
         headers: { 'x-forge-key': config.forgeKey },
-        signal: AbortSignal.timeout(4000),
-      });
-      if (!res.ok) throw new Error(`${res.status}`);
-      const url = URL.createObjectURL(await res.blob());
-      const audio = new Audio(url);
-      audio.volume = 0.9;
-      this.audio = audio;
-      await new Promise<void>((resolve) => {
-        audio.onended = audio.onerror = () => resolve();
-        audio.play().catch(() => resolve());
-        setTimeout(resolve, 8000);
-      });
-      URL.revokeObjectURL(url);
-    } catch {
-      await this.browserVoice(line);
+        signal: AbortSignal.timeout(8000),
+      })
+        .then(async (res) => (res.ok ? URL.createObjectURL(await res.blob()) : null))
+        .catch(() => null);
+      this.clips.set(key, clip);
+      // A failed fetch can be tried again next time.
+      void clip.then((url) => url || this.clips.delete(key));
+      if (this.clips.size > 120) this.clips.delete(this.clips.keys().next().value!);
     }
+    return clip;
+  }
+
+  /** Server voice (ElevenLabs), else the browser's own. A clip that isn't in within 2.5 s isn't worth the wait. */
+  private async voice(line: Line) {
+    const url = await Promise.race([this.clip(line), wait(2500).then(() => null)]);
+    if (!url) return this.browserVoice(line);
+    const audio = new Audio(url);
+    audio.volume = 0.95;
+    this.audio = audio;
+    await new Promise<void>((resolve) => {
+      audio.onended = audio.onerror = () => resolve();
+      audio.play().catch(() => resolve());
+      setTimeout(resolve, 9000);
+    });
   }
 
   private browserVoice(line: Line) {
     if (typeof speechSynthesis === 'undefined') return wait(1200 + line.text.length * 35);
     return new Promise<void>((resolve) => {
-      const u = new SpeechSynthesisUtterance(line.text);
+      const u = new SpeechSynthesisUtterance(line.text.replace(/\[[^\]]*\]\s*/g, ''));
       u.rate = line.voice === 'A' ? 1.15 : 1.0;
-      u.pitch = line.voice === 'A' ? 0.9 : 1.1;
+      u.pitch = line.voice === 'A' ? 0.9 : 1.0;
       u.onend = u.onerror = () => resolve();
       speechSynthesis.speak(u);
       setTimeout(resolve, 8000);
@@ -115,48 +149,57 @@ export class Commentary {
   }
 }
 
-const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+function voicesOff() {
+  const param = new URLSearchParams(window.location.search).get('voices');
+  if (param) return param === '0';
+  try {
+    return localStorage.getItem(VOICES_KEY) === '0';
+  } catch {
+    return false;
+  }
+}
 
-/** Instant lines for the big moments. {a} = attacker, {d} = defender, {w} = winner, {n} = hits. Short and loud. */
+const wait = (ms: number) => new Promise<null>((r) => setTimeout(() => r(null), ms));
+
+/**
+ * Instant lines for the big moments, called like a fight broadcast. {a} = attacker, {d} = defender, {w} = winner.
+ * The [tag] opening each one is how the voice delivers it (captions drop it). No slang, no memes.
+ */
 export const TEMPLATES = {
   first: [
-    { voice: 'A', text: 'FIRST BLOOD! {a}!' },
-    { voice: 'A', text: '{a} STRIKES FIRST!' },
-    { voice: 'B', text: '{d} came here to watch, apparently.' },
+    { voice: 'A', text: '[shouting] {a} draws first blood!' },
+    { voice: 'A', text: '[excited] And {a} lands the opening shot!' },
+    { voice: 'B', text: '[calm] Big first hit from {a}. That sets the tone.' },
   ],
   counter: [
-    { voice: 'A', text: 'COUNTER HIT! {a} READ THAT!' },
-    { voice: 'A', text: 'OH! {d} WALKED RIGHT INTO IT!' },
-    { voice: 'B', text: '{d} is fighting on airplane mode.' },
+    { voice: 'A', text: '[shouting] Counter hit! {a} saw it coming!' },
+    { voice: 'A', text: '[shouting] Oh! {a} punishes that clean!' },
+    { voice: 'B', text: '[impressed] Great read by {a}. Caught {d} mid-swing.' },
   ],
   combo: [
-    { voice: 'A', text: '{n} HITS! {a} IS COOKING!' },
-    { voice: 'A', text: '{n}-HIT COMBO! UNREAL!' },
-    { voice: 'B', text: '{d} is just a punching bag with a username.' },
+    { voice: 'A', text: '[shouting] {a} is putting it together!' },
+    { voice: 'A', text: '[shouting] {a} will not let up!' },
+    { voice: 'B', text: '[serious] {d} has to break that rhythm, right now.' },
   ],
-  fireball: [
-    { voice: 'A', text: '{a} LETS IT RIP! FIREBALL!' },
-    { voice: 'A', text: 'FIREBALL INCOMING!' },
+  guardBreak: [
+    { voice: 'A', text: '[shouting] Guard break! {a} goes right through it!' },
+    { voice: 'A', text: '[shouting] {a} smashes through the guard!' },
+    { voice: 'B', text: "[calm] You can't just block against {a}. The leg goes right through." },
   ],
-  fireballHit: [
-    { voice: 'A', text: 'IT CONNECTS! {d} IS TOAST!' },
-    { voice: 'B', text: '{d} forgot fireballs exist.' },
-  ],
-  fireballBlocked: [{ voice: 'B', text: '{d} blocks it. Boring, but smart.' }],
   danger: [
-    { voice: 'A', text: '{d} IS ON THE ROPES!' },
-    { voice: 'B', text: "{d}, it's not too late to forfeit." },
+    { voice: 'A', text: '[excited] {d} is in serious trouble!' },
+    { voice: 'B', text: '[serious] One more clean hit and {d} is done.' },
   ],
   ko: [
-    { voice: 'A', text: 'K.O.!!! {w} TAKES IT!' },
-    { voice: 'A', text: 'LIGHTS OUT! {w} WINS!' },
-    { voice: 'B', text: '{d} has left the chat.' },
+    { voice: 'A', text: '[shouting] K.O.! {w} wins it!' },
+    { voice: 'A', text: '[shouting] Down goes {d}! {w} takes it!' },
+    { voice: 'B', text: "[impressed] That's how you close it out. {w} with the finish." },
   ],
-  time: [{ voice: 'A', text: 'TIME! {w} WINS ON POINTS!' }],
-  draw: [{ voice: 'A', text: "TIME! IT'S A DRAW!" }],
+  time: [{ voice: 'A', text: '[shouting] Time! {w} takes it on points!' }],
+  draw: [{ voice: 'A', text: "[shouting] Time! We've got a draw!" }],
   intro: [
-    { voice: 'A', text: '{a} VERSUS {d}! LET\u2019S GO!' },
-    { voice: 'A', text: 'IT\u2019S {a} AND {d}! FIGHT!' },
+    { voice: 'A', text: '[shouting] {a} versus {d}! Here we go!' },
+    { voice: 'A', text: "[excited] It's {a} and {d}! Let's fight!" },
   ],
 } as const satisfies Record<string, readonly Line[]>;
 
