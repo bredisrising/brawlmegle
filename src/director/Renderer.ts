@@ -12,6 +12,9 @@ import { config } from '../config';
 
 export type FrameCallback = (dt: number, frozen: boolean) => void;
 
+/** Frame rate while an opaque screen covers the scene (see Renderer.covered). */
+const COVERED_FPS = 4;
+
 /**
  * Owns the Three.js renderer, scene, camera and render loop.
  * The game hooks in via onFrame(); freeze() pauses the sim for hit-stop while camera + VFX keep running.
@@ -27,9 +30,16 @@ export class Renderer {
   readonly governor: QualityGovernor;
   /** The pose tracker on this laptop, for the governor (set by the game). */
   private poseRate: () => PoseRate | null = () => null;
+  private onePose: (on: boolean) => void = () => {};
   /** Frame cap (the sim and the camera keep running on skipped frames; only drawing is skipped). */
   private maxFps = 60;
   private lastDrawn = -Infinity;
+  /**
+   * An opaque screen (title, fighter select, the client's waiting screen) hides the scene: draw a few frames a
+   * second instead of 60, which frees the GPU for the camera while the player scans or picks. Not zero, so models that
+   * load meanwhile still get their shaders compiled and textures uploaded before the fight shows them.
+   */
+  covered = false;
   readonly arena: Arena;
   /** Frame-time monitor (`?perf`), null otherwise. */
   readonly perf: PerfMonitor | null;
@@ -88,15 +98,16 @@ export class Renderer {
     this.camera.position.copy(this.cameraHome);
     this.camera.lookAt(this.lookTarget);
 
-    this.governor = new QualityGovernor((level) => this.applyQuality(level), () => this.poseRate());
+    this.governor = new QualityGovernor((level) => this.applyQuality(level), () => this.poseRate(), (on) => this.onePose(on));
     this.applyQuality(quality.current);
     this.resizeObserver.observe(container);
     this.resize();
   }
 
-  /** Where the governor reads the pose tracker's rate (this laptop's camera source, if any). */
-  watchPose(rate: () => PoseRate | null) {
+  /** Where the governor reads the pose tracker's rate, and turns its one-pose mode on (this laptop's camera, if any). */
+  watchPose(rate: () => PoseRate | null, onePose: (on: boolean) => void) {
     this.poseRate = rate;
+    this.onePose = onePose;
   }
 
   /** Apply a quality level: MSAA, pixel ratio, bloom, outlines, frame cap. */
@@ -193,7 +204,7 @@ export class Renderer {
     // Frame cap: on a fast display, frames that come sooner than the cap allows aren't drawn (a 120 Hz laptop would
     // otherwise draw the same fight twice per sim tick, on a GPU the pose tracker needs). The 0.8 lets a 144 Hz
     // display draw every other frame (72 fps) instead of every third.
-    const draw = now - this.lastDrawn >= (1000 / this.maxFps) * 0.8;
+    const draw = now - this.lastDrawn >= (1000 / (this.covered ? COVERED_FPS : this.maxFps)) * 0.8;
     if (draw) this.perf?.begin(now);
     const dt = Math.min((now - this.lastTime) / 1000, 1 / 20);
     this.lastTime = now;
@@ -209,7 +220,7 @@ export class Renderer {
 
     this.updateCamera(dt);
     this.impactPass.tick(dt, this.camera.aspect);
-    this.governor.tick(now, draw);
+    this.governor.tick(now, draw, this.covered);
     if (!draw) return;
     this.lastDrawn = now;
     this.arena.update(this.camera);

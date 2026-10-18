@@ -1,5 +1,5 @@
 import { Renderer } from '../director/Renderer';
-import { poseRateOf } from '../director/QualityGovernor';
+import { poseRateOf, setOnePose } from '../director/QualityGovernor';
 import * as THREE from 'three';
 import { Effects, type EffectKind } from '../director/Effects';
 import { FighterView } from '../director/FighterView';
@@ -114,6 +114,7 @@ export class Game {
   /** Each fighter's phase last tick, to hear a strike come out (whoosh) on both laptops. */
   private readonly heardPhase: Partial<Record<PlayerId, string>> = {};
   private readonly unsubscribe: () => void;
+  private readonly unwatchScreen: () => void;
   private readonly linkTimer: ReturnType<typeof setInterval>;
   /** Real matches recorded for improving the move reader (host only, when turned on). */
   private readonly recorder = new MatchRecorder();
@@ -149,7 +150,11 @@ export class Game {
 
     this.renderer.onFrame(this.update);
     // Render quality steps down when this laptop's pose tracker starves (QualityGovernor).
-    this.renderer.watchPose(() => poseRateOf(this.localInputSource()));
+    this.renderer.watchPose(() => poseRateOf(this.localInputSource()), (on) => setOnePose(this.localInputSource(), on));
+    // The title, fighter select and the client's waiting screen are opaque: the scene behind them barely draws.
+    const covered = (screen: string) => screen === 'title' || screen === 'avatar' || screen === 'client';
+    this.renderer.covered = covered(useGameStore.getState().screen);
+    this.unwatchScreen = useGameStore.subscribe((s) => (this.renderer.covered = covered(s.screen)));
     this.renderer.start();
     if (this.renderer.perf) this.exposePerf(this.renderer.perf);
     // The camera's downloads (MediaPipe + pose model, ~13 MB) start under the title screen, not on "Fight as".
@@ -469,6 +474,7 @@ export class Game {
     window.removeEventListener('keydown', this.onDebugKey);
     window.removeEventListener('keydown', this.onMuteKey);
     this.unsubscribe();
+    this.unwatchScreen();
     clearInterval(this.linkTimer);
     this.hostSession?.dispose();
     this.client?.dispose();

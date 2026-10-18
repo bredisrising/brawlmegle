@@ -42,6 +42,8 @@ export class QualityGovernor {
   constructor(
     private readonly apply: (level: QualityLevel) => void,
     private readonly pose: () => PoseRate | null,
+    /** Turns the pose tracker's one-pose mode on or off (called every second; a no-op when nothing changes). */
+    private readonly onePose: (on: boolean) => void,
   ) {
     quality.level = this.level;
     quality.current = QUALITY_LEVELS[this.level];
@@ -51,13 +53,16 @@ export class QualityGovernor {
     return PINNED !== null;
   }
 
-  /** Every animation frame; `drawn` when this one was rendered (the frame cap skips some). */
-  tick(now: number, drawn: boolean) {
+  /**
+   * Every animation frame; `drawn` when this one was rendered (the frame cap skips some). `covered`: an opaque screen
+   * hides the scene and it's barely drawn, so there's nothing to judge.
+   */
+  tick(now: number, drawn: boolean, covered = false) {
     const gap = now - this.lastTick;
     this.lastTick = now;
     if (gap > 0 && gap < this.vsync) this.vsync = Math.max(4, gap);
     // A stall (hidden tab, a big load) says nothing about steady-state cost: start the window over.
-    if (gap > 250 || !this.windowStart) {
+    if (gap > 250 || !this.windowStart || covered) {
       this.windowStart = now;
       this.drawn = this.maxGap = 0;
       this.lastDrawn = now;
@@ -78,6 +83,8 @@ export class QualityGovernor {
     const level = QUALITY_LEVELS[this.level];
     const expected = Math.min(level.maxFps, 1000 / this.vsync);
     const pose = this.pose();
+    // Every time, not just on a step: the camera source may have been replaced (a new fighter, a rejoin).
+    this.onePose(level.singlePose);
     Object.assign(this.last, { renderFps, poseFps: pose?.detectFps ?? 0, cameraFps: pose?.cameraFps ?? 0, detectMs: pose?.detectMs ?? 0 });
     if (PINNED !== null || now < this.settleUntil) return;
 
@@ -125,6 +132,11 @@ export class QualityGovernor {
     console.info(`[quality] ${QUALITY_LEVELS[level].name} (level ${level}): ${why}`);
     this.apply(QUALITY_LEVELS[level]);
   }
+}
+
+/** One-pose mode for an input source, if it's a camera that has it (CameraSource.setSinglePose). */
+export function setOnePose(source: unknown, on: boolean) {
+  (source as { setSinglePose?: (on: boolean) => void } | null)?.setSinglePose?.(on);
 }
 
 /** The pose tracker's numbers from an input source, if it's a camera that reports them (CameraSource.stats). */
