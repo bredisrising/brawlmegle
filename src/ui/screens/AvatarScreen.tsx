@@ -21,9 +21,15 @@ export function AvatarScreen() {
   const player = localPlayerId(role);
   const error = useGameStore((s) => (s.players[player].status === 'waiting' ? s.players[player].statusDetail : ''));
   const accent = ACCENT[player];
+  // The second click of a double-click on Host would land on whatever card is under it here: ignore clicks briefly.
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setArmed(true), 400);
+    return () => clearTimeout(t);
+  }, []);
 
   return (
-    <div className="tex-hatch pointer-events-auto absolute inset-0 flex flex-col overflow-hidden bg-ink">
+    <div className={`tex-hatch absolute inset-0 flex flex-col overflow-hidden bg-ink ${armed ? 'pointer-events-auto' : 'pointer-events-none'}`}>
       {/* Asymmetric backdrop: a raised slab on the right, edged in the player's color. */}
       <div aria-hidden className="animate-wipe-l absolute inset-y-0 right-0 hidden w-[42%] md:block">
         <div className={`absolute inset-0 ${accent.bg}`} style={{ clipPath: 'polygon(22% 0, 100% 0, 100% 100%, 0 100%)' }} />
@@ -35,7 +41,13 @@ export function AvatarScreen() {
           <span className="font-display text-xl uppercase tracking-tight">Brawlegle</span>
           <span className="h-6 w-[2px] bg-line" />
           {step === 'choose' ? (
-            <span className="font-cond text-sm font-bold uppercase tracking-[0.25em] text-paper/50">01 · {STEP_LABEL.choose}</span>
+            <>
+              {/* Back to the title: a fresh page is the cleanest way to drop the room and the camera. */}
+              <TextButton onClick={() => window.location.reload()} className="text-sm">
+                ← Title
+              </TextButton>
+              <span className="font-cond text-sm font-bold uppercase tracking-[0.25em] text-paper/50">01 · {STEP_LABEL.choose}</span>
+            </>
           ) : (
             <TextButton onClick={() => setStep('choose')} className="text-sm">
               ← Back
