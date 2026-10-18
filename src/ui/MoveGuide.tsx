@@ -10,7 +10,7 @@ const MOVES: [name: string, how: string][] = [
   ['Block', 'Both fists up in front of your face. Hold.'],
   ['Duck', 'Drop your head and shoulders quickly.'],
   ['Dodge', 'Lean your head quickly to one side.'],
-  ['Kick / knee', 'Stand back so your feet are in the shot, then lift a knee fast. Breaks a block.'],
+  ['Kick / knee', 'Standing: lift a knee fast. Breaks a block.'],
 ];
 
 /**
