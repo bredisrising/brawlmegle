@@ -5,6 +5,7 @@ import { FIGHTER_SCALE, FIGHTER_SPACING, PLAYER_COLORS } from '../game/constants
 import { disposeObject } from './dispose';
 import { BONES, GUARD_POSE, JOINTS, copyPose, createPose, type JointName, type Pose } from './pose';
 import { worldLandmarksToPose } from './livePose';
+import { SkeletonPose } from './skeletonPose';
 
 /**
  * How one fighter looks on screen. Driven by the fight engine's FighterState
@@ -28,6 +29,8 @@ export class FighterView {
   private readonly bones: THREE.LineSegments;
   private readonly placeholder = new THREE.Group();
   private model: THREE.Group | null = null;
+  /** Bone driver for rigged (forged) models; null for the default parts model. */
+  private skeleton: SkeletonPose | null = null;
   private readonly modelParts = new Map<string, THREE.Object3D>();
   private loadVersion = 0;
 
@@ -84,6 +87,7 @@ export class FighterView {
       if (fighter.glbUrl?.includes('/api/forge/')) model.rotation.y = -Math.PI / 2;
       this.root.add(model);
     }
+    this.skeleton = model ? SkeletonPose.from(model) : null;
   }
 
   setVisible(visible: boolean) {
@@ -100,7 +104,13 @@ export class FighterView {
     // tracking jitter does not make the fighter flicker between camera frames.
     for (const joint of JOINTS) this.pose[joint].lerp(this.livePose[joint], 0.35);
     this.applyPose(this.pose);
-    this.applyDefaultModelPose(this.pose);
+    if (this.skeleton) {
+      // Knees and ankles (25-28) must be seen to pose the legs; sitting players keep a standing stance.
+      const legsVisible = [25, 26, 27, 28].every((i) => (live.image[i]?.visibility ?? 0) > 0.5);
+      this.skeleton.apply(this.pose, this.root, legsVisible);
+    } else {
+      this.applyDefaultModelPose(this.pose);
+    }
   }
 
   /** React to a fight event involving this fighter. */
