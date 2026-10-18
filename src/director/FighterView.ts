@@ -284,7 +284,9 @@ export class FighterView {
     this.liveReady = true;
     const base = config.liveBlend;
     for (const j of JOINTS) {
-      this.smoothLive[j].lerp(this.livePose[j], 0.4);
+      // Heavily smoothed: this layer is only personality (lean, head, hands), and camera jitter on a held pose
+      // reads as glitching, more so on stepped animation.
+      this.smoothLive[j].lerp(this.livePose[j], 0.18);
       const w = LEG_JOINTS.has(j) && !this.mapper.legsVisible ? 0 : Math.min(1, base * LIVE_WEIGHT[j]);
       if (w > 0) this.target[j].lerp(this.smoothLive[j], w);
     }

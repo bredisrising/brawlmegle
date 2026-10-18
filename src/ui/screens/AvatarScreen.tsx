@@ -196,7 +196,7 @@ function NameStep({ player }: { player: PlayerId }) {
               autoFocus
               value={name}
               onChange={(e) => setName(e.target.value.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, NAME_MAX))}
-              placeholder="ankit"
+              placeholder="your_name"
               autoComplete="off"
               className="min-w-0 flex-1 bg-paper px-5 py-4 font-display text-3xl uppercase tracking-tight text-ink caret-dmg outline-none placeholder:text-ink/20 sm:text-5xl"
             />

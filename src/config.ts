@@ -25,7 +25,7 @@ export const config = {
    * How much of the player's real body shows on their fighter (0..1). Moves always come from the fight engine; this
    * only adds their lean, head and hand positions on top of the fighting stance. `?live=` overrides.
    */
-  liveBlend: clamp01(Number(params.get('live') ?? 0.35)),
+  liveBlend: clamp01(Number(params.get('live') ?? 0.25)),
   /**
    * Fighters animate "on twos" like hand-animated fighting games: poses hold and step at this rate (0 = smooth).
    * Key frames (a strike landing, a hit) always show on the frame they happen. `?fps=` overrides.
@@ -36,5 +36,5 @@ export const config = {
 };
 
 function clamp01(v: number) {
-  return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.35;
+  return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.25;
 }

@@ -233,7 +233,12 @@ async function handle(req, res) {
       const file = new URL(`${fighter.id}/${parts[3]}`, DATA);
       if (!fs.existsSync(file)) return json(res, 404, { error: "not ready" });
       const type = parts[3].endsWith(".png") ? "image/png" : parts[3].endsWith(".glb") ? "model/gltf-binary" : "image/jpeg";
-      res.writeHead(200, { "content-type": type });
+      // A forge's files are written once and never change (a rescan is a new id): browsers can keep them.
+      res.writeHead(200, {
+        "content-type": type,
+        "content-length": fs.statSync(file).size,
+        "cache-control": "public, max-age=604800, immutable",
+      });
       // pipeline() closes the file when a download is cut off, and a read error can't crash the server.
       return pipeline(fs.createReadStream(file), res, () => {});
     }
