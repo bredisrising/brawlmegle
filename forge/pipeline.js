@@ -117,11 +117,20 @@ export function boxRig(report) {
  * timings and its rig report (`rig`, see boxRig). Throws on any failure, or if it isn't done within FORGE_3D_TIMEOUT, so the caller can fall back to Tripo.
  * With `model` (a GLB), the box only rigs that model (forge/gpu/rescue.mjs).
  */
+/** How long a scan waits for a warming GPU box before giving up on it. */
+const WARMUP_WAIT_MS = Number(process.env.FORGE_3D_WARMUP_WAIT ?? 360) * 1000;
+
 export async function makeModelLocal(sheet, onStep, model = null, { onPreview, settings, rigAttempt, face, faceOnly } = {}) {
-  const deadline = Date.now() + LOCAL_TIMEOUT_MS;
   // A stopped box doesn't refuse the connection, it just never answers: find out in 3 s, not 20.
-  const health = await (await local("/health", {}, 3_000)).json();
+  let health = await (await local("/health", {}, 3_000)).json();
+  // Warming up (a restart or a deploy, ~4 min): wait for it rather than fail the scan (Tripo, the fallback, may be out
+  // of credits). A box that's broken, not warming, still fails straight away.
+  for (const until = Date.now() + WARMUP_WAIT_MS; !health.ready && !health.error && Date.now() < until; ) {
+    await new Promise((r) => setTimeout(r, 5_000));
+    health = await (await local("/health", {}, 3_000)).json();
+  }
   if (!health.ready) throw new Error(`GPU box not ready: ${health.error ?? "warming up"}`);
+  const deadline = Date.now() + LOCAL_TIMEOUT_MS;
   // rigAttempt > 1: a re-rig after the rig check turned the first one down (a box that knows another way to weight a
   // model can take it as the cue; one that doesn't just rigs it again).
   // face: paint the sheet's face on (true/false; the box's FORGE3D_FACE_PROJECT otherwise). faceOnly: `model` is already
