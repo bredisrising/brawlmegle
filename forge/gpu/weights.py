@@ -11,6 +11,8 @@ import sys
 import urllib.request
 
 POSE_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task"
+# The face step's landmarker (face_project.py), saved next to the pose model.
+FACE_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
 
 
 def ensure(model_dir: str, pose_path: str, trellis: bool = True) -> None:
@@ -33,10 +35,12 @@ def ensure(model_dir: str, pose_path: str, trellis: bool = True) -> None:
         with open(path, "w") as f:
             json.dump(cfg, f, indent=4)
         open(done, "w").close()
-    if not os.path.exists(pose_path):
-        os.makedirs(os.path.dirname(pose_path), exist_ok=True)
-        urllib.request.urlretrieve(POSE_URL, pose_path + ".part")
-        os.replace(pose_path + ".part", pose_path)
+    face_path = os.path.join(os.path.dirname(pose_path), "face_landmarker.task")
+    for url, path in ((POSE_URL, pose_path), (FACE_URL, face_path)):
+        if not os.path.exists(path):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            urllib.request.urlretrieve(url, path + ".part")
+            os.replace(path + ".part", path)
 
 
 if __name__ == "__main__":

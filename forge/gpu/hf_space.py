@@ -24,7 +24,7 @@ from pathlib import Path
 
 GPU = Path(__file__).resolve().parent
 ROOT = GPU.parent.parent
-APP_FILES = ["server.py", "gen3d.py", "landmarks.py", "rig_blender.py", "rig_check.py", "weights.py"]
+APP_FILES = ["server.py", "gen3d.py", "landmarks.py", "rig_blender.py", "rig_check.py", "face_project.py", "weights.py"]
 VARIANTS = {
     "zerogpu": {"dir": GPU / "zerogpu", "sdk": "gradio", "files": ["app.py", "requirements.txt", "packages.txt", "README.md"], "repo": "brawlegle-forge3d-zero"},
     "docker": {"dir": GPU / "docker-space", "sdk": "docker", "files": ["Dockerfile", "README.md"], "repo": "brawlegle-forge3d"},

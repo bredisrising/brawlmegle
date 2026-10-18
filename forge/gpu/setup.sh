@@ -117,7 +117,7 @@ fi
 
 echo "== service"
 mkdir -p $ROOT/app
-cp "$SRC"/server.py "$SRC"/gen3d.py "$SRC"/landmarks.py "$SRC"/rig_blender.py "$SRC"/rig_check.py "$SRC"/weights.py $ROOT/app/
+cp "$SRC"/server.py "$SRC"/gen3d.py "$SRC"/landmarks.py "$SRC"/rig_blender.py "$SRC"/rig_check.py "$SRC"/face_project.py "$SRC"/weights.py $ROOT/app/
 if [ ! -f /etc/forge3d.env ]; then
   (
     umask 077

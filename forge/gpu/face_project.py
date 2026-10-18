@@ -426,6 +426,9 @@ def run(glb: bytes, sheet: Image.Image, face=None, body=0.0, debug=None, max_tex
         marks[name] = round(time.perf_counter() - t0, 3)
 
     gltf, binary = read_glb(glb)
+    packed = {"EXT_meshopt_compression", "KHR_draco_mesh_compression"} & set(gltf.get("extensionsUsed", []))
+    if packed:
+        raise ValueError(f"compressed GLB ({', '.join(packed)}): send the unoptimized original (rigged.orig.glb)")
     P, Nrm, UV, F, image_index = load_model(gltf, binary)
     img_meta = gltf["images"][image_index]
     view_ix = img_meta["bufferView"]
