@@ -33,6 +33,21 @@ def bbox(mask: np.ndarray, alpha: np.ndarray | None = None) -> list[int]:
     return [int(cols[0]), int(rows[0]), int(cols[-1] + 1), int(rows[-1] + 1)]
 
 
+# Average joint positions inside the character's box (0..1, from 5 forged sheets), for when MediaPipe finds no body.
+TEMPLATE = {"nose": [0.506, 0.101], "lEar": [0.58, 0.094], "rEar": [0.429, 0.096], "lS": [0.692, 0.223], "rS": [0.318, 0.223],
+            "lE": [0.825, 0.361], "rE": [0.183, 0.361], "lW": [0.928, 0.475], "rW": [0.077, 0.478], "lH": [0.613, 0.488],
+            "rH": [0.397, 0.486], "lK": [0.665, 0.682], "rK": [0.34, 0.678], "lA": [0.712, 0.898], "rA": [0.29, 0.895],
+            "lFI": [0.753, 0.976], "rFI": [0.246, 0.978]}
+
+
+def template(image: Image.Image) -> dict:
+    alpha = np.asarray(image.getchannel("A")) if image.mode == "RGBA" else None
+    rgb = np.asarray(image.convert("RGB"))
+    x0, y0, x1, y1 = box = bbox(foreground(rgb), alpha)
+    points = {k: [x0 + u * (x1 - x0), y0 + v * (y1 - y0), 0.0] for k, (u, v) in TEMPLATE.items()}
+    return {"size": [rgb.shape[1], rgb.shape[0]], "bbox": box, "points": points, "template": True}
+
+
 class Landmarker:
     def __init__(self, model_path: str):
         from mediapipe.tasks.python import BaseOptions, vision
@@ -53,6 +68,10 @@ class Landmarker:
         lms = res.pose_landmarks[0]
         h, w = rgb.shape[:2]
         points = {n: [lms[i].x * w, lms[i].y * h, lms[i].visibility] for i, n in NAMES.items()}
+        # The sheet faces the camera, so the character's left is on the image's right. If MediaPipe read it as a back
+        # view, swap the sides.
+        if points["lS"][0] < points["rS"][0] and points["lH"][0] < points["rH"][0]:
+            points = {("r" + k[1:] if k[0] == "l" else "l" + k[1:]) if k[0] in "lr" and k[1].isupper() else k: v for k, v in points.items()}
         return {"size": [w, h], "bbox": bbox(foreground(rgb), alpha), "points": points}
 
 

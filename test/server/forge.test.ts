@@ -93,6 +93,50 @@ describe('forge server', () => {
     expect((await forge({ name: 'A', frames: [JPEG] })).status).toBe(202);
   });
 
+  describe('FORGE_3D=local (the GPU box)', () => {
+    const gpu = { FORGE_3D: 'local', FORGE_3D_URL: 'http://gpu.mock', FORGE_3D_KEY: 'gpu-key' };
+    const done = (x: Record<string, unknown>) => x.status !== 'scanning' && x.status !== 'forging';
+
+    it('builds the rigged model on the GPU box, not Tripo', async () => {
+      const { base, forge, until } = await startForge(gpu);
+      const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
+      const f = await until(id, done);
+      expect(f.status).toBe('ready');
+      expect(f.engine3d).toBe('local');
+      expect(f.rigged).toBe(true);
+      expect(f.glbUrl).toMatch(/rigged\.glb$/);
+      expect(await (await fetch(`${base}/api/forge/${id}/rigged.glb`)).text()).toBe('glTF-local-rigged');
+      expect(await (await fetch(`${base}/api/forge/${id}/model.glb`)).text()).toBe('glTF-local');
+    });
+
+    it('falls back to Tripo when the GPU job fails', async () => {
+      const { forge, until } = await startForge({ ...gpu, MOCK_GPU: 'fail' });
+      const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
+      const f = await until(id, done);
+      expect(f.status).toBe('ready');
+      expect(f.engine3d).toBe('tripo');
+      expect(String(f.localError)).toMatch(/blender/);
+      expect(f.glbUrl).toMatch(/rigged\.glb$/);
+    });
+
+    it('falls back to Tripo when the GPU job takes too long', async () => {
+      const { forge, until } = await startForge({ ...gpu, MOCK_GPU: 'hang', FORGE_3D_TIMEOUT: '1' });
+      const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
+      const f = await until(id, done);
+      expect(f.engine3d).toBe('tripo');
+      expect(String(f.localError)).toMatch(/timed out/);
+      expect(f.glbUrl).toMatch(/rigged\.glb$/);
+    });
+
+    it('a wrong GPU key falls back to Tripo too', async () => {
+      const { forge, until } = await startForge({ ...gpu, FORGE_3D_KEY: 'nope' });
+      const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
+      const f = await until(id, done);
+      expect(f.engine3d).toBe('tripo');
+      expect(String(f.localError)).toMatch(/403/);
+    });
+  });
+
   it('answers a JSON null body with 400, not 500', async () => {
     const { forge } = await startForge();
     expect((await forge(null)).status).toBe(400);

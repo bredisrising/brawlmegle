@@ -45,15 +45,70 @@ const DELIGHT = flag("FORGE_DELIGHT", GOLDSRC);
 /** v1.0 is Tripo's humanoid (biped) rigger; v3.0-20260909 is newer and opt-in. */
 const RIG_MODEL = process.env.FORGE_RIG_MODEL ?? "v1.0-20240301";
 
+// --- Our own GPU box (forge/gpu): model sheet -> textured, Mixamo-rigged GLB with TRELLIS.2 + Blender ----------
+/** "local" sends the sheet to the GPU service first; Tripo stays the fallback for any failure or timeout. */
+const LOCAL_3D = (process.env.FORGE_3D ?? "tripo") === "local" && Boolean(process.env.FORGE_3D_URL);
+const LOCAL_URL = (process.env.FORGE_3D_URL ?? "").replace(/\/$/, "");
+const LOCAL_TIMEOUT_MS = Number(process.env.FORGE_3D_TIMEOUT ?? 90) * 1000;
+
+const tripoSettings = `tripo ${TRIPO_MODEL}${MULTIVIEW ? " multiview" : ""}, ${GEOMETRY_QUALITY} geometry, ${FACE_LIMIT} faces, delight ${DELIGHT ? "on" : "off"} + mixamo rig`;
 export const models = {
   brief: BRIEF_MODEL,
   sheet: `${IMAGE_MODEL} ${SHEET_SIZE}, ${STYLE} style`,
   card: CARD_MODEL,
   quality: IMAGE_QUALITY,
-  threeD: process.env.TRIPO_API_KEY
-    ? `tripo ${TRIPO_MODEL}${MULTIVIEW ? " multiview" : ""}, ${GEOMETRY_QUALITY} geometry, ${FACE_LIMIT} faces, delight ${DELIGHT ? "on" : "off"} + mixamo rig`
-    : "off (no TRIPO_API_KEY)",
+  threeD: LOCAL_3D
+    ? `local GPU (${LOCAL_URL}), then ${process.env.TRIPO_API_KEY ? tripoSettings : "nothing"} as the fallback`
+    : process.env.TRIPO_API_KEY
+      ? tripoSettings
+      : "off (no TRIPO_API_KEY or FORGE_3D=local)",
 };
+
+async function local(path, init = {}, timeoutMs = 20_000) {
+  const res = await fetch(LOCAL_URL + path, {
+    ...init,
+    headers: { "x-forge3d-key": process.env.FORGE_3D_KEY ?? "", ...init.headers },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(`GPU ${path} ${res.status}: ${body.error ?? "no details"}`);
+  }
+  return res;
+}
+
+/**
+ * Model sheet -> rigged GLB on our GPU box. Same result as makeModel ({ model, rigged }), plus the box's own
+ * timings. Throws on any failure, or if it isn't done within FORGE_3D_TIMEOUT, so the caller can fall back to Tripo.
+ */
+export async function makeModelLocal(sheet, onStep) {
+  const deadline = Date.now() + LOCAL_TIMEOUT_MS;
+  const { id } = await (
+    await local("/jobs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ image: sheet.toString("base64") }) })
+  ).json();
+  onStep("model");
+  let step = "model";
+  let misses = 0;
+  for (;;) {
+    if (Date.now() > deadline) throw new Error(`GPU job timed out after ${LOCAL_TIMEOUT_MS / 1000} s`);
+    await new Promise((r) => setTimeout(r, 500));
+    let job;
+    try {
+      job = await (await local(`/jobs/${id}`, {}, 5_000)).json();
+      misses = 0;
+    } catch (err) {
+      if (++misses > 5) throw err;
+      continue;
+    }
+    if (job.status === "rig" && step !== "rig") onStep((step = "rig"));
+    if (job.status === "failed") throw new Error(`GPU job failed: ${job.error}`);
+    if (job.status === "done") {
+      const get = async (file) => Buffer.from(await (await local(`/jobs/${id}/${file}`, {}, 60_000)).arrayBuffer());
+      const [rigged, model] = await Promise.all([get("rigged.glb"), get("model.glb")]);
+      return { model, rigged, timings: job.timings };
+    }
+  }
+}
 
 async function tripo(path, init = {}, timeoutMs = 60_000) {
   const res = await fetch(TRIPO + path, {
@@ -240,20 +295,44 @@ export async function runForge(job, frames, store) {
       timed("back", () => editImage(sheetRef, backPrompt()))
         .then((back) => (store.write("back.png", back), back))
         .catch((err) => (console.warn("back view failed, building from the front only:", err.message ?? err), null));
-    const modelJob = process.env.TRIPO_API_KEY
-      ? (MULTIVIEW ? backView() : Promise.resolve(null))
-          .then((back) => timed("model", () => makeModel(sheet, (step) => ((job.step = step), store.save()), back)))
-          .then(({ model, rigged }) => {
-            job.modelUrl = store.write("model.glb", model);
-            if (rigged) job.glbUrl = store.write("rigged.glb", rigged);
-            else job.glbUrl = job.modelUrl;
-            job.rigged = Boolean(rigged);
-          })
-          .catch((err) => {
-            job.modelError = String(err.message ?? err);
-            console.warn("3D step failed:", job.modelError);
-          })
-      : Promise.resolve();
+    const onStep = (step) => ((job.step = step), store.save());
+    const tripoModel = () =>
+      (MULTIVIEW ? backView() : Promise.resolve(null)).then((back) => {
+        job.engine3d = "tripo";
+        return timed("model", () => makeModel(sheet, onStep, back));
+      });
+    // Our GPU box first (FORGE_3D=local). On any failure or timeout Tripo builds the model as before; the GPU's
+    // try stays in timings.localTry so the wait it added shows up.
+    const localStart = Date.now();
+    const localModel = () =>
+      timed("model", () => makeModelLocal(sheet, onStep))
+        .then((out) => {
+          job.engine3d = "local";
+          job.gpuTimings = out.timings;
+          return out;
+        })
+        .catch((err) => {
+          job.localError = String(err.message ?? err);
+          job.timings.localTry = Date.now() - localStart;
+          console.warn("GPU 3D step failed:", job.localError, process.env.TRIPO_API_KEY ? "(falling back to Tripo)" : "");
+          if (!process.env.TRIPO_API_KEY) throw err;
+          job.step = "model";
+          return tripoModel();
+        });
+    const modelJob =
+      LOCAL_3D || process.env.TRIPO_API_KEY
+        ? (LOCAL_3D ? localModel() : tripoModel())
+            .then(({ model, rigged }) => {
+              job.modelUrl = store.write("model.glb", model);
+              if (rigged) job.glbUrl = store.write("rigged.glb", rigged);
+              else job.glbUrl = job.modelUrl;
+              job.rigged = Boolean(rigged);
+            })
+            .catch((err) => {
+              job.modelError = String(err.message ?? err);
+              console.warn("3D step failed:", job.modelError);
+            })
+        : Promise.resolve();
     await Promise.all([cardJob, modelJob]);
 
     job.status = "ready";
