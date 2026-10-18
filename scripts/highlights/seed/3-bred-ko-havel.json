@@ -1,0 +1,17 @@
+{
+  "p1": {
+    "id": "0a8b84b4-1b1d-4712-8d2e-3696d3531c91",
+    "name": "bred",
+    "cpu": true
+  },
+  "p2": {
+    "id": "13e72265-5521-49c8-88f9-80e173ddd19a",
+    "name": "havel",
+    "cpu": true
+  },
+  "winner": "p1",
+  "move": "cross",
+  "combo": 1,
+  "roundTime": 16.8,
+  "duration": 6.9
+}

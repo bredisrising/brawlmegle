@@ -1,0 +1,17 @@
+{
+  "p1": {
+    "id": "a6535b14-7e5d-4b33-9685-765e2df703da",
+    "name": "rico",
+    "cpu": true
+  },
+  "p2": {
+    "id": "770897ad-65fe-465e-9341-e830435e2585",
+    "name": "avi",
+    "cpu": true
+  },
+  "winner": "p1",
+  "move": "uppercut",
+  "combo": 1,
+  "roundTime": 14.6,
+  "duration": 6.9
+}

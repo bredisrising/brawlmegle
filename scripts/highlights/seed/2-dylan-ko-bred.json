@@ -1,0 +1,17 @@
+{
+  "p1": {
+    "id": "f879fdf0-4063-4a05-9ac2-0ccec79988b3",
+    "name": "dylan",
+    "cpu": true
+  },
+  "p2": {
+    "id": "0a8b84b4-1b1d-4712-8d2e-3696d3531c91",
+    "name": "bred",
+    "cpu": true
+  },
+  "winner": "p1",
+  "move": "jab",
+  "combo": 1,
+  "roundTime": 9.9,
+  "duration": 6.9
+}

@@ -32,4 +32,5 @@ for (const size of SIZES) {
   console.log(size, scroll.length ? `SCROLLS: ${scroll.join(" | ")}` : "no scroll");
   await context.close();
 }
-await browser.close();
+// Leave the browser running (closing a CDP-connected browser ends it): just disconnect.
+process.exit(0);
