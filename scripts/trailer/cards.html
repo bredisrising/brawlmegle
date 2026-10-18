@@ -1,0 +1,136 @@
+<!doctype html>
+<!-- Trailer title and tech cards in the game's style, rendered frame by frame by render-cards.mjs on a transparent
+     background. cards.html?card=title|section|count|stat|end|tag&a=...&b=...&color=p1|p2|hp&dur=seconds -->
+<html>
+<head>
+<meta charset="utf-8" />
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Archivo:wdth,wght@62..125,400..800&display=block" rel="stylesheet" />
+<style>
+  :root {
+    --ink: #0b0b0d; --ink2: #16161a; --ink3: #24242a; --paper: #f3f0e8;
+    --p1: #ff2d95; --p2: #1f8bff; --hp: #ffd400; --dmg: #e3172b;
+    --u: min(1vw, 1.78vh); /* 1/100 of a 16:9 frame's width, also on a tall frame */
+  }
+  html, body { margin: 0; width: 100vw; height: 100vh; overflow: hidden; background: transparent; }
+  body { font-family: "Archivo", sans-serif; color: var(--paper); }
+  .display { font-family: "Archivo Black", sans-serif; text-transform: uppercase; letter-spacing: -0.03em; line-height: 0.86; }
+  .cond { font-family: "Archivo", sans-serif; font-stretch: 62%; font-weight: 800; text-transform: uppercase; letter-spacing: 0.25em; }
+  .center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .tall .center { padding: 0 4vw; }
+  .slab { position: absolute; left: -10vw; right: -10vw; top: 50%; transform-origin: center; }
+  .chip { display: inline-block; padding: 0.35em 0.9em; clip-path: polygon(0.5em 0, 100% 0, calc(100% - 0.5em) 100%, 0 100%); }
+  .hatch { background-image: repeating-linear-gradient(135deg, rgba(255,255,255,0.035) 0 2px, transparent 2px 9px); }
+  .flash { position: absolute; inset: 0; background: #fff; opacity: 0; }
+
+  /* Every animation is driven by its delay and duration (render-cards.mjs seeks them), never by real time. */
+  @keyframes slamL { 0% { transform: translateX(-60vw) skewX(-14deg); } 60% { transform: translateX(2vw) skewX(-6deg); } 100% { transform: none; } }
+  @keyframes slamR { 0% { transform: translateX(60vw) skewX(-14deg); } 60% { transform: translateX(-2vw) skewX(-6deg); } 100% { transform: none; } }
+  @keyframes punch { 0% { transform: scale(2.4); opacity: 0; } 35% { opacity: 1; } 70% { transform: scale(0.94); } 100% { transform: scale(1); opacity: 1; } }
+  @keyframes pop { 0% { transform: scale(0.4) rotate(-4deg); opacity: 0; } 60% { transform: scale(1.12) rotate(1deg); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+  @keyframes wipeIn { 0% { clip-path: polygon(0 0, 0 0, -12% 100%, -12% 100%); } 100% { clip-path: polygon(0 0, 112% 0, 100% 100%, -12% 100%); } }
+  @keyframes wipeOut { 0% { clip-path: polygon(0 0, 112% 0, 100% 100%, -12% 100%); } 100% { clip-path: polygon(112% 0, 112% 0, 100% 100%, 100% 100%); } }
+  @keyframes flash { 0% { opacity: 0.95; } 100% { opacity: 0; } }
+  @keyframes flash2 { 0% { opacity: 0; } 15% { opacity: 0.45; } 100% { opacity: 0; } }
+  @keyframes fadeOut { 0% { opacity: 1; } 100% { opacity: 0; } }
+  @keyframes shake { 0%, 100% { transform: translate(0, 0); } 20% { transform: translate(-1.2vw, 0.6vw); } 40% { transform: translate(1vw, -0.8vw); } 60% { transform: translate(-0.6vw, 0.4vw); } 80% { transform: translate(0.4vw, -0.2vw); } }
+  @keyframes sweep { 0% { transform: translateX(120vw) skewX(-24deg); } 100% { transform: translateX(0) skewX(-24deg); } }
+  @keyframes rise { 0% { transform: translateY(3vh); opacity: 0; } 100% { transform: none; opacity: 1; } }
+  .anim { animation-fill-mode: both; animation-timing-function: cubic-bezier(.2,.9,.25,1); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+  const q = new URLSearchParams(location.search);
+  const card = q.get("card") || "title";
+  const A = q.get("a") || "", B = q.get("b") || "", C = q.get("c") || "";
+  const color = { p1: "var(--p1)", p2: "var(--p2)", hp: "var(--hp)", dmg: "var(--dmg)" }[q.get("color") || "p1"];
+  const dur = Number(q.get("dur") || 2);
+  const tall = innerHeight > innerWidth;
+  if (tall) document.body.classList.add("tall");
+  const root = document.getElementById("root");
+  // anim(name, start s, length s): an animation that starts at `start` on the card's own clock.
+  const anim = (name, start, len, extra = "") => `animation: ${name} ${len}s ${extra} ${start}s both;`;
+  const out = (start = dur - 0.16) => anim("fadeOut", start, 0.16, "linear");
+  const logo = (size, start) => `
+    <div class="display" style="font-size:${size}; display:flex; ${tall ? "flex-direction:column; align-items:center;" : ""}">
+      <span class="anim" style="${anim("slamL", start, 0.32)}">Brawl</span><span class="anim" style="color:var(--hp); ${anim("slamR", start + 0.06, 0.32)}">megle</span>
+    </div>`;
+
+  if (card === "title") {
+    root.innerHTML = `
+      <div style="position:absolute; inset:0; ${anim("shake", 0.1, 0.35, "linear")}">
+        <div class="anim" style="position:absolute; top:-20vh; bottom:-20vh; right:${tall ? -30 : 4}vw; width:${tall ? 40 : 16}vw; background:var(--p1); ${anim("sweep", 0, 0.28)}"></div>
+        <div class="anim" style="position:absolute; top:-20vh; bottom:-20vh; right:${tall ? 14 : 22}vw; width:0.8vw; background:var(--p2); ${anim("sweep", 0.05, 0.3)}"></div>
+        <div class="center">
+          ${logo(tall ? "21vw" : "12.5vw", 0.02)}
+          <div class="anim chip cond" style="margin-top:${tall ? 5 : 3.2}vh; background:var(--paper); color:var(--ink); font-size:${tall ? 2.9 : 2.2}vw; white-space:nowrap; ${anim("pop", 1.2, 0.3)}">
+            Get scanned. Get forged. Throw hands.
+          </div>
+        </div>
+      </div>
+      <div class="flash" style="${anim("flash", 0.08, 0.3, "linear")}"></div>`;
+  } else if (card === "section") {
+    // A colored slab slams across the middle with huge ink text, then wipes away.
+    root.innerHTML = `
+      <div class="slab" style="height:${tall ? 22 : 30}vh; margin-top:-${tall ? 11 : 15}vh; transform:rotate(-6deg);">
+        <div class="anim" style="position:absolute; inset:0; background:${color}; ${anim("wipeIn", 0, 0.16, "linear")} ${""}"></div>
+      </div>
+      <div class="center" style="${anim("fadeOut", dur - 0.12, 0.12, "linear")}">
+        <div class="anim cond" style="color:var(--ink); font-size:${tall ? 3.4 : 1.6}vw; background:var(--paper); padding:0.3em 0.8em; margin-bottom:1vh; transform:rotate(-6deg); ${anim("pop", 0.08, 0.25)}">${B}</div>
+        <div class="anim display" style="color:var(--ink); font-size:${tall ? 11.5 : 11}vw; transform:rotate(-6deg); white-space:nowrap; ${anim("punch", 0.04, 0.3)}">${A}</div>
+      </div>
+      <div class="flash" style="${anim("flash", 0.05, 0.2, "linear")}"></div>`;
+    root.firstElementChild.firstElementChild.style.animation += `, wipeOut 0.14s linear ${dur - 0.14}s forwards`;
+  } else if (card === "count") {
+    root.innerHTML = `
+      <div class="slab" style="height:${tall ? 46 : 70}vh; margin-top:-${tall ? 23 : 35}vh; transform:rotate(-4deg); ${out()}">
+        <div class="anim hatch" style="position:absolute; inset:0; background-color:rgba(11,11,13,0.92); border-top:1vh solid var(--hp); border-bottom:1vh solid var(--hp); ${anim("wipeIn", 0, 0.14, "linear")}"></div>
+      </div>
+      <div class="center" style="${out()}">
+        <div class="anim cond" style="font-size:${tall ? 4 : 2.2}vw; background:var(--paper); color:var(--ink); padding:0.3em 0.9em; ${anim("pop", 0, 0.25)}">${B}</div>
+        <div class="anim display" style="display:flex; align-items:baseline; gap:1.5vw; ${anim("punch", 0.05, 0.3)}">
+          <span id="num" style="font-size:${tall ? 42 : 26}vw; color:var(--hp); -webkit-text-stroke:0.5vw var(--ink); paint-order:stroke fill;">0</span>
+        </div>
+        <div class="anim display" style="font-size:${tall ? 12 : 7}vw; background:var(--hp); color:var(--ink); padding:0.08em 0.25em 0; transform:rotate(-4deg); ${anim("slamR", 0.25, 0.3)}">${A}</div>
+      </div>
+      <div class="flash" style="opacity:0; ${anim("flash2", 0.95, 0.2, "linear")}"></div>`;
+    const target = Number(C || 38);
+    // Counted on the seek clock (render-cards.mjs sets window.cardTime).
+    window.onCardTime = (t) => {
+      const k = Math.min(1, Math.max(0, (t - 0.1) / 0.85));
+      document.getElementById("num").textContent = String(Math.round(target * (1 - Math.pow(1 - k, 3))));
+    };
+  } else if (card === "stat") {
+    root.innerHTML = `
+      <div class="slab" style="height:${tall ? 30 : 34}vh; margin-top:-${tall ? 15 : 17}vh; transform:rotate(-4deg);">
+        <div class="anim hatch" style="position:absolute; inset:0; background-color:var(--ink); border-top:1vh solid ${color}; border-bottom:1vh solid ${color}; ${anim("wipeIn", 0, 0.14, "linear")}"></div>
+      </div>
+      <div class="center" style="${out()}">
+        <div class="anim display" style="font-size:${tall ? 11.5 : 11}vw; color:${color}; transform:rotate(-4deg); white-space:nowrap; ${anim("punch", 0.03, 0.28)}">${A}</div>
+        <div class="anim cond" style="margin-top:2vh; font-size:${tall ? 3.8 : 3}vw; white-space:nowrap; color:var(--paper); transform:rotate(-4deg); ${anim("rise", 0.2, 0.25)}">${B}</div>
+      </div>
+      <div class="flash" style="opacity:0; ${anim("flash", 0.03, 0.18, "linear")}"></div>`;
+    root.firstElementChild.firstElementChild.style.animation += `, wipeOut 0.14s linear ${dur - 0.14}s forwards`;
+  } else if (card === "end") {
+    root.innerHTML = `
+      <div class="hatch" style="position:absolute; inset:0; background-color:var(--ink);"></div>
+      <div class="anim" style="position:absolute; top:-20vh; bottom:-20vh; right:${tall ? -30 : 4}vw; width:${tall ? 40 : 16}vw; background:var(--p1); ${anim("sweep", 0, 0.28)}"></div>
+      <div class="anim" style="position:absolute; top:-20vh; bottom:-20vh; right:${tall ? 14 : 22}vw; width:0.8vw; background:var(--p2); ${anim("sweep", 0.05, 0.3)}"></div>
+      <div class="center">
+        ${logo(tall ? "21vw" : "12.5vw", 0.05)}
+        <div class="anim chip cond" style="margin-top:${tall ? 5 : 3.2}vh; background:var(--paper); color:var(--ink); font-size:${tall ? 2.9 : 2.2}vw; white-space:nowrap; ${anim("pop", 0.5, 0.3)}">Get scanned. Get forged. Throw hands.</div>
+        <div style="display:flex; ${tall ? "flex-direction:column; align-items:center;" : ""} gap:1.4vw; margin-top:${tall ? 6 : 6}vh;">
+          <div class="anim chip display" style="background:var(--p1); color:var(--ink); font-size:${tall ? 6.5 : 3.6}vw; letter-spacing:0; ${anim("pop", 0.9, 0.3)}">DubHacks '26</div>
+          <div class="anim chip cond" style="background:var(--ink3); color:var(--hp); font-size:${tall ? 3.6 : 2}vw; letter-spacing:0.12em; align-self:center; ${anim("pop", 1.15, 0.3)}">${A}</div>
+        </div>
+      </div>
+      <div class="flash" style="${anim("flash", 0.08, 0.3, "linear")}"></div>`;
+  } else if (card === "tag") {
+    root.innerHTML = `
+      <div class="anim chip cond" style="position:absolute; ${B || "left:3vw; top:4vh;"} background:${color}; color:var(--ink); font-size:${tall ? 4.4 : 2.3}vw; letter-spacing:0.2em; ${anim("pop", 0, 0.25)}">${A}</div>`;
+  }
+  window.cardReady = document.fonts.ready.then(() => true);
+</script>
+</body>
+</html>
