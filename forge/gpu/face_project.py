@@ -412,6 +412,11 @@ def masked_blur(img, m, sigma):
 
 
 HALF = 0.5  # the model's sheet-frame drawings are made at half the sheet's resolution
+# When the sheet's face and the model's can be matched (fractions of the sheet's face width): the features' median
+# miss after the best affine, and how far the face may sit from where the silhouettes put it. A sheet whose head is
+# turned (the model's is always frontal) misses by more than this and keeps TRELLIS's face.
+MAX_RESIDUAL = 0.06
+MAX_SHIFT = 0.3
 
 
 def run(glb: bytes, sheet: Image.Image, face=None, body=0.0, debug=None, max_texture=2048):
@@ -550,7 +555,7 @@ def run(glb: bytes, sheet: Image.Image, face=None, body=0.0, debug=None, max_tex
             info["face"].update(width=round(fw, 1), shift=np.round(shift, 1).tolist(), scale=np.round(sv, 3).tolist(),
                                 residual=round(float(np.median(res)), 2))
             # A sane match: no big turn or squash, a modest shift, and the features agree once it's applied.
-            if sv.max() < 1.3 and sv.min() > 0.77 and np.median(res) < 0.06 * fw and np.linalg.norm(shift) < 0.3 * fw:
+            if sv.max() < 1.3 and sv.min() > 0.77 and np.median(res) < MAX_RESIDUAL * fw and np.linalg.norm(shift) < MAX_SHIFT * fw:
                 face_warp = (tps_fit(src, dst, reg=fw * 0.5), face_sheet[OVAL].mean(0), fw)
         info["face"]["used"] = face_warp is not None
     mark("face")

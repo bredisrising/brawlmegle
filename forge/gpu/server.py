@@ -368,6 +368,18 @@ def load():
             except Exception as err:  # noqa: BLE001  (the crude figure may not rig; that's fine)
                 timings["rig"] = f"failed ({str(err)[:80]})"
             log(f"warm-up {i + 1}: {time.time() - start:.1f}s", timings)
+        if face_finder is not None and os.path.exists(os.path.join(warm_dir, "rigged.glb")):
+            # The face step's first run pays its imports and the landmarker's setup; pay them now. (The crude figure
+            # has no face to find, so this only exercises the code.)
+            start = time.time()
+            try:
+                import face_project
+
+                with open(os.path.join(warm_dir, "rigged.glb"), "rb") as f:
+                    face_project.run(f.read(), sheet, face=face_finder)
+                log(f"face step warm-up: {time.time() - start:.1f}s")
+            except Exception as err:  # noqa: BLE001
+                log("face step warm-up failed (the step stays on, it never fails a job):", err)
         state["ready"] = True
         log("ready")
     except Exception as err:  # noqa: BLE001
