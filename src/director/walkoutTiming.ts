@@ -39,7 +39,7 @@ export const WALKOUT = {
 /** ROUND 1 holds this long before FIGHT. */
 export const ROUND_CALL_SECONDS = 1.15;
 
-const params = new URLSearchParams(window.location.search);
+const params = new URLSearchParams(typeof window === 'undefined' ? '' : window.location.search);
 /** `?walkout=0` skips the walkout (straight to ROUND 1). */
 export const walkoutEnabled = params.get('walkout') !== '0';
 /** How long the countdown's first beat (the walkout) lasts. */

@@ -244,7 +244,7 @@ function NameCard({ id, use }: { id: PlayerId; use: Use }) {
             <span className="grid place-items-center px-2 font-display text-lg leading-none text-paper sm:text-2xl" style={{ background: color }}>
               {label}
             </span>
-            <span className="grid place-items-center pl-2 font-display text-base uppercase leading-none tracking-tight sm:text-xl">{sub}</span>
+            <span className="grid place-items-center whitespace-nowrap pl-2 font-display text-base uppercase leading-none tracking-tight sm:text-xl">{sub}</span>
           </div>
         </div>
       </div>

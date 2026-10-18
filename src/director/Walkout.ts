@@ -43,6 +43,7 @@ export class Walkout {
   private readonly wipe = new FlameWipe();
   private music: ReturnType<Announcer['playMusic']> | null = null;
   private track: Track = { url: DEFAULT_TRACK, start: 0, drop: WALKOUT.p1Slam, custom: false };
+  private trackChecked = false;
   /** The scene's exposure before the walkout dimmed it (the shots are moodier, so the fire carries them). */
   private exposure = 1;
   private readonly look = new THREE.Vector3();
@@ -73,9 +74,8 @@ export class Walkout {
       if (s.phase === 'countdown' && s.countdown === COUNTDOWN_FROM - 1 && prev.countdown !== s.countdown) this.announcer.bark('round', true);
     });
     // Audio unlocks on the first gesture (the Announcer listens first): decode the track then, so it starts on time.
-    const unlock = () => void this.findTrack();
-    window.addEventListener('pointerdown', unlock, { once: true, passive: true });
-    window.addEventListener('keydown', unlock, { once: true });
+    window.addEventListener('pointerdown', this.unlock, { once: true, passive: true });
+    window.addEventListener('keydown', this.unlock, { once: true });
     window.addEventListener('keydown', this.onKey);
     window.addEventListener('pointerdown', this.onKey);
     if (import.meta.env.DEV) (window as unknown as { __walkout: Walkout }).__walkout = this;
@@ -91,6 +91,8 @@ export class Walkout {
     this.offFrame();
     window.removeEventListener('keydown', this.onKey);
     window.removeEventListener('pointerdown', this.onKey);
+    window.removeEventListener('pointerdown', this.unlock);
+    window.removeEventListener('keydown', this.unlock);
     for (const id of PLAYER_IDS) this.fires[id].dispose();
     this.wipe.dispose();
   }
@@ -101,6 +103,8 @@ export class Walkout {
    * Missing (or the dev server's index.html fallback) means the original track.
    */
   private async findTrack() {
+    if (this.trackChecked) return;
+    this.trackChecked = true;
     const url = `${BASE}walkout/custom.mp3`;
     try {
       const res = await fetch(url, { method: 'HEAD' });
@@ -128,6 +132,7 @@ export class Walkout {
   private start() {
     if (!walkoutEnabled) return;
     if (import.meta.env.DEV) console.debug('[walkout] start', performance.now().toFixed(0));
+    void this.findTrack(); // normally done on the first click already
     const { players } = useGameStore.getState();
     this.kinds = entranceKinds(players.p1.name, players.p2.name);
     this.t = 0;
@@ -168,6 +173,8 @@ export class Walkout {
     useGameStore.setState({ walkout: false });
     if (next) useGameStore.setState((s) => ({ flashKey: s.flashKey + 1 }));
   }
+
+  private unlock = () => void this.findTrack();
 
   /** Any key or click on the host skips (after a moment, so the click that started the fight doesn't). */
   private onKey = (e: Event) => {
@@ -289,6 +296,8 @@ export class Walkout {
   private shoot(camera: THREE.PerspectiveCamera, _dt: number) {
     const W = WALKOUT;
     const t = this.t < 0 ? W.end : this.t;
+    // Narrow screens (a phone held upright): back off until the fighters fit across, and frame them centered.
+    const narrow = Math.max(1, Math.pow(1.3 / camera.aspect, 0.7));
     let fov: number;
     if (t < W.vs) {
       // Solo shot: low and 3/4 front, framed off-center (P1 on the left third, P2 on the right) for the name.
@@ -319,7 +328,8 @@ export class Walkout {
         fov = 37 - 3 * k - 7 * Math.exp(-u * 9);
         shift = 0.15;
       }
-      camera.position.set(x + f * ox, oy, oz);
+      camera.position.set(x + f * ox * narrow, oy, oz * narrow);
+      shift /= narrow;
       this.look.set(x, lookY, 0);
       // Screen-right from this camera; aim beside the fighter so they sit on one side of the frame.
       this.tmp.subVectors(this.look, camera.position).normalize();
@@ -331,7 +341,7 @@ export class Walkout {
       const u = t - W.vs;
       const mid = (this.views.p1.root.position.x + this.views.p2.root.position.x) / 2;
       const k = smoothstep(u / (W.end - W.vs));
-      camera.position.set(mid, 0.2 + 0.04 * k, 1.2 - 0.14 * k);
+      camera.position.set(mid, 0.2 + 0.04 * k, (1.2 - 0.14 * k) * narrow);
       camera.lookAt(this.look.set(mid, 0.4, 0));
       fov = 37 - 2 * k - 6 * Math.exp(-u * 8);
     }
