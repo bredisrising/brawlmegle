@@ -16,9 +16,11 @@ export type QualityLevel = {
   outlines: boolean;
   /** Frames drawn per second at most (the fight sim stays at 60 Hz either way). */
   maxFps: number;
+  /** The pose tracker follows one person instead of re-detecting every frame (see poseWorker.ts). */
+  singlePose: boolean;
 };
 
-const FULL: QualityLevel = { name: 'full', samples: 4, maxPixelRatio: 2, bloom: true, outlines: true, maxFps: 60 };
+const FULL: QualityLevel = { name: 'full', samples: 4, maxPixelRatio: 2, bloom: true, outlines: true, maxFps: 60, singlePose: false };
 
 export const QUALITY_LEVELS: readonly QualityLevel[] = [
   FULL,
@@ -30,6 +32,8 @@ export const QUALITY_LEVELS: readonly QualityLevel[] = [
   { ...FULL, name: 'no bloom', samples: 0, maxPixelRatio: 1, maxFps: 30, bloom: false },
   { ...FULL, name: 'px0.75', samples: 0, maxPixelRatio: 0.75, maxFps: 30, bloom: false },
   { ...FULL, name: 'no outlines', samples: 0, maxPixelRatio: 0.75, maxFps: 30, bloom: false, outlines: false },
+  // Last, and not a render setting: the tracker itself gets cheaper (with MediaPipe's own smoothing, see poseWorker.ts).
+  { ...FULL, name: 'one pose', samples: 0, maxPixelRatio: 0.75, maxFps: 30, bloom: false, outlines: false, singlePose: true },
 ];
 
 /** Phones / `?quality=low` start where full quality was never going to fit (no bloom, shadows or outlines there). */

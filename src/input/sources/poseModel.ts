@@ -9,9 +9,10 @@ export const WASM_ROOT = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1
 export const modelUrl = (variant: PoseVariant) =>
   `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_${variant}/float16/1/pose_landmarker_${variant}.task`;
 
-export function landmarkerOptions(variant: PoseVariant, delegate: PoseDelegate, numPoses: number): PoseLandmarkerOptions {
+/** `model`: the model file's bytes when the page already has them (else MediaPipe downloads it). */
+export function landmarkerOptions(variant: PoseVariant, delegate: PoseDelegate, numPoses: number, model?: Uint8Array): PoseLandmarkerOptions {
   return {
-    baseOptions: { modelAssetPath: modelUrl(variant), delegate },
+    baseOptions: model ? { modelAssetBuffer: model, delegate } : { modelAssetPath: modelUrl(variant), delegate },
     runningMode: 'VIDEO',
     // 2 on purpose: with numPoses 1, MediaPipe adds its own hidden smoothing (more lag on top of ours).
     // With 2 it re-runs person detection each frame (a few ms) but stays unsmoothed. `?poses=1` to compare.
@@ -47,7 +48,10 @@ export function selectCenteredPose(poses: NormalizedLandmark[][]): number {
 
 /** Worker protocol (CameraSource <-> poseWorker). */
 export type PoseWorkerRequest =
-  | { type: 'init'; variant: PoseVariant; delegate: PoseDelegate; numPoses: number }
+  /** model: the model file the page preloaded (a copy), so the worker doesn't download it again. */
+  | { type: 'init'; variant: PoseVariant; delegate: PoseDelegate; numPoses: number; model?: ArrayBuffer }
+  /** One-pose mode on or off (see poseWorker.ts). */
+  | { type: 'single'; on: boolean }
   | { type: 'variant'; variant: PoseVariant }
   | { type: 'frame'; id: number; t: number; image: VideoFrame }
   | { type: 'close' };

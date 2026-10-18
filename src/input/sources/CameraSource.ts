@@ -22,21 +22,32 @@ const SLOW_DETECT_MS = 38;
 const useWorker = () => WORKER_OK && typeof Worker === 'function' && typeof VideoFrame === 'function' && typeof OffscreenCanvas === 'function';
 
 let preloaded = false;
+/** The pose model file, downloaded once by preloadPose() and handed to MediaPipe (null if that download failed). */
+let modelBytes: Promise<ArrayBuffer | null> | null = null;
 /**
  * Warm the browser's cache with what the camera will load (MediaPipe's wasm, ~3.6 MB compressed, and the pose model,
  * 9.4 MB): the game calls this at the title screen, so "Fight as" doesn't then wait ~10 s for them on venue Wi-Fi.
- * Low priority, so nothing on screen waits for it. The page or the pose worker then gets them from the cache
- * (jsDelivr's files are immutable, the model is cached for an hour). Safe to call more than once.
+ * Low priority, so nothing on screen waits for it. The wasm then comes from the cache (jsDelivr's files are
+ * immutable); the model's bytes are kept and handed to MediaPipe, since the browser doesn't always keep them (an
+ * incognito window downloaded all 9.4 MB again in the worker). Safe to call more than once.
  */
 export function preloadPose() {
   if (preloaded) return;
   preloaded = true;
+  modelBytes = fetch(modelUrl(POSE_VARIANT), { priority: 'low' })
+    .then((res) => (res.ok ? res.arrayBuffer() : null))
+    .catch(() => null);
   const wasm = `${WASM_ROOT}/vision_wasm${useWorker() ? '_module' : ''}_internal`;
-  for (const url of [modelUrl(POSE_VARIANT), `${wasm}.js`, `${wasm}.wasm`]) {
+  for (const url of [`${wasm}.js`, `${wasm}.wasm`]) {
     void fetch(url, { priority: 'low' })
       .then((res) => res.arrayBuffer())
       .catch(() => {});
   }
+}
+
+/** The preloaded model file for `variant`, if that's the one preloaded and it arrived. */
+async function preloadedModel(variant: PoseVariant): Promise<ArrayBuffer | null> {
+  return variant === POSE_VARIANT && modelBytes ? modelBytes : null;
 }
 
 /**
@@ -93,6 +104,8 @@ export class CameraSource implements InputSource {
     detectFps: 0, cameraFps: 0,
     /** The rates above cover time with the model running (false until a window has passed since its first result). */
     rated: false,
+    /** One-pose mode is on (see setSinglePose). */
+    singlePose: false,
   };
   private rateStart = 0;
   private cameraFrames = 0;
@@ -173,6 +186,7 @@ export class CameraSource implements InputSource {
     this.running = false;
     this.stats.detectFps = this.stats.cameraFps = 0;
     this.stats.rated = false;
+    this.stats.singlePose = false;
     this.rateStart = 0;
     if (this.frameRequest && 'cancelVideoFrameCallback' in this.video) this.video.cancelVideoFrameCallback(this.frameRequest);
     else cancelAnimationFrame(this.frameRequest);
@@ -194,12 +208,24 @@ export class CameraSource implements InputSource {
     this._tracking = false;
   }
 
+  /**
+   * One-pose mode (the quality governor's last step): cheaper tracking that follows the player instead of re-detecting
+   * people every frame, with MediaPipe's own smoothing. Worker only; see poseWorker.ts for how it keeps to the player.
+   */
+  setSinglePose(on: boolean) {
+    if (on === this.stats.singlePose || !this.worker) return;
+    this.stats.singlePose = on;
+    console.info(`[camera] one pose at a time ${on ? 'on: the pose tracker still lags the camera at the lightest render' : 'off'}`);
+    this.post(this.worker, { type: 'single', on });
+  }
+
   onFrame(cb: (frame: PoseFrame) => void) {
     this.listeners.add(cb);
     return () => this.listeners.delete(cb);
   }
 
   private async startWorker() {
+    const bytes = await preloadedModel(this.variant);
     const worker = new Worker(new URL('./poseWorker.ts', import.meta.url), { type: 'module' });
     try {
       this.delegate = await new Promise<PoseDelegate>((resolve, reject) => {
@@ -208,7 +234,9 @@ export class CameraSource implements InputSource {
           else if (e.data.type === 'failed') reject(new Error(e.data.error));
         };
         worker.onerror = (e) => reject(new Error(e.message || 'pose worker failed to load'));
-        this.post(worker, { type: 'init', variant: this.variant, delegate: this.delegate, numPoses: NUM_POSES });
+        // A copy goes over (moved, not cloned again): the page keeps its own in case the camera is started again.
+        const model = bytes?.slice(0);
+        this.post(worker, { type: 'init', variant: this.variant, delegate: this.delegate, numPoses: NUM_POSES, model }, model ? [model] : []);
       });
     } catch (err) {
       worker.terminate();
@@ -224,13 +252,15 @@ export class CameraSource implements InputSource {
   private async startInPage() {
     const { FilesetResolver, PoseLandmarker } = await import('@mediapipe/tasks-vision');
     const files = await FilesetResolver.forVisionTasks(WASM_ROOT);
+    const bytes = await preloadedModel(this.variant);
+    const model = bytes ? new Uint8Array(bytes.slice(0)) : undefined;
     this.files = files;
     try {
-      this.landmarker = await PoseLandmarker.createFromOptions(files, landmarkerOptions(this.variant, this.delegate, NUM_POSES));
+      this.landmarker = await PoseLandmarker.createFromOptions(files, landmarkerOptions(this.variant, this.delegate, NUM_POSES, model));
     } catch {
       this.delegate = 'CPU';
       // Some browsers expose WebGL but cannot initialize MediaPipe's GPU delegate.
-      this.landmarker = await PoseLandmarker.createFromOptions(files, landmarkerOptions(this.variant, this.delegate, NUM_POSES));
+      this.landmarker = await PoseLandmarker.createFromOptions(files, landmarkerOptions(this.variant, this.delegate, NUM_POSES, model));
     }
     this.stats.runner = 'page';
     this.stats.delegate = this.delegate;
