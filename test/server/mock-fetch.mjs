@@ -30,6 +30,10 @@ globalThis.fetch = async (input, init = {}) => {
   if (url.startsWith("https://tripo.mock/")) return new Response(Buffer.from("glTF"));
   // The GPU box (forge/gpu/server.py). MOCK_GPU=fail fails the job, MOCK_GPU=hang never finishes it.
   if (url.startsWith("http://gpu.mock/")) {
+    // MOCK_GPU_HF=token: a private HF Space, which turns away any request without that bearer token.
+    if (process.env.MOCK_GPU_HF && new Headers(init.headers).get("authorization") !== `Bearer ${process.env.MOCK_GPU_HF}`) {
+      return json({ error: "Repository not found" }, 404);
+    }
     if (url.endsWith("/health")) return json({ ok: true, ready: process.env.MOCK_GPU !== "cold", queued: 0 });
     if (new Headers(init.headers).get("x-forge3d-key") !== "gpu-key") return json({ error: "bad key" }, 403);
     if (url.endsWith("/jobs")) return json({ id: "g1" }, 202);

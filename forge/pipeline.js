@@ -65,9 +65,11 @@ export const models = {
 };
 
 async function local(path, init = {}, timeoutMs = 20_000) {
+  // A private Hugging Face Space (forge/gpu/space) also wants an HF token on every request.
+  const hf = process.env.FORGE_3D_HF_TOKEN ? { authorization: `Bearer ${process.env.FORGE_3D_HF_TOKEN}` } : {};
   const res = await fetch(LOCAL_URL + path, {
     ...init,
-    headers: { "x-forge3d-key": process.env.FORGE_3D_KEY ?? "", ...init.headers },
+    headers: { "x-forge3d-key": process.env.FORGE_3D_KEY ?? "", ...hf, ...init.headers },
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) {

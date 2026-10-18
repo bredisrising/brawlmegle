@@ -128,6 +128,12 @@ describe('forge server', () => {
       expect(f.glbUrl).toMatch(/rigged\.glb$/);
     });
 
+    it('sends the HF token to a private Space', async () => {
+      const { forge, until } = await startForge({ ...gpu, MOCK_GPU_HF: 'hf_x', FORGE_3D_HF_TOKEN: 'hf_x' });
+      const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
+      expect((await until(id, done)).engine3d).toBe('local');
+    });
+
     it('a box that is still warming up falls back to Tripo right away', async () => {
       const { forge, until } = await startForge({ ...gpu, MOCK_GPU: 'cold' });
       const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
