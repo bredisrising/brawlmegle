@@ -1,0 +1,17 @@
+{
+  "clip": "36564.full.jsonl",
+  "video": "36564.mp4 (1280x720, 25 fps, 14 s): shadowboxing in a studio, seen from behind and the side, full body, a mirror on the left",
+  "fps": 25,
+  "note": "Hand-labeled from the video frame by frame; start = first frame the limb moves, end = back near guard. Limb is the one MediaPipe moves (it agrees with the video, except that from behind it can't tell which way he faces). Tracking jumps to the mirror reflection at frame 320, so only the first 12.78 s are scored.",
+  "until": 12780,
+  "labels": [
+    { "kind": "strike", "name": "kickR", "limb": "legR", "style": "kick", "start": 1160, "end": 2720, "frames": "29-68" },
+    { "kind": "strike", "name": "jab", "limb": "armL", "style": "straight", "start": 3920, "end": 4560, "frames": "98-114" },
+    { "kind": "strike", "name": "jab", "limb": "armL", "style": "straight", "start": 4840, "end": 5360, "frames": "121-134" },
+    { "kind": "strike", "name": "cross", "limb": "armR", "style": "straight", "start": 5520, "end": 6080, "frames": "138-152" },
+    { "kind": "strike", "name": "jab", "limb": "armL", "style": "straight", "start": 7120, "end": 7760, "frames": "178-194" },
+    { "kind": "strike", "name": "kickR", "limb": "legR", "style": "kick", "start": 8120, "end": 9840, "frames": "203-246" },
+    { "kind": "strike", "name": "jab", "limb": "armL", "style": "straight", "start": 11680, "end": 12320, "frames": "292-308" },
+    { "kind": "strike", "name": "cross", "limb": "armR", "style": "straight", "start": 12520, "end": 12780, "frames": "313-320" }
+  ]
+}

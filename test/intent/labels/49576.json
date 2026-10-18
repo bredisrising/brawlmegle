@@ -1,0 +1,9 @@
+{
+  "clip": "49576.full.jsonl",
+  "video": "49576.mp4 (1280x720, 25 fps, 36 s): slow wing-chun style form by a waterfall, facing the camera, full body. The first 3 s are big sweeping arm moves into stance, then slow hand positions.",
+  "fps": 25,
+  "note": "Negatives: nothing here is a strike thrown at a target; ideally nothing registers.",
+  "labels": [
+    { "kind": "negative", "name": "slow form", "start": 0, "end": 36000 }
+  ]
+}

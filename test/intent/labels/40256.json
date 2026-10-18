@@ -1,0 +1,22 @@
+{
+  "clip": "40256.full.jsonl",
+  "video": "40256.mp4 (1280x720, 23.976 fps, 6.3 s): boxer shadowboxing at a handheld camera, very close (head and shoulders), fast combos, heavy motion blur",
+  "fps": 23.976,
+  "note": "Hand-labeled from the video; limb is the boxer's own (his left = image right). Styles are best guesses: the camera moves with him. MediaPipe tracks this clip badly (hips guessed far off-frame, wrists jump between frames, hands swap), so this mostly checks that the reader stays sane on garbage tracking: catch what it can without a storm of phantom strikes.",
+  "labels": [
+    { "kind": "strike", "name": "hookL", "limb": "armL", "style": "hook", "start": 1542, "end": 1792, "frames": "37-43" },
+    { "kind": "strike", "name": "hookR", "limb": "armR", "style": "hook", "start": 1833, "end": 2083, "frames": "44-50" },
+    { "kind": "strike", "name": "hookL", "limb": "armL", "style": "hook", "start": 2250, "end": 2583, "frames": "54-62" },
+    { "kind": "strike", "name": "hookR", "limb": "armR", "style": "hook", "start": 2625, "end": 2875, "frames": "63-69" },
+    { "kind": "strike", "name": "jab", "limb": "armL", "style": "straight", "start": 3250, "end": 3375, "frames": "78-81" },
+    { "kind": "strike", "name": "cross", "limb": "armR", "style": "straight", "start": 3458, "end": 3625, "frames": "83-87" },
+    { "kind": "strike", "name": "hookL", "limb": "armL", "style": "hook", "start": 3667, "end": 3917, "frames": "88-94" },
+    { "kind": "strike", "name": "upperR", "limb": "armR", "style": "upper", "start": 4000, "end": 4292, "frames": "96-103" },
+    { "kind": "strike", "name": "cross", "limb": "armR", "style": "straight", "start": 4292, "end": 4500, "frames": "103-108" },
+    { "kind": "strike", "name": "cross", "limb": "armR", "style": "straight", "start": 4958, "end": 5125, "frames": "119-123" },
+    { "kind": "strike", "name": "cross", "limb": "armR", "style": "straight", "start": 5250, "end": 5417, "frames": "126-130" },
+    { "kind": "strike", "name": "hookL", "limb": "armL", "style": "hook", "start": 5500, "end": 5667, "frames": "132-136" },
+    { "kind": "strike", "name": "jab", "limb": "armL", "style": "straight", "start": 5833, "end": 5958, "frames": "140-143" },
+    { "kind": "strike", "name": "cross", "limb": "armR", "style": "straight", "start": 5958, "end": 6250, "frames": "143-150" }
+  ]
+}
