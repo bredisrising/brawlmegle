@@ -25,6 +25,8 @@ export interface Arena {
   setIslandOffset(z: number): void;
   /** Background hill rows (null until loaded); tune with hills.update({...}). */
   readonly hills: Hills | null;
+  /** Per frame, before drawing (after the camera moved): culls the background to what the camera sees. */
+  update(camera: THREE.Camera): void;
   dispose(): void;
 }
 
@@ -140,6 +142,9 @@ export function createArena(scene: THREE.Scene, renderer: THREE.WebGLRenderer, c
     setIslandOffset(z) {
       islandOffset = z;
       if (island) placeIsland(island, z);
+    },
+    update(cam) {
+      hills?.cull(cam);
     },
     get hills() {
       return hills;

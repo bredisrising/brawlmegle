@@ -71,6 +71,9 @@ export class ImpactPass extends ShaderPass {
   tick(dt: number, aspect: number) {
     this.uniforms.uAspect.value = aspect;
     const on = this.remaining > 0;
+    // Off between impacts: the composer then has the output pass draw straight to the canvas (one full-screen
+    // pass less per frame, ~3 ms on an integrated GPU).
+    this.enabled = on;
     this.uniforms.uOn.value = on ? 1 : 0;
     this.uniforms.uInvert.value = on && this.remaining > this.total / 2 ? 1 : 0;
     if (on) this.remaining -= dt;
