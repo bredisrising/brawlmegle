@@ -51,5 +51,9 @@ describe('memory card', () => {
     const { records } = (await (await fetch(`${base}/api/records`)).json()) as { records: Record<string, { wins: number; losses: number; bestStreak: number }> };
     expect(records['p-new']).toMatchObject({ wins: 6, losses: 3, bestStreak: 3 });
     expect(records['d-old']).toMatchObject({ wins: 10, losses: 9 });
+
+    // Typing your username brings back your fighter, never the hidden broken one.
+    const profile = (await (await fetch(`${base}/api/profiles/dylan`)).json()) as { fighter: { id: string } | null };
+    expect(profile.fighter?.id).toBe('d-old');
   });
 });

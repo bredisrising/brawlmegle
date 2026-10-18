@@ -1,11 +1,23 @@
 // Preloaded into the forge server by test/server/forge.test.ts (node --import): stands in for OpenAI and
 // Tripo so the tests never spend credits. MOCK_DELAY_MS slows each OpenAI call; MOCK_CARD_FAIL=1 fails the card.
+// Rigged models are real tiny fighters (fixtures/rigFixtures.mjs), so the forge's rig check has something to check:
+// MOCK_RIG=collapsed makes every rig a broken one (all weights on one spine bone), MOCK_RIG=collapsed-once only the
+// first. MOCK_TRIPO=nocredits turns every Tripo call down like an account out of credits.
+import fs from "node:fs";
 // A real 1x1 PNG, so the optimizer can make its WebP copies.
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
 const delay = Number(process.env.MOCK_DELAY_MS ?? 0);
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let gpuPolls = 0;
+const fixture = (name) => fs.readFileSync(new URL(`./fixtures/rig-${name}.glb`, import.meta.url));
+let rigs = 0;
+/** The next rigged model any engine hands back. */
+const rigged = () => {
+  rigs++;
+  const broken = process.env.MOCK_RIG === "collapsed" || (process.env.MOCK_RIG === "collapsed-once" && rigs === 1);
+  return new Response(fixture(broken ? "collapsed" : "good"));
+};
 
 globalThis.fetch = async (input, init = {}) => {
   const url = String(input);
@@ -33,10 +45,14 @@ globalThis.fetch = async (input, init = {}) => {
     }
   }
   if (url.startsWith("https://openapi.tripo3d.ai/")) {
+    if (process.env.MOCK_TRIPO === "nocredits") return json({ code: 2010, message: "You don't have enough credit" }, 403);
+    if (url.endsWith("/animations/rig")) return json({ code: 0, data: { task_id: "rig1" } });
+    if (url.endsWith("/tasks/rig1")) return json({ code: 0, data: { status: "success", output: { model_url: "https://tripo.mock/rigged.glb" } } });
     if (url.endsWith("/files")) return json({ code: 0, data: { file_token: "tok" } });
     if (url.includes("/tasks/")) return json({ code: 0, data: { status: "success", output: { model_url: "https://tripo.mock/m.glb" } } });
     return json({ code: 0, data: { task_id: "task" } });
   }
+  if (url === "https://tripo.mock/rigged.glb") return rigged();
   if (url.startsWith("https://tripo.mock/")) return new Response(Buffer.from("glTF"));
   // The ZeroGPU Space (forge/gpu/zerogpu/app.py) through Gradio's API. MOCK_GRADIO=error fails the call.
   if (url.startsWith("https://gradio.mock/")) {
@@ -52,7 +68,7 @@ globalThis.fetch = async (input, init = {}) => {
             'event: complete\ndata: [{"path": "/tmp/x.glb", "url": "https://gradio.mock/gradio_api/file=/tmp/x.glb"}, {"status": "done", "timings": {"model": 20.5, "rig": 3.1}}]\n\n';
       return new Response(stream, { headers: { "content-type": "text/event-stream" } });
     }
-    if (url.endsWith("/gradio_api/file=/tmp/x.glb")) return new Response(Buffer.from("glTF-gradio-rigged"));
+    if (url.endsWith("/gradio_api/file=/tmp/x.glb")) return rigged();
   }
   // The GPU box (forge/gpu/server.py). MOCK_GPU=fail fails the job, MOCK_GPU=hang never finishes it.
   if (url.startsWith("http://gpu.mock/")) {
@@ -67,7 +83,8 @@ globalThis.fetch = async (input, init = {}) => {
     if (url.endsWith("/shape.glb")) return new Response(Buffer.from("glTF-shape"));
     if (url.endsWith(".glb")) {
       const file = url.split("/").pop();
-      return new Response(Buffer.from({ "rigged.glb": "glTF-local-rigged", "rigged.orig.glb": "glTF-local-orig" }[file] ?? "glTF-local"));
+      if (file === "rigged.glb") return rigged();
+      return new Response(Buffer.from({ "rigged.orig.glb": "glTF-local-orig" }[file] ?? "glTF-local"));
     }
     gpuPolls++;
     if (process.env.MOCK_GPU === "fail") return json({ status: "failed", error: "rig: blender exited 1" });

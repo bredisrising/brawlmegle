@@ -20,6 +20,7 @@ import fs from "node:fs";
 import { pipeline } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { runForge, models, commentate, speak } from "./pipeline.js";
+import { available as rigCheckAvailable } from "./rigcheck.js";
 
 if (!process.env.OPENAI_API_KEY) {
   console.error("OPENAI_API_KEY is missing. Put it in the repo root .env");
@@ -263,7 +264,8 @@ async function handle(req, res) {
     const username = normalizeUsername(raw);
     if (!username) return json(res, 400, { error: "usernames are 1-24 letters, digits, _ . -" });
     const mine = [...fighters.values()].filter((f) => f.username === username).sort((a, b) => b.createdAt - a.createdAt);
-    const ready = mine.find((f) => f.status === "ready");
+    // A hidden fighter (a broken rig set aside) doesn't come back on a username "log in" either.
+    const ready = mine.find((f) => f.status === "ready" && !f.hidden);
     const forging = mine.find((f) => f.status === "forging" || f.status === "scanning");
     return json(res, 200, { username, fighter: ready ? view(ready, base) : null, forging: forging?.id ?? null });
   }
@@ -592,4 +594,6 @@ http
   )
   .listen(PORT, BIND, () => {
     console.log(`forge on http://${BIND}:${PORT} (brief ${models.brief}, sheet ${models.sheet}, card ${models.card} @ ${models.quality}, 3D ${models.threeD})`);
+    // Every rigged GLB is posed and checked before it ships (forge/rigcheck.js); without its packages it can't be.
+    rigCheckAvailable().then((ok) => (ok ? console.log("rig check on") : console.warn("rig check OFF: cd forge && npm ci")));
   });

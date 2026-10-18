@@ -11,6 +11,12 @@ const ROOT = path.resolve(__dirname, '../..');
 const KEY = 'test-key';
 const JPEG = `data:image/jpeg;base64,${Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0]).toString('base64')}`;
 const running: ChildProcess[] = [];
+/** The rigged models the mocked engines hand back (test/server/fixtures/rigFixtures.mjs). */
+const GOOD_RIG = fs.readFileSync(path.join(__dirname, 'fixtures/rig-good.glb'));
+const COLLAPSED_RIG = fs.readFileSync(path.join(__dirname, 'fixtures/rig-collapsed.glb'));
+const bytes = async (res: Response) => Buffer.from(await res.arrayBuffer());
+/** The rig checker needs the forge's own packages (cd forge && npm ci); without them the gate is skipped. */
+const hasRigCheck = fs.existsSync(path.join(ROOT, 'forge/node_modules/@gltf-transform/core'));
 
 afterEach(() => {
   for (const child of running.splice(0)) child.kill();
@@ -135,7 +141,7 @@ describe('forge server', () => {
       expect(f.previewMeshUrl).toMatch(/preview-shape\.glb$/);
       expect([...new Uint8Array(await (await fetch(String(f.previewVoxelsUrl))).arrayBuffer())]).toEqual([32, 0, 1, 2, 3]);
       expect(f.glbOptimized).toBe(true);
-      expect(await (await fetch(`${base}/api/forge/${id}/rigged.glb`)).text()).toBe('glTF-local-rigged');
+      expect((await bytes(await fetch(`${base}/api/forge/${id}/rigged.glb`))).equals(GOOD_RIG)).toBe(true);
       // The unoptimized original follows in the background, after the fighter is ready.
       for (let i = 0; i < 40 && !fs.existsSync(path.join(data, id, 'rigged.orig.glb')); i++) await new Promise((r) => setTimeout(r, 50));
       expect(fs.readFileSync(path.join(data, id, 'rigged.orig.glb'), 'utf8')).toBe('glTF-local-orig');
@@ -149,7 +155,7 @@ describe('forge server', () => {
       expect(f.engine3d).toBe('local');
       expect(f.rigged).toBe(true);
       expect(f.glbUrl).toMatch(/rigged\.glb(\?v=\d+)?$/);
-      expect(await (await fetch(`${base}/api/forge/${id}/rigged.glb`)).text()).toBe('glTF-local-rigged');
+      expect((await bytes(await fetch(`${base}/api/forge/${id}/rigged.glb`))).equals(GOOD_RIG)).toBe(true);
       expect(await (await fetch(`${base}/api/forge/${id}/model.glb`)).text()).toBe('glTF-local');
     });
 
@@ -207,7 +213,7 @@ describe('forge server', () => {
       expect(f.rigged).toBe(true);
       expect(f.modelUrl).toBe(f.glbUrl);
       expect(f.gpuTimings).toEqual({ model: 20.5, rig: 3.1 });
-      expect(await (await fetch(`${base}/api/forge/${id}/rigged.glb`)).text()).toBe('glTF-gradio-rigged');
+      expect((await bytes(await fetch(`${base}/api/forge/${id}/rigged.glb`))).equals(GOOD_RIG)).toBe(true);
     });
 
     it('falls back to Tripo when the Space errors', async () => {
@@ -216,6 +222,68 @@ describe('forge server', () => {
       const f = await until(id, done);
       expect(f.engine3d).toBe('tripo');
       expect(String(f.localError)).toMatch(/GPU Space/);
+    });
+  });
+
+  describe.skipIf(!hasRigCheck)('the rig check gate', () => {
+    const gpu = { FORGE_3D: 'local', FORGE_3D_URL: 'http://gpu.mock', FORGE_3D_KEY: 'gpu-key' };
+    const done = (x: Record<string, unknown>) => x.status !== 'scanning' && x.status !== 'forging';
+    type RigCheck = { ok: boolean; score: number; engine: string; problems?: string[]; attempts?: { engine: string; ok: boolean; error?: string }[] };
+
+    it('checks every rig and records it', async () => {
+      const { data, forge, until } = await startForge(gpu);
+      const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
+      const f = await until(id, done);
+      const check = f.rigCheck as RigCheck;
+      expect(check.ok).toBe(true);
+      expect(check.engine).toBe('local');
+      expect(check.score).toBeGreaterThan(50);
+      expect(check.attempts).toBeUndefined();
+      expect(JSON.parse(fs.readFileSync(path.join(data, id, 'fighter.json'), 'utf8')).rigCheck.ok).toBe(true);
+    });
+
+    it('a rig that fails the check is re-rigged on the GPU box, and the good one ships', async () => {
+      const { base, data, forge, until } = await startForge({ ...gpu, MOCK_RIG: 'collapsed-once', TRIPO_API_KEY: '' });
+      const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
+      const f = await until(id, done);
+      expect(f.status).toBe('ready');
+      const check = f.rigCheck as RigCheck;
+      expect(check.ok).toBe(true);
+      expect(check.attempts!.map((a) => [a.engine, a.ok])).toEqual([['local', false], ['local', true]]);
+      expect(f.rigEngine).toBe('local');
+      expect(f.glbUrl).toMatch(/rigged\.glb(\?v=\d+)?$/);
+      expect((await bytes(await fetch(`${base}/api/forge/${id}/rigged.glb`))).equals(GOOD_RIG)).toBe(true);
+      // The rejected rig is kept for a look, never served.
+      expect(fs.readFileSync(path.join(data, id, 'rigged.rejected.glb')).equals(COLLAPSED_RIG)).toBe(true);
+      expect((await fetch(`${base}/api/forge/${id}/rigged.rejected.glb`)).status).toBe(404);
+    });
+
+    it('a rig that keeps failing never ships: no glbUrl, so the game uses the default body', async () => {
+      const { base, forge, until } = await startForge({ ...gpu, MOCK_RIG: 'collapsed', MOCK_TRIPO: 'nocredits' });
+      const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
+      const f = await until(id, done);
+      expect(f.status).toBe('ready');
+      expect(f.glbUrl).toBeUndefined();
+      expect(f.rigged).toBe(false);
+      const check = f.rigCheck as RigCheck;
+      expect(check.ok).toBe(false);
+      // The GPU's rig, its re-rig, then Tripo (out of credits).
+      expect(check.attempts!.map((a) => a.engine)).toEqual(['local', 'local', 'tripo']);
+      expect(check.attempts![0].ok).toBe(false);
+      expect(String(check.attempts![2].error)).toMatch(/credit/);
+      // Still on the memory card (with its card art); the broken GLB isn't reachable.
+      const list = (await (await fetch(`${base}/api/fighters`)).json()) as { id: string }[];
+      expect(list.map((x) => x.id)).toContain(id);
+      expect((await fetch(`${base}/api/forge/${id}/rigged.glb`)).status).toBe(404);
+    });
+
+    it('a Tripo rig that fails the check gets Tripo\'s rig once more', async () => {
+      const { forge, until } = await startForge({ MOCK_RIG: 'collapsed-once' });
+      const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
+      const f = await until(id, done);
+      const check = f.rigCheck as RigCheck;
+      expect(check.attempts!.map((a) => [a.engine, a.ok])).toEqual([['tripo', false], ['tripo', true]]);
+      expect(f.glbUrl).toMatch(/rigged\.glb(\?v=\d+)?$/);
     });
   });
 

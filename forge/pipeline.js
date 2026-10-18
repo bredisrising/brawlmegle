@@ -2,6 +2,7 @@
 // Settings below were picked in research/forge-quality.md (2026-10-17); every one can be overridden from the env.
 import { BRIEF_PROMPT, STYLE, sheetPrompt, cardPrompt, backPrompt } from "./prompts.js";
 import { optimizeFighter, optimizeImage } from "./optimize.js";
+import { checkRig, available as rigCheckAvailable } from "./rigcheck.js";
 
 const API = "https://api.openai.com/v1";
 const BRIEF_MODEL = process.env.FORGE_BRIEF_MODEL ?? "gpt-5.4-mini";
@@ -100,12 +101,14 @@ async function local(path, init = {}, timeoutMs = 20_000) {
  * timings. Throws on any failure, or if it isn't done within FORGE_3D_TIMEOUT, so the caller can fall back to Tripo.
  * With `model` (a GLB), the box only rigs that model (forge/gpu/rescue.mjs).
  */
-export async function makeModelLocal(sheet, onStep, model = null, { onPreview, settings } = {}) {
+export async function makeModelLocal(sheet, onStep, model = null, { onPreview, settings, rigAttempt } = {}) {
   const deadline = Date.now() + LOCAL_TIMEOUT_MS;
   // A stopped box doesn't refuse the connection, it just never answers: find out in 3 s, not 20.
   const health = await (await local("/health", {}, 3_000)).json();
   if (!health.ready) throw new Error(`GPU box not ready: ${health.error ?? "warming up"}`);
-  const request = { image: sheet.toString("base64"), model: model?.toString("base64"), settings };
+  // rigAttempt > 1: a re-rig after the rig check turned the first one down (a box that knows another way to weight a
+  // model can take it as the cue; one that doesn't just rigs it again).
+  const request = { image: sheet.toString("base64"), model: model?.toString("base64"), settings, ...(rigAttempt ? { rigAttempt } : {}) };
   const { id } = await (await local("/jobs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request) })).json();
   onStep("model");
   const get = async (file, timeoutMs = 60_000) => Buffer.from(await (await local(`/jobs/${id}/${file}`, {}, timeoutMs)).arrayBuffer());
@@ -137,8 +140,11 @@ export async function makeModelLocal(sheet, onStep, model = null, { onPreview, s
       // An optimized GLB (the box ran optimize.js) is ~2 MB instead of ~11: only that is on the critical path. The
       // unrigged model isn't used by the game, so it's skipped; the unoptimized original comes later via `original`.
       const rigged = await get("rigged.glb");
-      if (job.optimized) return { model: null, rigged, optimized: true, timings: job.timings, original: () => get("rigged.orig.glb") };
-      return { model: await get("model.glb"), rigged, timings: job.timings };
+      // The same model without its skeleton, for a re-rig if the rig check turns this one down.
+      const unrigged = () => get("model.glb");
+      if (job.optimized) return { model: null, rigged, optimized: true, timings: job.timings, original: () => get("rigged.orig.glb"), unrigged };
+      const plain = await get("model.glb");
+      return { model: plain, rigged, timings: job.timings, unrigged: async () => plain };
     }
   }
 }
@@ -259,16 +265,77 @@ export async function makeModel(sheet, onStep, back = null) {
   const model = await download(genOut.pbr_model_url ?? genOut.model_url);
 
   onStep("rig");
+  // The rig model must be explicit: Tripo otherwise infers one from the generation and rejects it.
+  const rig = async () => {
+    const task = await tripoJson("/animations/rig", { input: gen.task_id, model: RIG_MODEL, rig_type: "biped", spec: "mixamo", out_format: "glb" });
+    return download((await tripoWait(task.task_id)).model_url);
+  };
   let rigged = null;
   try {
-    // The rig model must be explicit: Tripo otherwise infers one from the generation and rejects it.
-    const rig = await tripoJson("/animations/rig", { input: gen.task_id, model: RIG_MODEL, rig_type: "biped", spec: "mixamo", out_format: "glb" });
-    const rigOut = await tripoWait(rig.task_id);
-    rigged = await download(rigOut.model_url);
+    rigged = await rig();
   } catch (err) {
     console.warn("rig failed, using the static model:", err.message);
   }
-  return { model, rigged };
+  // `rerig`: Tripo's rig once more, if the rig check turns this one down.
+  return { model, rigged, rerig: rig };
+}
+
+// --- Rig QA: no fighter ships a rig that doesn't move (forge/rigcheck.js) ----------------------------------------------
+
+/** What fighter.json keeps of a rig check. */
+const rigSummary = (engine, report) => ({
+  engine,
+  ok: report.ok,
+  score: report.score,
+  ms: report.stats.ms,
+  ...(report.ok ? {} : { problems: report.problems.filter((p) => p.level === "fail").map((p) => p.message) }),
+});
+
+/**
+ * Checks a freshly rigged GLB the way the game will pose it. If it fails, tries the rescues in order (each returns
+ * { rigged, optimized?, original?, engine }) and checks each result the same way. Returns the first candidate that
+ * passes, or null: the fighter then ships without a glbUrl and the game gives it the default fighter's body. Records
+ * every attempt in job.rigCheck; the first rejected GLB is kept as rigged.rejected.glb (never served) for a look.
+ * Without the checker's packages (cd forge && npm ci) the rig ships unchecked, and says so.
+ */
+export async function gateRig(job, first, rescues, store) {
+  const id = String(job.id ?? "").slice(0, 8);
+  if (!(await rigCheckAvailable())) {
+    job.rigCheck = { skipped: "rig checker not installed (cd forge && npm ci)" };
+    console.warn(`forge ${id}: rig NOT checked: ${job.rigCheck.skipped}`);
+    return first;
+  }
+  const attempts = [];
+  let candidate = first;
+  for (const rescue of [null, ...rescues]) {
+    if (rescue) {
+      console.warn(`forge ${id}: trying ${rescue.name}`);
+      try {
+        candidate = await rescue.run();
+      } catch (err) {
+        attempts.push({ engine: rescue.engine, ok: false, error: String(err.message ?? err).slice(0, 300) });
+        console.warn(`forge ${id}: ${rescue.name} failed: ${err.message ?? err}`);
+        continue;
+      }
+    }
+    const report = await checkRig(candidate.rigged).catch((err) => ({
+      ok: false,
+      score: 0,
+      problems: [{ level: "fail", message: `checker crashed: ${err.message}` }],
+      stats: { ms: 0 },
+    }));
+    attempts.push(rigSummary(candidate.engine, report));
+    if (report.ok) {
+      job.rigCheck = { ...attempts.at(-1), ...(attempts.length > 1 ? { attempts } : {}) };
+      if (attempts.length > 1) console.warn(`forge ${id}: rig check passed on attempt ${attempts.length} (${candidate.engine}, score ${report.score})`);
+      return candidate;
+    }
+    console.warn(`forge ${id}: RIG CHECK FAILED (${candidate.engine}, score ${report.score}): ${attempts.at(-1).problems.join("; ")}`);
+    if (!rescue && store) store.write("rigged.rejected.glb", candidate.rigged);
+  }
+  job.rigCheck = { ok: false, attempts };
+  console.warn(`forge ${id}: no rig passed the check; shipping without a 3D model (the game uses the default body)`);
+  return null;
 }
 
 async function openai(path, init, timeoutMs) {
@@ -576,11 +643,62 @@ export async function runForge(job, frames, store) {
           job.step = "model";
           return tripoModel();
         });
+    // When the rig check turns a rig down: the engine that made it tries once more, then the other engine has a go.
+    const rescuesFor = (out) => {
+      const list = [];
+      if (job.engine3d === "tripo") {
+        if (out.rerig) list.push({ name: "Tripo re-rig", engine: "tripo", run: async () => ({ rigged: await out.rerig(), engine: "tripo" }) });
+        // The GPU box can rig Tripo's static model (like forge/gpu/rescue.mjs).
+        if (ENGINE_3D === "local" && out.model) {
+          list.push({ name: "GPU rig of the Tripo model", engine: "local", run: async () => ({ ...(await makeModelLocal(sheet, () => {}, out.model)), engine: "local" }) });
+        }
+        return list;
+      }
+      if (ENGINE_3D === "local" && out.unrigged) {
+        list.push({
+          name: "GPU re-rig",
+          engine: "local",
+          run: async () => ({ ...(await makeModelLocal(sheet, () => {}, await out.unrigged(), { rigAttempt: 2 })), engine: "local" }),
+        });
+      }
+      // A whole Tripo model + rig: costs Tripo credits, and fails fast without them.
+      if (process.env.TRIPO_API_KEY) {
+        list.push({
+          name: "Tripo model + rig",
+          engine: "tripo",
+          run: async () => {
+            const t = await makeModel(sheet, () => {});
+            if (!t.rigged) throw new Error("Tripo rig failed");
+            return { rigged: t.rigged, engine: "tripo" };
+          },
+        });
+      }
+      return list;
+    };
     const modelJob =
       ENGINE_3D || process.env.TRIPO_API_KEY
         ? (ENGINE_3D ? localModel() : tripoModel())
-            .then(({ model, rigged }) => {
-              if (model) job.modelUrl = store.write("model.glb", model);
+            .then(async (out) => {
+              if (out.model) job.modelUrl = store.write("model.glb", out.model);
+              let rigged = out.rigged;
+              if (rigged) {
+                // Checked before glbUrl is set, so not even the forging preview shows a rig that doesn't move.
+                const first = { ...out, engine: job.engine3d ?? "tripo" };
+                const passed = await timed("rigCheck", () => gateRig(job, first, rescuesFor(out), store));
+                if (!passed) {
+                  // No glbUrl: a ready fighter without one fights with the default fighter's body (FighterView).
+                  original = null;
+                  job.glbOptimized = false;
+                  job.rigged = false;
+                  return;
+                }
+                if (passed !== first) {
+                  job.rigEngine = passed.engine;
+                  job.glbOptimized = Boolean(passed.optimized);
+                  original = passed.original ?? null;
+                }
+                rigged = passed.rigged;
+              }
               if (rigged) job.glbUrl = store.write("rigged.glb", rigged);
               else job.glbUrl = job.modelUrl;
               job.modelUrl ??= job.glbUrl;
