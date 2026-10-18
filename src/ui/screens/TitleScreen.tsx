@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { fighterRecords, totalMatches, winRate, type FighterRecord } from '../../forge/leaderboard';
+import { fighterRecords, recentWinRate, totalMatches, winRate, type FighterRecord } from '../../forge/leaderboard';
 import { listFighters } from '../../forge/roster';
 import type { ForgedFighter } from '../../types';
 import { Arrow, ArcadeButton, TextButton } from '../ArcadeButton';
@@ -105,8 +105,8 @@ export function TitleScreen() {
 }
 
 function Leaderboard({ fighters, records, onBack }: { fighters: ForgedFighter[] | null; records: Readonly<Record<string, FighterRecord>>; onBack: () => void }) {
-  const ranked = (fighters ?? []).map((fighter) => ({ fighter, record: records[fighter.id] ?? { wins: 0, losses: 0, draws: 0, streak: 0, bestStreak: 0 } }))
-    .sort((a, b) => totalMatches(b.record) - totalMatches(a.record) || winRate(b.record) - winRate(a.record) || b.record.wins - a.record.wins || a.fighter.name.localeCompare(b.fighter.name));
+  const ranked = (fighters ?? []).map((fighter) => ({ fighter, record: records[fighter.id] ?? { wins: 0, losses: 0, draws: 0, streak: 0, bestStreak: 0, recentResults: [] } }))
+    .sort((a, b) => b.record.wins - a.record.wins || recentWinRate(b.record) - recentWinRate(a.record) || winRate(b.record) - winRate(a.record) || totalMatches(b.record) - totalMatches(a.record) || a.fighter.name.localeCompare(b.fighter.name));
 
   return (
     <div className="absolute inset-0 z-20 grid place-items-center bg-ink/85 p-3 backdrop-blur-sm sm:p-6">
@@ -119,20 +119,21 @@ function Leaderboard({ fighters, records, onBack }: { fighters: ForgedFighter[] 
           <TextButton className="shrink-0 text-base sm:text-lg" onClick={onBack}>← Back</TextButton>
         </div>
         <div className="shrink-0 px-5 pt-4 sm:px-7">
-          <p className="font-cond text-xs font-bold uppercase tracking-[0.14em] text-paper/55 sm:text-sm">Ranked by fights played, then win rate.</p>
+          <p className="font-cond text-xs font-bold uppercase tracking-[0.14em] text-paper/55 sm:text-sm">Ranked by wins · last 7 · career win rate · games played.</p>
         </div>
         {!fighters ? (
           <p className="grid flex-1 place-items-center px-5 text-center font-cond text-xl font-bold uppercase tracking-[0.2em] text-paper/55">Loading records…</p>
         ) : (
           <div className="mx-5 mt-4 min-h-0 flex-1 overflow-y-auto border-t border-paper/15 sm:mx-7">
             {ranked.map(({ fighter, record }, index) => (
-              <div key={fighter.id} className="grid grid-cols-[2.25rem_minmax(0,1fr)] items-center gap-2 border-b border-paper/15 py-3 sm:grid-cols-[3.5rem_minmax(0,1fr)_auto_auto] sm:gap-5 sm:px-2">
+              <div key={fighter.id} className="grid grid-cols-[2.25rem_minmax(0,1fr)] items-center gap-2 border-b border-paper/15 py-3 sm:grid-cols-[3.5rem_minmax(0,1fr)_auto_auto_auto] sm:gap-5 sm:px-2">
                 <span className={`font-display text-2xl ${index < 3 ? 'text-hp' : 'text-paper/45'} sm:text-3xl`}>#{index + 1}</span>
                 <span className="min-w-0">
                   <span className="block truncate font-display text-xl uppercase leading-none tracking-tight sm:text-3xl">{fighter.name}</span>
-                  <span className="mt-1 block font-cond text-[0.68rem] font-bold uppercase tracking-[0.1em] text-paper/55 sm:text-xs sm:tracking-[0.15em]">{totalMatches(record)} fights · {record.bestStreak} best streak <span className="sm:hidden">· {record.wins}W / {record.losses}L / {record.draws}D · {winRate(record)}% WR</span></span>
+                  <span className="mt-1 block font-cond text-[0.68rem] font-bold uppercase tracking-[0.1em] text-paper/55 sm:text-xs sm:tracking-[0.15em]">{totalMatches(record)} fights · {record.bestStreak} best streak <span className="sm:hidden">· {record.wins}W / {record.losses}L / {record.draws}D · last 7: {recentWinRate(record)}% · career: {winRate(record)}%</span></span>
                 </span>
                 <span className="hidden text-right font-cond text-sm font-bold uppercase tracking-[0.12em] text-paper/70 sm:block"><b className="text-hp">{record.wins}W</b> · {record.losses}L · {record.draws}D</span>
+                <span className="hidden text-right font-cond text-xs font-bold uppercase tracking-[0.1em] text-paper/70 sm:block"><b className="text-hp">L7</b> {recentWinRate(record)}%</span>
                 <span className="hidden font-display text-2xl text-paper sm:block sm:text-3xl">{winRate(record)}%</span>
               </div>
             ))}
