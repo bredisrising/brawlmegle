@@ -92,7 +92,7 @@ The 429s ("forges already running", "forge limit reached") come back from `POST 
 `/tuner/` fight panel with opponent "hard CPU", player standing still: after 20 s HP is still 100 / 100, the fight log is empty, and the panel reads "distance 0.92 m · you: idle · hard cpu: idle" (`tuner-fight.png`); it never walks in. Same with the person clip tracked on camera. Might just be the CPU work in progress; the test flips to `FIXED?` when the CPU attacks.
 
 ### E2E-16 Low: the scan often gets one or two angles and says nothing
-With the person clip and MediaPipe at a few fps, the scan page captured only `left` (14 KB) in its 15 s window: "front — · left 14 KB · right —". The game then forges from whatever it got without telling the player it missed angles. On a slow laptop (`?pose=lite`) this will be common.
+With the person clip and MediaPipe at a few fps, the scan page captured only `left` (14 KB) in its 15 s window ("front — · left 14 KB · right —"), and on a second run left 12 KB + right 5 KB with no front. The crops are tiny (5–14 KB) because the person fills a small part of the frame. The game then forges from whatever it got without telling the player it missed angles. On a slow laptop (`?pose=lite`) this will be common.
 
 ### E2E-17 Low: anyone can take over any username
 Usernames are a light log-in with no secret, so anyone can type `demo` → Rescan me and replace the demo fighter used for judging. Probably fine for the event; worth protecting `demo`.
