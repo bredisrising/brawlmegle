@@ -72,7 +72,7 @@ const round = (p: Pose) => Object.fromEntries(JOINTS.map((j) => [j, p[j].toArray
 
 test('the baked rig-check poses are the director poses', () => {
   const baked = Object.fromEntries(Object.entries(poses()).map(([k, p]) => [k, round(p)]));
-  const text = JSON.stringify(baked, null, 0).replace(/\],"/g, '],\n"') + '\n';
+  const text = `{\n${Object.entries(baked).map(([k, p]) => `  ${JSON.stringify(k)}: ${JSON.stringify(p)}`).join(',\n')}\n}\n`;
   if (process.env.RIGCHECK_POSES === 'write') fs.writeFileSync(FILE, text);
   const onDisk = JSON.parse(fs.readFileSync(FILE, 'utf8'));
   for (const [name, pose] of Object.entries(baked)) {

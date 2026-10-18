@@ -796,7 +796,10 @@ export async function checkRig(input, { keep = false } = {}) {
     stats.poses[name] = ps;
   }
   stats.worst = Object.fromEntries(Object.entries(worst).map(([k, [v, where]]) => [k, { value: r3(v), where }]));
-  if (worst.hand[0] > LIMITS.hand) fail("hand-off-wrist", `the ${worst.hand[1].replace(/Hand in/, "hand in the")} pose lands ${(worst.hand[0] * 100).toFixed(1)} cm from the wrist`);
+  if (worst.hand[0] > LIMITS.hand) {
+    const [, side, pose] = /^(Left|Right)Hand in (\w+)$/.exec(worst.hand[1]) ?? [];
+    fail("hand-off-wrist", `the ${side?.toLowerCase()} hand lands ${(worst.hand[0] * 100).toFixed(1)} cm from the wrist in the ${pose} pose`);
+  }
   if (worst.lag[0] > LIMITS.lag || worst.torsoLag[0] > LIMITS.torsoLag) {
     const lagging = new Set();
     for (const ps of Object.values(stats.poses)) {
@@ -840,7 +843,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === fs.realpathSync(proces
   const asJson = args.includes("--json");
   const sheetAt = args.indexOf("--sheet");
   const sheet = sheetAt >= 0 ? args[sheetAt + 1] : null;
-  const files = args.filter((a, i) => !a.startsWith("--") && i !== sheetAt + 1);
+  const files = args.filter((a, i) => !a.startsWith("--") && (sheetAt < 0 || i !== sheetAt + 1));
   if (!files.length) {
     console.log("usage: node forge/rigcheck.js fighter.glb [...] [--json] [--sheet out.png]");
     process.exit(2);
