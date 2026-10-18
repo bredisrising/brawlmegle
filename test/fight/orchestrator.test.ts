@@ -80,4 +80,4 @@ test.skipIf(files.length === 0)('orchestrator on guided tests', () => {
   console.log(`\nstrikes prompted ${strikes}, engine threw something ${thrown}, threw the right kind ${right}`);
   console.log(`wind-up seen -> strike lands: median ${pct(0.5)} ms, p90 ${pct(0.9)} ms (n=${delays.length})`);
   expect(thrown / strikes).toBeGreaterThan(0.6);
-});
+}, 60_000); // two minutes of recordings through the whole pipeline: slow on a busy machine
