@@ -85,19 +85,19 @@ export function TitleScreen() {
           </div>
           <div className="flex w-full flex-col items-start gap-5 md:w-[31rem] md:shrink-0 md:items-end">
             {mode === 'pick' ? (
-              <nav className="flex w-full max-w-[31rem] flex-col gap-[clamp(0.3rem,1vh,0.5rem)]">
-                <MenuItem primary index="01" label="Find a fight" hint="Fight a random opponent online" color="hover:bg-paper" bar="bg-ink" disabled={busy} onClick={() => game.findFight()} delay={100} />
-                <MenuItem index="02" label="Play a friend" hint="Make a room or join one with a code" color="hover:bg-p2" bar="bg-p2" disabled={busy} onClick={() => setMode('friend')} delay={180} />
-                <MenuItem index="03" label="Practice vs CPU" hint="Fight the computer on this screen" color="hover:bg-hp" bar="bg-hp" disabled={busy} onClick={() => run(() => game.practice())} delay={260} />
-                <MenuItem index="04" label="Training" hint="Try your moves, no opponent" color="hover:bg-hp" bar="bg-hp" disabled={busy} onClick={() => run(() => game.practice('dummy'))} delay={340} />
-                <MenuItem index="05" label="Leaders" hint="See every fighter's record" color="hover:bg-paper" bar="bg-paper" disabled={busy} onClick={() => setMode('leaderboard')} delay={420} />
+              <nav className="@container flex w-full max-w-[31rem] flex-col gap-[clamp(0.3rem,1vh,0.5rem)]">
+                <MenuItem primary index="01" label="Find a fight" fit={MAIN_FIT} hint="Fight a random opponent online" color="hover:bg-paper" bar="bg-ink" disabled={busy} onClick={() => game.findFight()} delay={100} />
+                <MenuItem index="02" label="Play a friend" fit={MAIN_FIT} hint="Make a room or join one with a code" color="hover:bg-p2" bar="bg-p2" disabled={busy} onClick={() => setMode('friend')} delay={180} />
+                <MenuItem index="03" label="VS CPU" fit={MAIN_FIT} hint="Fight the computer on this screen" color="hover:bg-hp" bar="bg-hp" disabled={busy} onClick={() => run(() => game.practice())} delay={260} />
+                <MenuItem index="04" label="Training" fit={MAIN_FIT} hint="Try your moves, no opponent" color="hover:bg-hp" bar="bg-hp" disabled={busy} onClick={() => run(() => game.practice('dummy'))} delay={340} />
+                <MenuItem index="05" label="Leaders" fit={MAIN_FIT} hint="See every fighter's record" color="hover:bg-paper" bar="bg-paper" disabled={busy} onClick={() => setMode('leaderboard')} delay={420} />
               </nav>
             ) : mode === 'friend' ? (
-              <div className="animate-rise flex w-full max-w-[31rem] flex-col gap-[clamp(0.3rem,1vh,0.5rem)]">
+              <div className="@container animate-rise flex w-full max-w-[31rem] flex-col gap-[clamp(0.3rem,1vh,0.5rem)]">
                 <p className="font-cond text-sm font-bold uppercase tracking-[0.3em] text-paper/60">Play a friend</p>
-                <MenuItem index="A" label="Create a room" hint="Get a code to send to your friend" color="hover:bg-p1" bar="bg-p1" disabled={busy} onClick={() => run(() => game.host())} delay={0} />
-                <MenuItem index="B" label="Join with a code" hint="Type the code your friend sent you" color="hover:bg-p2" bar="bg-p2" disabled={busy} onClick={() => setMode('join')} delay={60} />
-                <MenuItem index="C" label="Watch a room" hint="Show a fight here, like a TV" color="hover:bg-paper" bar="bg-paper" disabled={busy} onClick={() => setMode('watch')} delay={120} />
+                <MenuItem index="A" label="Create a room" fit={FRIEND_FIT} hint="Get a code to send to your friend" color="hover:bg-p1" bar="bg-p1" disabled={busy} onClick={() => run(() => game.host())} delay={0} />
+                <MenuItem index="B" label="Join with a code" fit={FRIEND_FIT} hint="Type the code your friend sent you" color="hover:bg-p2" bar="bg-p2" disabled={busy} onClick={() => setMode('join')} delay={60} />
+                <MenuItem index="C" label="Watch a room" fit={FRIEND_FIT} hint="Show a fight here, like a TV" color="hover:bg-paper" bar="bg-paper" disabled={busy} onClick={() => setMode('watch')} delay={120} />
                 <TextButton className="mt-1 self-start" onClick={() => setMode('pick')}>← Back</TextButton>
               </div>
             ) : mode === 'join' || mode === 'watch' ? (
@@ -230,8 +230,17 @@ function Podium({ top }: { top: { fighter: ForgedFighter; record: FighterRecord 
   );
 }
 
-function MenuItem(props: { index: string; label: string; hint: string; color: string; bar: string; disabled: boolean; onClick: () => void; delay: number; primary?: boolean }) {
-  const { index, label, hint, color, bar, disabled, onClick, delay, primary } = props;
+/**
+ * The longest label in each menu (characters). Every label in a menu gets the size that fits that one in the menu's
+ * width, so big screens don't cut "Play a friend" off and the items stay the same size.
+ */
+const MAIN_FIT = 'Play a friend'.length;
+const FRIEND_FIT = 'Join with a code'.length;
+
+function MenuItem(props: { index: string; label: string; hint: string; color: string; bar: string; disabled: boolean; onClick: () => void; delay: number; fit: number; primary?: boolean }) {
+  const { index, label, hint, color, bar, disabled, onClick, delay, fit, primary } = props;
+  // The display face runs about 0.6 em per capital, and the label gets about two thirds of the menu's width.
+  const fontSize = `min(clamp(1.4rem, min(5vh, 6.5vw), 3rem), ${(110 / fit).toFixed(2)}cqw)`;
   // The primary action is filled in, so it's the obvious first click; its hint always shows (it says what it does).
   const fill = primary ? 'bg-p1 text-ink' : 'bg-ink-3';
   const muted = primary ? 'text-ink/60' : 'text-paper/45';
@@ -246,7 +255,7 @@ function MenuItem(props: { index: string; label: string; hint: string; color: st
       <span className={`absolute inset-y-0 left-0 w-2 ${bar} group-hover:bg-ink`} />
       <span className={`hidden font-cond text-sm sm:inline font-bold tracking-[0.3em] ${muted} sm:group-hover:hidden`}>{index}</span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate font-display text-[clamp(1.4rem,min(5vh,6.5vw),3rem)] uppercase leading-none tracking-tight">{label}</span>
+        <span className="block truncate font-display uppercase leading-none tracking-tight" style={{ fontSize }}>{label}</span>
         <span className={`mt-1 block font-cond text-xs sm:truncate sm:text-sm font-semibold uppercase tracking-[0.15em] group-hover:text-ink/70 ${hintColor}`}>{hint}</span>
       </span>
       <Arrow className="text-3xl group-hover:hidden" />

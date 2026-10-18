@@ -7,7 +7,7 @@ const ctx = await browser.newContext({ viewport: { width: Number(w), height: Num
 const page = await ctx.newPage();
 page.on("pageerror", (e) => console.log("pageerror", e.message));
 await page.goto("http://localhost:5173/?record=0&video=0&input=mock", { waitUntil: "load", timeout: 120000 });
-await page.getByRole("button", { name: /Practice/ }).click();
+await page.getByRole("button", { name: /VS CPU/ }).click();
 for (const [t, name] of [[1500, "a"], [3500, "b"], [3000, "c"], [6000, "d"]]) {
   await sleep(t);
   await page.screenshot({ path: `${out}-${w}x${h}-${name}.png` });

@@ -9,7 +9,7 @@ const page = await context.newPage();
 page.on("pageerror", (e) => console.log("pageerror", e.message));
 await page.goto("http://localhost:5173/?perf=1&input=mock&quality=high", { waitUntil: "load", timeout: 120000 });
 await page.waitForFunction(() => window.__brawl, null, { timeout: 60000 });
-await page.getByRole("button", { name: /Practice/ }).click();
+await page.getByRole("button", { name: /VS CPU/ }).click();
 await page.getByRole("button", { name: /Load fighter/ }).click();
 await page.locator(`[data-fighter="${fighter}"]`).click();
 await page.waitForFunction(() => { const s = window.__brawl.store.getState(); return s.phase === "fighting" && s.countdown === null; }, null, { timeout: 120000, polling: 250 });

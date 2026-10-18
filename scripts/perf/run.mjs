@@ -122,7 +122,7 @@ try {
   });
   log("gpu:", result.gpu);
 
-  await page.getByRole("button", { name: /Practice/ }).first().click();
+  await page.getByRole("button", { name: /VS CPU/ }).first().click();
   await page.getByRole("button", { name: /Load fighter/ }).click();
   await page.locator(`[data-fighter="${FIGHTER}"]`).click();
   await page.evaluate(() => window.__brawl.perf.reset());

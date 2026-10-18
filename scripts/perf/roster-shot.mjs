@@ -7,7 +7,7 @@ const ctx = await browser.newContext({ viewport: { width: Number(w), height: Num
 const page = await ctx.newPage();
 await page.goto("http://localhost:5173/?input=mock&perf=1&walkout=0&record=0&video=0", { waitUntil: "load", timeout: 120000 });
 await page.waitForFunction(() => window.__brawl, null, { timeout: 60000 });
-await page.getByRole("button", { name: /Practice/ }).click();
+await page.getByRole("button", { name: /VS CPU/ }).click();
 await page.getByRole("button", { name: /Load fighter/ }).click();
 await sleep(4000);
 await page.screenshot({ path: `${out}-${w}x${h}.png` });
