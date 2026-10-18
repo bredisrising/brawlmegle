@@ -11,7 +11,8 @@ import type { FightEvent, PlayerId, PoseFrame } from '../types';
  * uploaded to /samples/video (saved locally if that fails), so what was really thrown can be checked against what
  * the game read.
  *
- * On by default (pose points only); off with the menu toggle (saved in this browser) or `?record=0`.
+ * Off by default now that the site is public: the team turns it on for its own sessions with `?record=1` or the
+ * menu toggle (saved in this browser).
  */
 const KEY = 'brawlegle.record';
 
@@ -19,25 +20,25 @@ export function recordingEnabled() {
   const param = new URLSearchParams(window.location.search).get('record');
   if (param !== null) return param !== '0';
   try {
-    return localStorage.getItem(KEY) !== '0';
+    return localStorage.getItem(KEY) === '1';
   } catch {
-    return true;
+    return false;
   }
 }
 
 const VIDEO_KEY = 'brawlegle.video';
 
 /**
- * Camera video with the recording: on by default while the team gathers training data (a REC dot shows on screen);
- * `?video=0` or the menu turns it off. Turn it off before strangers play: their camera isn't covered by a scan's consent.
+ * Camera video with the recording: off by default (a stranger's camera isn't covered by a scan's consent); the team
+ * turns it on for its own sessions with `?video=1` or the menu toggle. A REC dot shows while it records.
  */
 export function videoEnabled() {
   const param = new URLSearchParams(window.location.search).get('video');
   if (param !== null) return param !== '0';
   try {
-    return localStorage.getItem(VIDEO_KEY) !== '0';
+    return localStorage.getItem(VIDEO_KEY) === '1';
   } catch {
-    return true;
+    return false;
   }
 }
 
