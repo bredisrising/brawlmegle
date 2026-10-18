@@ -13,7 +13,6 @@ export function OpponentCam() {
   const role = useGameStore((s) => s.role);
   const screen = useGameStore((s) => s.screen);
   const connection = useGameStore((s) => s.connection);
-  const phase = useGameStore((s) => s.phase);
   const cutscene = useGameStore((s) => s.walkout || s.replay);
   const camHidden = useGameStore((s) => s.camHidden);
   const opponentCamHidden = useGameStore((s) => s.opponentCamHidden);
@@ -29,8 +28,7 @@ export function OpponentCam() {
   const accent = ACCENT[opponent];
   // Bottom right (above the menu chips), whoever the opponent is: clear of the HUD, the combo counter (28% down, on
   // the attacker's side), this laptop's own camera (bottom left) and the fighters. The client's waiting screen: top right.
-  // The toggle sits on the frame outside the round; mid-round it's in the Esc menu (no stray clicks mid-punch).
-  const toggle = phase === 'lobby' || phase === 'ko';
+  // The switch is always on the frame, mid-round too: turning the camera off should never mean digging through a menu.
   const place = screen === 'client' ? 'right-6 top-6 flex-col sm:right-10' : 'bottom-[5.5rem] right-3 flex-col-reverse sm:right-4';
 
   return (
@@ -65,7 +63,7 @@ export function OpponentCam() {
             Opponent sees your camera
           </span>
         )}
-        {toggle && <CamToggle />}
+        <CamToggle />
       </div>
     </div>
   );
