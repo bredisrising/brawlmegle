@@ -8,25 +8,25 @@ import type { Effects } from './Effects';
 import type { FighterView } from './FighterView';
 import type { Renderer } from './Renderer';
 import type { Sfx } from './Sfx';
+import type { Motion } from './fightPose';
 import { JOINTS, copyPose, createPose, type Pose } from './pose';
 import { Fire, FireWall, Stage, VsSign, type FirePalette } from './walkoutFx';
-import { folded, signature, stand, walk } from './walkoutPose';
-import {
-  DEFAULT_BEATS, beatsFor, easeInOut, easeOut, kf, linear, signatures, smoothstep, walkoutEnabled, type Beats, type Signature,
-} from './walkoutTiming';
+import { perform, spotOf, type Body } from './walkoutPose';
+import { DEFAULT_BEATS, beatsFor, easeInOut, easeOut, kf, linear, smoothstep, walkoutEnabled, type Beats } from './walkoutTiming';
 
 const BASE = import.meta.env.BASE_URL;
 const DEFAULT_TRACK = `${BASE}walkout/walkout.mp3`;
 /** The fire VS burns orange with a touch of each player's color in the embers. */
 const VS_FIRE: FirePalette = { hot: '#ffd36a', mid: '#ff6a1a', cool: '#b3102e', tint: '#ffb03a' };
-/** How far back the fighters start, walking up to their marks (fighter-space metres, along the way they face). */
-const WALK_FROM = -1.1;
+/** How far back the fighters start, walking up to their marks (fighter-space metres): fighter 2 a step behind. */
+const WALK_FROM: Record<PlayerId, number> = { p1: -1.5, p2: -1.8 };
 /**
  * Facing during the entrance (root yaw; 0 = the camera, fight facing is +-pi/2): a little toward each other while
- * waiting, turned out to their camera (which shoots from their outside) during their own shot.
+ * waiting, turned to their camera during their own shot, square to the camera for the two-shot.
  */
-const WAIT_FACING: Record<PlayerId, number> = { p1: 0.2, p2: -0.2 };
-const SHOT_FACING: Record<PlayerId, number> = { p1: -0.35, p2: 0.35 };
+const WAIT_FACING: Record<PlayerId, number> = { p1: 0.12, p2: -0.12 };
+const SHOT_FACING: Record<PlayerId, number> = { p1: -0.3, p2: -0.22 };
+const TWO_FACING: Record<PlayerId, number> = { p1: 0.08, p2: -0.08 };
 
 /** A walkout track: where to start in the file, and its beats (seconds after that). */
 type Track = { url: string; start: number; beats: Beats; custom: boolean };
@@ -34,11 +34,11 @@ type Track = { url: string; start: number; beats: Beats; custom: boolean };
 const ramp = (t: number, start: number, len: number) => smoothstep((t - start) / len);
 
 /**
- * The walkout: Street Fighter 6's in-stage character entrance, before round 1. The arena goes dark and spotlights
- * find the two fighters walking up to their marks; each gets a slow low push-in while they do their signature action
- * (the other one waiting, arms folded, in the background); then a two-shot as they turn to each other and drop into
- * their stance while the camera pulls back; a white flash and a burning VS in the stage; then the countdown carries
- * on into ROUND 1 and FIGHT. The beats (walkoutTiming.ts) follow the music.
+ * The walkout: Street Fighter 6's walkout (Jamie's), shot for shot, before round 1. Out of a white flash into a dark
+ * club, lanterns and a crowd: both fighters dance-walk up to their marks and the camera pushes in on fighter 1 for
+ * their routine (fighter 2 grooving behind); a hard cut to fighter 2, low, for theirs; the camera pulls back to the two
+ * of them for the tricks (walkoutPose.ts has the moves); a gold flash and the burning VS in the stage; then the
+ * countdown carries on into ROUND 1 and FIGHT. The beats (walkoutTiming.ts) follow the music.
  *
  * It runs from the store, so both laptops play it from the same moment: it starts when the countdown's first beat
  * starts (the host's phase message on the client) and stops the moment that beat ends (the host's skip carries over).
@@ -51,7 +51,6 @@ export class Walkout {
   hold: number | null = null;
   /** This walkout's beats (the track's). */
   beats: Beats = DEFAULT_BEATS;
-  kinds: Record<PlayerId, Signature> = { p1: 'shadowbox', p2: 'flex' };
   private prevT = -1;
   /** Fast frames seen since the walkout started (-1 once it's running, see frame()). */
   private settling = -1;
@@ -70,8 +69,11 @@ export class Walkout {
   private environment = 1;
   /** Each fighter's root facing before the walkout turned them (restored after). */
   private readonly facing: Record<PlayerId, number> = { p1: Math.PI / 2, p2: -Math.PI / 2 };
-  private readonly scratch = { base: createPose(), fight: createPose(), other: createPose() };
-  private readonly look = new THREE.Vector3();
+  private readonly scratch = { fight: createPose(), body: { slide: 0, lift: 0, turn: 0, roll: 0, spot: 0 } as Body };
+  /** Where each fighter stands right now (world, on the floor): what the camera frames and the spotlights find. */
+  private readonly at: Record<PlayerId, THREE.Vector3> = { p1: new THREE.Vector3(), p2: new THREE.Vector3() };
+  private readonly from = { pos: new THREE.Vector3(), look: new THREE.Vector3(), fov: 30 };
+  private readonly to = { pos: new THREE.Vector3(), look: new THREE.Vector3(), fov: 30 };
   private readonly warmTimer: ReturnType<typeof setTimeout>;
   private readonly unsubscribe: () => void;
   private readonly offFrame: () => void;
@@ -189,8 +191,6 @@ export class Walkout {
     this.played = true;
     if (import.meta.env.DEV) console.debug('[walkout] start', performance.now().toFixed(0));
     void this.findTrack(); // normally done on the first click already
-    const { players } = useGameStore.getState();
-    this.kinds = signatures(players.p1.name, players.p2.name);
     this.beats = this.track.beats;
     this.t = 0;
     this.prevT = -1;
@@ -198,7 +198,7 @@ export class Walkout {
     for (const id of PLAYER_IDS) {
       const view = this.views[id];
       this.facing[id] = view.root.rotation.y;
-      view.entrance = (pose) => this.pose(id, pose);
+      view.entrance = (pose, motion) => this.pose(id, pose, motion);
       view.settle(); // the walkout is their entrance: no print-in glow over it
       if (useGameStore.getState().players[id].status === 'ready') view.setVisible(true);
     }
@@ -310,10 +310,9 @@ export class Walkout {
     this.t = this.hold ?? (heard != null ? Math.max(this.t, heard) : this.t + dt);
     const B = this.beats;
     this.stage.amount = Math.min(1, this.t / 0.6);
+    this.stage.beat = this.t - B.open;
     this.place();
-    if (this.crossed(B.p1) || this.crossed(B.p2)) this.announcer.crowd('cheer', 0.22);
-    // The smear between shots (ui/Walkout.tsx draws it) gets a whoosh.
-    if (this.crossed(B.p2 - 0.12) || this.crossed(B.two - 0.12)) this.sfx.play('whoosh', 1.4);
+    if (this.crossed(B.open) || this.crossed(B.two + 0.5)) this.announcer.crowd('cheer', 0.22);
     // Depth cue: whoever's not in the shot sinks into the dark behind the one who is.
     const t = this.t;
     this.shade('p2', Math.min(ramp(t, B.p1 - 0.05, 0.3), 1 - ramp(t, B.p2 - 0.05, 0.15)));
@@ -369,110 +368,141 @@ export class Walkout {
     this.music?.duck(0.8, 0.1);
   }
 
-  /** Where each fighter stands and faces: walking up to the mark, then turning to the other one for the two-shot. */
+  /** Where each fighter stands and faces: walking up to the mark, turned to their shot, then back to the fight. */
   private place() {
     const B = this.beats;
     const t = Math.max(0, this.t);
     const walkEnd = B.p1 - 0.25;
-    const turn = easeInOut((t - B.two - 0.1) / 0.75);
+    const fight = easeInOut((t - B.vs - 0.15) / 0.7);
     for (const id of PLAYER_IDS) {
       const root = this.views[id].root;
-      root.position.z = WALK_FROM * (1 - Math.min(1, t / walkEnd)) ** 2 * root.scale.z;
-      const start = id === 'p1' ? B.p1 : B.p2;
-      const end = id === 'p1' ? B.p2 : B.two;
-      const own = Math.min(easeInOut((t - start + 0.15) / 0.6), 1 - easeInOut((t - end + 0.3) / 0.6));
-      const entrance = WAIT_FACING[id] + (SHOT_FACING[id] - WAIT_FACING[id]) * Math.max(0, own);
-      root.rotation.y = entrance + (this.facing[id] - entrance) * turn;
-      this.stage.aim(id === 'p1' ? 0 : 1, root.position);
+      root.position.z = WALK_FROM[id] * (1 - Math.min(1, t / walkEnd)) ** 2 * root.scale.z;
+      const facing =
+        id === 'p1'
+          ? kf(t, [[B.p1 - 0.3, WAIT_FACING.p1], [B.p1 + 0.3, SHOT_FACING.p1], [B.p2 + 0.1, SHOT_FACING.p1], [B.p2 + 0.6, TWO_FACING.p1]])
+          : kf(t, [[B.p2 - 0.3, WAIT_FACING.p2], [B.p2, SHOT_FACING.p2], [B.two, SHOT_FACING.p2], [B.two + 0.5, TWO_FACING.p2]]);
+      root.rotation.y = facing + (this.facing[id] - facing) * fight;
+      root.updateMatrixWorld();
+      root.localToWorld(this.at[id].set(spotOf(id, t, B), 0, 0));
+      this.stage.aim(id === 'p1' ? 0 : 1, this.at[id]);
     }
   }
 
   /**
-   * The pose for this fighter right now (FighterView.entrance, every sim tick): walking in, then waiting with arms
-   * folded or doing their signature, then blending into the fight stance for the two-shot. Always returns true: the
-   * cinematic runs at full frame rate, not stepped on twos.
+   * The pose for this fighter right now (FighterView.entrance, every sim tick): their routine (walkoutPose.ts), and the
+   * tricks' whole-body motion; under the fire, blending into their fighting stance for ROUND 1. Always returns true:
+   * the cinematic runs at full frame rate, not stepped on twos.
    */
-  private pose(id: PlayerId, pose: Pose) {
+  private pose(id: PlayerId, pose: Pose, motion: Motion) {
     if (this.t < 0) return false;
     const B = this.beats;
-    const t = this.t;
-    const inner = id === 'p1' ? 1 : -1;
-    const { base, fight, other } = this.scratch;
-    copyPose(fight, pose); // the engine's stance, for the two-shot
-    stand(base, t + (id === 'p2' ? 1.3 : 0));
-    const walkEnd = B.p1 - 0.25;
-    walk(base, t * 2 * Math.PI * 1.6 + (id === 'p2' ? Math.PI : 0), 1 - ramp(t, walkEnd - 0.4, 0.4));
-    copyPose(pose, base);
-    // Waiting (arms folded) once they're on their mark, except during their own shot.
-    const start = id === 'p1' ? B.p1 : B.p2;
-    const end = id === 'p1' ? B.p2 : B.two;
-    const own = Math.min(ramp(t, start - 0.1, 0.3), 1 - ramp(t, end - 0.25, 0.4));
-    const wait = ramp(t, walkEnd - 0.1, 0.5) * (1 - own);
-    if (wait > 0) {
-      copyPose(other, base);
-      folded(other, t, inner);
-      lerp(pose, other, wait);
-    }
-    if (own > 0) {
-      copyPose(other, base);
-      signature(other, this.kinds[id], t - start - 0.05, inner);
-      lerp(pose, other, own);
-    }
-    // The two-shot: into their fighting stance as they turn to face each other.
-    const k = ramp(t, B.two + 0.1, 0.65);
+    const { fight, body } = this.scratch;
+    copyPose(fight, pose); // the engine's stance, for the end
+    perform(pose, body, id, this.t, B);
+    const k = ramp(this.t, B.vs + 0.2, 0.6);
     if (k > 0) lerp(pose, fight, k);
+    motion.slide = body.slide;
+    motion.lift = body.lift;
+    motion.turn = body.turn;
+    motion.roll = body.roll;
     return true;
   }
 
-  /** The camera for this moment (Renderer.direct hands it here every frame): slow, low, cinematic. */
+  /**
+   * The camera for this moment (Renderer.direct hands it here every frame), Street Fighter 6's moves: wide and low on
+   * the club, a push in on fighter 1 as the routine starts, a hard cut to fighter 2 shot from low, a pull back to the
+   * two of them, wide for the VS.
+   */
   private shoot(camera: THREE.PerspectiveCamera) {
     const B = this.beats;
     const t = this.t < 0 ? B.end : this.t;
     // Narrow screens (a phone held upright): back off until the fighters fit across.
     const narrow = Math.max(1, Math.pow(1.3 / camera.aspect, 0.7));
-    const x1 = this.views.p1.root.position.x;
-    const x2 = this.views.p2.root.position.x;
-    const mid = (x1 + x2) / 2;
-    let fov: number;
-    if (t < B.p1) {
-      // The stage: wide and dark, a slow push in as they walk up to their marks.
-      const k = easeInOut(t / B.p1);
-      camera.position.set(mid + 0.1 * k, 0.6 - 0.08 * k, (2.9 - 0.5 * k) * narrow);
-      camera.lookAt(this.look.set(mid, 0.42, -0.3));
-      fov = 31;
-    } else if (t < B.two) {
-      // One fighter: low 3/4 from their outside, pushing in slowly from a medium shot to their face and shoulders;
-      // the other one stands soft in the background across the frame.
-      const p1 = t < B.p2;
-      const f = p1 ? -1 : 1; // the outside: P1's left of frame, P2's right
-      const x = p1 ? x1 : x2;
-      const z = (p1 ? this.views.p1 : this.views.p2).root.position.z;
-      const s0 = p1 ? B.p1 : B.p2;
-      const s1 = p1 ? B.p2 : B.two;
-      const k = easeInOut((t - s0) / (s1 - s0));
-      const angle = 0.55 - 0.1 * k;
-      const dist = (1.15 - 0.3 * k) * narrow;
-      camera.position.set(x + f * Math.sin(angle) * dist, 0.42 + 0.08 * k, z + Math.cos(angle) * dist);
-      camera.lookAt(this.look.set(x - f * (0.17 - 0.05 * k), 0.57 + 0.04 * k, z));
-      fov = 28 - 2 * k;
-    } else if (t < B.vs) {
-      // The two-shot: low between them looking up, pulling back toward the fight camera as they square up.
-      const k = easeInOut((t - B.two) / (B.vs - B.two));
-      camera.position.set(mid, 0.3 + 0.05 * k, (1.08 - 0.1 * k) * narrow);
-      camera.lookAt(this.look.set(mid, 0.55 + 0.02 * k, 0));
-      fov = 36;
+    let shot = this.to;
+    if (t < B.p1 - 0.45) this.wide(shot, t, narrow);
+    else if (t < B.p1 + 0.05) {
+      // The push in: from the wide shot onto fighter 1, in one move.
+      this.wide(this.from, t, narrow);
+      this.closeOn('p1', shot, B.p1, narrow);
+      shot = mix(this.from, shot, easeInOut((t - B.p1 + 0.45) / 0.5));
+    } else if (t < B.p2) this.closeOn('p1', shot, t, narrow);
+    else if (t < B.two) this.closeOn('p2', shot, t, narrow);
+    else if (t < B.vs) {
+      // Pulling back off fighter 2 to the two of them.
+      this.closeOn('p2', this.from, B.two, narrow);
+      this.twoShot(shot, t, narrow);
+      shot = mix(this.from, shot, easeInOut((t - B.two) / 0.55));
     } else {
       // The fire VS: wide on the stage, a slight drift in.
       const k = easeOut((t - B.vs) / Math.max(0.2, B.end - B.vs));
-      camera.position.set(mid, 0.52, (2.2 - 0.15 * k) * narrow);
-      camera.lookAt(this.look.set(mid, 0.55, -0.4));
-      fov = 40;
+      const mid = (this.at.p1.x + this.at.p2.x) / 2;
+      shot.pos.set(mid, 0.52, (2.2 - 0.15 * k) * narrow);
+      shot.look.set(mid, 0.55, -0.4);
+      shot.fov = 40;
     }
-    if (camera.fov !== fov) {
-      camera.fov = fov;
+    camera.position.copy(shot.pos);
+    camera.lookAt(shot.look);
+    if (camera.fov !== shot.fov) {
+      camera.fov = shot.fov;
       camera.updateProjectionMatrix();
     }
   }
+
+  /** The club, wide and low, pushing in slowly as they walk up. */
+  private wide(out: Shot, t: number, narrow: number) {
+    const B = this.beats;
+    const k = easeInOut((t - B.open) / (B.p1 - B.open));
+    const mid = (this.at.p1.x + this.at.p2.x) / 2;
+    out.pos.set(mid - 0.1 * k, 0.4 - 0.03 * k, (1.85 - 0.35 * k) * narrow);
+    out.look.set(mid - 0.12 * k, 0.5, -0.3);
+    out.fov = 36;
+  }
+
+  /**
+   * One fighter, close: fighter 1 from low on their outside with fighter 2 soft behind them across the frame; fighter
+   * 2 from lower still, in front on the inside, looking up. A slow drift in over the shot.
+   */
+  private closeOn(id: PlayerId, out: Shot, t: number, narrow: number) {
+    const B = this.beats;
+    const p1 = id === 'p1';
+    const s0 = p1 ? B.p1 : B.p2;
+    const s1 = p1 ? B.p2 : B.two;
+    const k = easeInOut((t - s0) / (s1 - s0));
+    const at = this.at[id];
+    if (p1) {
+      const angle = 0.5 - 0.12 * k;
+      const dist = (0.8 - 0.08 * k) * narrow;
+      out.pos.set(at.x - Math.sin(angle) * dist, 0.46 + 0.03 * k, at.z + Math.cos(angle) * dist);
+      out.look.set(at.x + 0.08, 0.6, at.z);
+      out.fov = 32;
+    } else {
+      const angle = 0.22 - 0.1 * k;
+      const dist = (0.58 - 0.05 * k) * narrow;
+      out.pos.set(at.x - Math.sin(angle) * dist, 0.27 + 0.03 * k, at.z + Math.cos(angle) * dist);
+      out.look.set(at.x + 0.02, 0.58 - 0.02 * k, at.z);
+      out.fov = 42;
+    }
+  }
+
+  /** Both of them, low in front, everything from the floor to a handstand's feet in frame. */
+  private twoShot(out: Shot, t: number, narrow: number) {
+    const B = this.beats;
+    const k = easeInOut((t - B.two) / (B.vs - B.two));
+    const mid = (this.at.p1.x + this.at.p2.x) / 2;
+    out.pos.set(mid, 0.3, (1.3 - 0.1 * k) * narrow);
+    out.look.set(mid, 0.44, 0);
+    out.fov = 38;
+  }
+}
+
+type Shot = { pos: THREE.Vector3; look: THREE.Vector3; fov: number };
+
+/** `a` moved `k` of the way to `b` (into `b`). */
+function mix(a: Shot, b: Shot, k: number): Shot {
+  b.pos.lerpVectors(a.pos, b.pos, k);
+  b.look.lerpVectors(a.look, b.look, k);
+  b.fov = a.fov + (b.fov - a.fov) * k;
+  return b;
 }
 
 function lerp(dst: Pose, src: Pose, k: number) {

@@ -65,14 +65,17 @@ The orchestrator in practice (camera -> on screen, ~180 ms from the first sign o
 
 Also in the fight:
 - Walkout (director/Walkout.ts, walkoutPose.ts, walkoutFx.ts, ui/Walkout.tsx, beats in walkoutTiming.ts): the
-  countdown's first beat is a ~9.5 s SF6-style in-stage entrance. The arena goes dark (spotlights, haze, neon), the
-  fighters walk up to their marks, each gets a slow low push-in during a signature action (shadowbox, knuckles,
-  neckroll, beckon, chestpound, gloves or flex, picked from the name) while the other waits arms folded, then a
-  two-shot as they turn to each other into their stance, a white flash and a fire VS, then ROUND 1 and FIGHT. Both
-  laptops run it off the countdown and the music's clock, so the host's skip (any key/click) carries over;
-  `?walkout=0` skips it. Music: public/walkout/walkout.mp3 (original, scripts/make-walkout-music.mjs); drop in
-  public/walkout/custom.mp3 (+ optional custom.json `{"start": s, "drop": s, "beats": {"p1","p2","two","vs","end"}}`:
-  where to start, and when after that fighter 1's shot or every cut lands) to use your own track (both gitignored).
+  countdown's first beat is an ~11 s copy of Street Fighter 6's walkout (Jamie's), shot for shot. Out of a white flash
+  into a dark club (lanterns, warm haze, a silhouette crowd bouncing on the beat), both dance-walk up to their marks;
+  a push in on fighter 1 (arm swung up and down across, flung out, rolling hands, a finger wag, hands thrown up); a
+  hard cut to fighter 2 from low (arm up into a full spin, chin up); a pull back to both (fighter 1 wheels into a
+  handstand freeze and over, fighter 2 rolling hands and a quick spin); a gold flash and the fire VS, then ROUND 1 and
+  FIGHT. The moves are keyed hand paths on the joint pose plus whole-body tricks (Motion's slide/turn/roll; the roll
+  turns about the hips and keeps a hand or foot on the floor). Both laptops run it off the countdown and the music's
+  clock, so the host's skip (any key/click) carries over; `?walkout=0` skips it. Music: public/walkout/walkout.mp3
+  (original, scripts/make-walkout-music.mjs, cut to the beats); drop in public/walkout/custom.mp3 (+ optional
+  custom.json `{"start": s, "drop": s, "beats": {"open","p1","p2","two","vs","end"}}`: where to start, and when after
+  that fighter 1's shot or every cut lands) to use your own track (both gitignored).
 - Super: removed from play (its overhead gesture fired on blocks). The engine still has the meter and fireball
   projectile (FIGHT.meterOn*, fireball in MOVES) if a better gesture brings it back; nothing triggers it now.
 - K.O.: the loser is a ragdoll (director/ragdoll.ts: Verlet joints, fixed 120 Hz steps, thrown by the finishing blow,

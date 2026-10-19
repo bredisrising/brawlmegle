@@ -32,7 +32,7 @@ const input = (state: Partial<FighterState>, extra: Partial<ActionInput> = {}): 
 /** P1's stance (left side leads), then the engine's action on top, the way FighterView.update builds a frame. */
 function action(state: Partial<FighterState>, extra: Partial<ActionInput> = {}): Pose {
   const pose = stance(createPose(), 0, 0, 0, 0, 1);
-  const motion: Motion = { lunge: 0, tilt: 0, lift: 0 };
+  const motion: Motion = { lunge: 0, tilt: 0, lift: 0, slide: 0, turn: 0, roll: 0 };
   return applyAction(pose, input(state, extra), motion);
 }
 

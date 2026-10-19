@@ -13,9 +13,9 @@ const CLOCK = import.meta.env.DEV && new URLSearchParams(window.location.search)
 const INK = '#0b0a10';
 
 /**
- * The walkout's few 2D touches over the 3D entrance (director/Walkout.ts): cinema bars, a fade up from black, a small
- * name plate for each fighter during their shot, the white flash into the fire VS. Everything is posed every frame
- * from the director's clock (no CSS animations), so it stays locked to the music and the 3D.
+ * The walkout's few 2D touches over the 3D entrance (director/Walkout.ts): cinema bars, the white flash it opens out
+ * of, an info plate for each fighter during their shot, the gold flash into the fire VS. Everything is posed every
+ * frame from the director's clock (no CSS animations), so it stays locked to the music and the 3D.
  */
 export function Walkout() {
   const on = useGameStore((s) => s.walkout);
@@ -82,37 +82,18 @@ function WalkoutTitles() {
       ))}
       <Plate id="p1" use={use} beats={B} />
       <Plate id="p2" use={use} beats={B} />
-      {/* A smear across the cuts between shots: a dark motion-blurred band whipping past, covering the cut. */}
-      {(['p2', 'two'] as const).map((beat, i) => (
-        <div
-          key={beat}
-          ref={use<HTMLDivElement>((t, el) => {
-            const at = B()[beat];
-            const k = (t - (at - 0.13)) / 0.26;
-            el.style.visibility = k > 0 && k < 1 ? 'visible' : 'hidden';
-            const dir = i === 0 ? 1 : -1;
-            el.style.transform = `translateX(${dir * (-150 + 300 * k)}vw) skewX(${dir * -24}deg)`;
-          })}
-          className="absolute inset-y-[-10%] left-[-40vw] w-[180vw]"
-          style={{
-            visibility: 'hidden',
-            background: `linear-gradient(90deg, transparent 0%, rgba(8,8,14,0.55) 12%, ${INK} 30%, ${INK} 70%, rgba(8,8,14,0.55) 88%, transparent 100%)`,
-          }}
-        />
-      ))}
-      {/* Up from black at the start; the white flash into the fire VS. */}
+      {/* The white it opens out of (the flash out of the menus), clearing as the beat drops; the gold flash into the VS. */}
       <div
-        ref={use<HTMLDivElement>((t, el) => void (el.style.opacity = String(kf(t, [[0, 1], [0.45, 0]], linear))))}
-        className="absolute inset-0"
-        style={{ background: INK }}
+        ref={use<HTMLDivElement>((t, el) => void (el.style.opacity = String(kf(t, [[B().open - 0.22, 1], [B().open + 0.08, 0]], linear))))}
+        className="absolute inset-0 bg-paper"
       />
       <div
         ref={use<HTMLDivElement>((t, el) => {
           const u = t - B().vs;
           el.style.opacity = String(u < 0 ? 0 : kf(u, [[0, 0.95], [0.06, 0.95], [0.4, 0]], linear));
         })}
-        className="absolute inset-0 bg-paper"
-        style={{ opacity: 0 }}
+        className="absolute inset-0"
+        style={{ opacity: 0, background: 'radial-gradient(circle at 50% 55%, #fffbe8 0%, #ffe39a 55%, #ffb547 100%)' }}
       />
       {CLOCK && <div ref={use<HTMLDivElement>((t, el) => void (el.textContent = t.toFixed(2)))} className="absolute left-2 top-2 bg-ink px-2 font-mono text-xl text-hp" />}
       {host && (
@@ -128,7 +109,7 @@ function WalkoutTitles() {
   );
 }
 
-/** A small name plate, low on the fighter's side of the frame, while their shot is on. */
+/** The fighter's info plate, low on their side of the frame, coming in partway through their shot. */
 function Plate({ id, use, beats }: { id: PlayerId; use: Use; beats: () => { p1: number; p2: number; two: number } }) {
   const player = useGameStore((s) => s.players[id]);
   const { name, tag } = splitName(player.name);
@@ -136,8 +117,8 @@ function Plate({ id, use, beats }: { id: PlayerId; use: Use; beats: () => { p1: 
   const color = PLAYER_COLORS[id];
   const ref = use<HTMLDivElement>((t, el) => {
     const B = beats();
-    const from = (p1 ? B.p1 : B.p2) + 0.35;
-    const to = (p1 ? B.p2 : B.two) - 0.2;
+    const from = (p1 ? B.p1 + 1.1 : B.p2 + 0.8) - 0.45;
+    const to = (p1 ? B.p2 : B.two) - 0.05;
     const k = Math.min(easeOut((t - from) / 0.45), 1 - easeOut((t - to + 0.3) / 0.3));
     el.style.opacity = String(Math.max(0, k));
     el.style.transform = `translateX(${(1 - Math.max(0, k)) * (p1 ? -24 : 24)}px)`;
@@ -152,7 +133,7 @@ function Plate({ id, use, beats }: { id: PlayerId; use: Use; beats: () => { p1: 
         <span className="px-1.5 py-0.5 font-display tracking-normal text-ink" style={{ background: color }}>
           {p1 ? 'P1' : 'P2'}
         </span>
-        <span>{tag ?? (p1 ? 'Player 1' : 'Player 2')}</span>
+        <span>{tag ?? 'Information'}</span>
       </div>
       <div className="max-w-[40vw] truncate font-display text-3xl uppercase leading-none tracking-tight text-paper drop-shadow-[0_2px_8px_rgba(0,0,0,0.7)] sm:text-5xl">
         {name}

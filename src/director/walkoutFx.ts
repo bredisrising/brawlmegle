@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { BEAT } from './walkoutTiming';
 
 /**
  * The walkout's stage: fire (cel-shaded flame sheets that always face the camera, a floor glow, embers) for the VS
@@ -291,7 +293,7 @@ void main() {
   float bar1 = smoothstep(0.005, 0.0, abs(h - 0.16)) * step(0.15, seg) * step(seg, 0.55);
   float bar2 = smoothstep(0.005, 0.0, abs(h - 0.27)) * step(0.6, fract(az * 1.7)) * step(fract(az * 1.7), 0.85);
   float bar3 = smoothstep(0.004, 0.0, abs(h - 0.09)) * step(0.7, fract(az * 3.1 + 0.5));
-  col += vec3(0.1, 2.2, 2.0) * bar1 + vec3(2.4, 0.2, 1.6) * bar2 + vec3(0.2, 1.6, 1.9) * bar3 * 0.7;
+  col += vec3(0.1, 1.1, 1.0) * bar1 + vec3(2.0, 0.2, 1.3) * bar2 + vec3(0.2, 0.9, 1.1) * bar3 * 0.7;
   // Stage lamps: a row of hot points up in the rig.
   vec2 lamp = vec2(fract(az * 4.0) - 0.5, (h - 0.42) * 7.0);
   col += vec3(4.0, 3.4, 2.6) * smoothstep(0.06, 0.0, length(lamp));
@@ -345,6 +347,22 @@ void main() {
 }
 `;
 
+/** The warm haze at the back of the club, lit by the lanterns: what the crowd stands out against. */
+const BACKGLOW_FRAG = /* glsl */ `
+varying vec2 vUv;
+uniform float uTime, uAmount;
+uniform vec3 uColor;
+${NOISE}
+void main() {
+  float y = vUv.y;
+  float band = exp(-pow((y - 0.33) / 0.2, 2.0)) + 0.35 * exp(-pow((y - 0.6) / 0.25, 2.0));
+  float across = smoothstep(0.0, 0.3, vUv.x) * smoothstep(1.0, 0.7, vUv.x);
+  float n = fbm(vec2(vUv.x * 4.0 + uTime * 0.03, y * 2.5 - uTime * 0.02));
+  float a = band * across * (0.55 + 0.6 * n) * uAmount;
+  gl_FragColor = vec4(uColor * a, a);
+}
+`;
+
 /** Haze: a soft sheet of drifting smoke. */
 const HAZE_FRAG = /* glsl */ `
 varying vec2 vUv;
@@ -360,10 +378,247 @@ void main() {
 }
 `;
 
+/**
+ * The club's crowd: dark figures all round the stage, edged with the lanterns' warm light, bouncing on the beat; some
+ * with both arms up, some pumping a fist, some holding a phone up. Instanced: one draw for the bodies, one for the arms.
+ */
+const CROWD_VERT = /* glsl */ `
+varying vec3 vNormalV, vViewV;
+varying float vDepth;
+void main() {
+  mat4 m = modelMatrix * instanceMatrix;
+  vec4 mv = viewMatrix * m * vec4(position, 1.0);
+  vNormalV = normalize(mat3(viewMatrix) * mat3(m) * normal);
+  vViewV = -mv.xyz;
+  vDepth = -mv.z;
+  gl_Position = projectionMatrix * mv;
+}
+`;
+const CROWD_FRAG = /* glsl */ `
+varying vec3 vNormalV, vViewV;
+varying float vDepth;
+uniform vec3 uRim, uCool;
+uniform float uAmount;
+void main() {
+  vec3 n = normalize(vNormalV);
+  float rim = pow(1.0 - abs(dot(n, normalize(vViewV))), 4.0);
+  // Black shapes against the haze, a thin warm edge from the lanterns above, a cold neon one from below.
+  vec3 col = vec3(0.006, 0.005, 0.007) + uRim * rim * smoothstep(-0.2, 0.7, n.y) + uCool * rim * 0.4 * smoothstep(0.2, -0.6, n.y);
+  col *= mix(1.0, 0.4, smoothstep(2.5, 6.0, vDepth));
+  gl_FragColor = vec4(col * uAmount, 1.0);
+}
+`;
+
+type Fan = { x: number; z: number; scale: number; build: number; phase: number; mode: number; face: number };
+
+export class Crowd {
+  readonly group = new THREE.Group();
+  private readonly bodies: THREE.InstancedMesh;
+  private readonly arms: THREE.InstancedMesh;
+  private readonly material: THREE.ShaderMaterial;
+  private readonly fans: Fan[] = [];
+  private readonly geometries: THREE.BufferGeometry[] = [];
+  private readonly m = new THREE.Matrix4();
+  private readonly q = new THREE.Quaternion();
+  private readonly lean = new THREE.Quaternion();
+  private readonly e = new THREE.Euler();
+  private readonly v = new THREE.Vector3();
+  private readonly s = new THREE.Vector3();
+  private readonly shoulder = new THREE.Vector3();
+
+  constructor(lowPower: boolean) {
+    // A body (legs, torso, shoulders and head as one piece) and an arm hanging from its shoulder (the origin).
+    const parts = [
+      new THREE.CapsuleGeometry(0.068, 0.3, 3, 8).translate(0, 0.2, 0),
+      new THREE.CapsuleGeometry(0.082, 0.2, 4, 10).translate(0, 0.5, 0),
+      new THREE.SphereGeometry(1, 12, 8).scale(0.13, 0.055, 0.075).translate(0, 0.64, 0),
+      new THREE.SphereGeometry(0.058, 12, 10).scale(1, 1.12, 1).translate(0, 0.77, 0),
+    ];
+    const body = mergeGeometries(parts);
+    for (const g of parts) g.dispose();
+    const arm = new THREE.CapsuleGeometry(0.024, 0.26, 3, 6).translate(0, -0.155, 0);
+    this.geometries.push(body, arm);
+    this.material = new THREE.ShaderMaterial({
+      vertexShader: CROWD_VERT,
+      fragmentShader: CROWD_FRAG,
+      uniforms: { uRim: { value: hdr('#ff9a4a', 0.45) }, uCool: { value: hdr('#3fd8ff', 0.35) }, uAmount: { value: 0 } },
+    });
+    // Rows behind the stage and banks at the sides, packed loosely, everyone facing the middle.
+    let seed = 7;
+    const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    const rows: [z: number, from: number, to: number, n: number][] = lowPower
+      ? [[-2.2, -2.4, 2.4, 11], [-3.0, -3.0, 3.0, 12]]
+      : [[-2.0, -2.2, 2.2, 14], [-2.5, -2.7, 2.7, 17], [-3.1, -3.2, 3.2, 19], [-3.8, -3.8, 3.8, 21]];
+    for (const [z, from, to, n] of rows) {
+      for (let i = 0; i < n; i++) {
+        const x = from + ((to - from) * (i + 0.5 + (rand() - 0.5) * 0.7)) / n;
+        this.fans.push({ x, z: z + (rand() - 0.5) * 0.3, scale: 0.98 + rand() * 0.28, build: 0.88 + rand() * 0.3, phase: rand(), mode: Math.floor(rand() * 4), face: 0 });
+      }
+    }
+    if (!lowPower) {
+      for (const side of [-1, 1]) {
+        for (let i = 0; i < 10; i++) {
+          const x = side * (1.7 + rand() * 1.2);
+          const z = -1.4 + (1.8 * i) / 9 + (rand() - 0.5) * 0.2;
+          this.fans.push({ x, z, scale: 0.98 + rand() * 0.28, build: 0.88 + rand() * 0.3, phase: rand(), mode: Math.floor(rand() * 4), face: 0 });
+        }
+      }
+    }
+    for (const f of this.fans) f.face = Math.atan2(-f.x, -f.z + 0.6);
+    this.bodies = new THREE.InstancedMesh(body, this.material, this.fans.length);
+    this.arms = new THREE.InstancedMesh(arm, this.material, this.fans.length * 2);
+    for (const mesh of [this.bodies, this.arms]) {
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      mesh.frustumCulled = false;
+      this.group.add(mesh);
+    }
+  }
+
+  /** `beat`: seconds into the groove (the walkout track's drop); `amount` fades them with the stage. */
+  update(beat: number, time: number, amount: number) {
+    this.material.uniforms.uAmount.value = amount;
+    this.fans.forEach((f, i) => {
+      // Down on the beat, everyone a little off it; hyped once the beat drops.
+      const hype = beat > 0 ? 1 : 0.35;
+      const c = Math.cos((2 * Math.PI * (beat + f.phase * 0.12)) / BEAT);
+      const bob = 0.03 * ((1 + c) / 2) ** 2 * hype;
+      // Swaying side to side with the beat, each at their own lean.
+      const sway = (0.05 * Math.sin((Math.PI * (beat + f.phase * 0.3)) / BEAT) * hype + (f.phase - 0.5) * 0.08);
+      this.q.setFromEuler(this.e.set(0, f.face, sway, 'YXZ'));
+      this.s.set(f.scale * f.build, f.scale, f.scale * f.build);
+      this.m.compose(this.v.set(f.x, -bob * f.scale, f.z), this.q, this.s);
+      this.bodies.setMatrixAt(i, this.m);
+      const body = this.lean.copy(this.q);
+      for (const side of [-1, 1] as const) {
+        // Raise: 0 = hanging, PI = straight up; out: a little out to the side.
+        let raise = 0.25;
+        const wave = Math.sin(time * 2.2 + f.phase * 6 + side);
+        if (f.mode === 0) raise = (2.6 + 0.2 * wave) * hype + 0.25 * (1 - hype);
+        else if (f.mode === 1 && side === 1) raise = 0.25 + (2.4 + 0.5 * (1 - (1 + c) / 2)) * hype;
+        else if (f.mode === 3 && side === -1) raise = 2.3 * hype + 0.25;
+        const facing = this.q.copy(body);
+        this.shoulder.set(side * 0.12 * f.build, 0.64, 0).multiplyScalar(f.scale).applyQuaternion(facing).add(this.v.set(f.x, -bob * f.scale, f.z));
+        // Out to the side (about the body's front axis), then a little forward.
+        facing.multiply(QZ.setFromAxisAngle(Z, side * raise)).multiply(QX.setFromAxisAngle(X, -0.25 * Math.min(1, raise / 2)));
+        this.m.compose(this.shoulder, this.q, this.s.setScalar(f.scale));
+        this.arms.setMatrixAt(i * 2 + (side === 1 ? 1 : 0), this.m);
+      }
+    });
+    this.bodies.instanceMatrix.needsUpdate = true;
+    this.arms.instanceMatrix.needsUpdate = true;
+  }
+
+  dispose() {
+    for (const g of this.geometries) g.dispose();
+    this.material.dispose();
+    this.bodies.dispose();
+    this.arms.dispose();
+  }
+}
+const X = new THREE.Vector3(1, 0, 0);
+const Z = new THREE.Vector3(0, 0, 1);
+const QX = new THREE.Quaternion();
+const QZ = new THREE.Quaternion();
+
+/**
+ * Paper lanterns hung in rows over and behind the stage, glowing orange (HDR, so they bloom), swaying a little: the
+ * club's light.
+ */
+const LANTERN_VERT = /* glsl */ `
+varying vec3 vNormalL, vNormalV, vViewV;
+void main() {
+  mat4 m = modelMatrix * instanceMatrix;
+  vec4 mv = viewMatrix * m * vec4(position, 1.0);
+  vNormalL = normal;
+  vNormalV = normalize(mat3(viewMatrix) * mat3(m) * normal);
+  vViewV = -mv.xyz;
+  gl_Position = projectionMatrix * mv;
+}
+`;
+const LANTERN_FRAG = /* glsl */ `
+varying vec3 vNormalL, vNormalV, vViewV;
+uniform vec3 uHot, uDeep;
+uniform float uAmount;
+void main() {
+  vec3 n = normalize(vNormalL);
+  float facing = abs(dot(normalize(vNormalV), normalize(vViewV)));
+  // Hot through the middle of the paper, deep red at the edges; the ribs and the caps dark.
+  vec3 col = mix(uDeep, uHot, pow(facing, 1.5));
+  float rib = 0.72 + 0.28 * smoothstep(0.0, 0.6, abs(cos(atan(n.x, n.z) * 6.0)));
+  float cap = smoothstep(0.82, 0.9, abs(n.y));
+  col *= rib * (1.0 - 0.92 * cap);
+  gl_FragColor = vec4(col * uAmount, 1.0);
+}
+`;
+
+type Hung = { x: number; y: number; z: number; size: number; phase: number };
+
+export class Lanterns {
+  readonly mesh: THREE.InstancedMesh;
+  private readonly material: THREE.ShaderMaterial;
+  private readonly geometry = new THREE.SphereGeometry(1, 16, 12);
+  private readonly hung: Hung[] = [];
+  private readonly m = new THREE.Matrix4();
+  private readonly q = new THREE.Quaternion();
+  private readonly e = new THREE.Euler();
+  private readonly v = new THREE.Vector3();
+  private readonly s = new THREE.Vector3();
+
+  constructor(lowPower: boolean) {
+    this.material = new THREE.ShaderMaterial({
+      vertexShader: LANTERN_VERT,
+      fragmentShader: LANTERN_FRAG,
+      uniforms: { uHot: { value: hdr('#ff9838', 1.9) }, uDeep: { value: hdr('#c42a12', 0.75) }, uAmount: { value: 0 } },
+    });
+    let seed = 11;
+    const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    // Strings across the room: [z, height, half width, count, sag].
+    const strings: [number, number, number, number, number][] = lowPower
+      ? [[-4.4, 1.3, 4, 12, 0.06], [-2.4, 1.5, 3, 9, 0.1]]
+      : [
+          [-4.9, 1.2, 4.6, 19, 0.06], [-4.4, 1.38, 4.2, 16, 0.08], [-4.2, 1.9, 4.0, 16, 0.14], [-3.3, 1.65, 3.4, 13, 0.12],
+          [-2.4, 1.5, 2.9, 11, 0.1], [-1.2, 1.6, 2.4, 8, 0.1], [0.2, 1.8, 2.0, 6, 0.08],
+        ];
+    for (const [z, y, w, n, sag] of strings) {
+      for (let i = 0; i < n; i++) {
+        const u = (i + 0.5) / n;
+        const x = -w + 2 * w * u + (rand() - 0.5) * 0.1;
+        this.hung.push({ x, y: y - sag * Math.sin(Math.PI * u), z: z + (rand() - 0.5) * 0.15, size: 0.05 + rand() * 0.03, phase: rand() * 6 });
+      }
+    }
+    this.mesh = new THREE.InstancedMesh(this.geometry, this.material, this.hung.length);
+    this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.mesh.frustumCulled = false;
+  }
+
+  update(time: number, amount: number) {
+    this.material.uniforms.uAmount.value = amount;
+    this.hung.forEach((h, i) => {
+      const swing = 0.05 * Math.sin(time * 0.9 + h.phase);
+      this.q.setFromEuler(this.e.set(0.04 * Math.sin(time * 0.7 + h.phase * 1.3), h.phase, swing));
+      this.s.set(h.size, h.size * 1.18, h.size);
+      this.m.compose(this.v.set(h.x + swing * 0.05, h.y, h.z), this.q, this.s);
+      this.mesh.setMatrixAt(i, this.m);
+    });
+    this.mesh.instanceMatrix.needsUpdate = true;
+  }
+
+  dispose() {
+    this.geometry.dispose();
+    this.material.dispose();
+    this.mesh.dispose();
+  }
+}
+
 export class Stage {
   readonly group = new THREE.Group();
   /** 0 = gone, 1 = up. */
   amount = 0;
+  /** Seconds into the walkout track's groove (negative before the drop): the crowd bounces to it. */
+  beat = -1;
+  private readonly crowd: Crowd;
+  private readonly lanterns: Lanterns;
+  private readonly backglow: THREE.ShaderMaterial;
   /**
    * The spotlights (key in front, rim behind, per fighter): always in the scene, at zero when the stage is down, since
    * adding or removing a light recompiles every lit material (a long hitch). None in low power: a phone shouldn't pay
@@ -382,7 +637,7 @@ export class Stage {
   private readonly moteMaterial: THREE.PointsMaterial;
   private readonly geometries: THREE.BufferGeometry[] = [];
   private time = 0;
-  private readonly keyPower = 6;
+  private readonly keyPower = 9;
   private readonly rimPower = 5.5;
 
   constructor(lowPower: boolean) {
@@ -394,7 +649,7 @@ export class Stage {
       side: THREE.BackSide,
     });
     // Close around the stage: everything past it (the sky, the hills) goes to black.
-    const domeGeometry = new THREE.SphereGeometry(5.5, 48, 24);
+    const domeGeometry = new THREE.SphereGeometry(9, 48, 24);
     this.geometries.push(domeGeometry);
     this.dome = new THREE.Mesh(domeGeometry, this.domeMaterial);
     this.group.add(this.dome);
@@ -429,7 +684,7 @@ export class Stage {
     });
     for (let i = 0; i < 2; i++) {
       if (!lowPower) {
-        const key = new THREE.SpotLight('#fff1dc', 0, 7, 0.3, 0.6, 1.1);
+        const key = new THREE.SpotLight('#ffe2bc', 0, 7, 0.3, 0.6, 1.1);
         this.lights.add(key, key.target);
         this.spots.push(key);
         const rim = new THREE.SpotLight(i === 0 ? '#ff6ab4' : '#6ab8ff', 0, 5, 0.45, 0.5, 1.2);
@@ -445,21 +700,21 @@ export class Stage {
     }
     // Background beams sweeping slowly through the dark.
     if (!lowPower) {
-      beam('#5ee8ff', 0.12, 1).position.set(-1.6, 3.4, -3.2);
-      beam('#ff2d95', 0.12, -1).position.set(1.7, 3.4, -3.4);
-      beam('#b9a8ff', 0.08, 0.6).position.set(0.1, 3.6, -4.2);
+      beam('#ffb066', 0.12, 1).position.set(-1.6, 3.4, -3.2);
+      beam('#ff7a3a', 0.12, -1).position.set(1.7, 3.4, -3.4);
+      beam('#5ee8ff', 0.06, 0.6).position.set(0.1, 3.6, -4.2);
     }
     // A little haze low over the floor, behind the fighters.
     const hazeGeometry = new THREE.PlaneGeometry(1, 1);
     this.geometries.push(hazeGeometry);
     const hazeAt: [number, number, number, number, number][] = lowPower
       ? [[0, 0.3, -1.0, 4, 1.2]]
-      : [[0, 0.3, -1.0, 4.5, 1.3], [0.2, 0.55, -2.2, 6, 2]];
+      : [[0, 0.3, -1.0, 4.5, 1.3], [0.2, 0.55, -2.2, 6, 2], [-0.3, 0.9, -3.6, 9, 2.6]];
     hazeAt.forEach(([x, y, z, w, h], i) => {
       const material = new THREE.ShaderMaterial({
         vertexShader: VERT,
         fragmentShader: HAZE_FRAG,
-        uniforms: { uTime: { value: 0 }, uAmount: { value: 0 }, uSeed: { value: i * 3.1 }, uColor: { value: new THREE.Color('#6f6a8c') } },
+        uniforms: { uTime: { value: 0 }, uAmount: { value: 0 }, uSeed: { value: i * 3.1 }, uColor: { value: new THREE.Color('#70462f') } },
         transparent: true,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
@@ -480,12 +735,28 @@ export class Stage {
     this.moteMaterial = new THREE.PointsMaterial({ color: '#ffe8c8', size: 0.006, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
     this.motes = new THREE.Points(moteGeometry, this.moteMaterial);
     this.group.add(this.motes);
+    this.crowd = new Crowd(lowPower);
+    this.lanterns = new Lanterns(lowPower);
+    this.group.add(this.crowd.group, this.lanterns.mesh);
+    this.backglow = new THREE.ShaderMaterial({
+      vertexShader: VERT,
+      fragmentShader: BACKGLOW_FRAG,
+      uniforms: { uTime: { value: 0 }, uAmount: { value: 0 }, uColor: { value: hdr('#ff7a2e', 0.55) } },
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const glow = new THREE.Mesh(hazeGeometry, this.backglow);
+    glow.position.set(0, 1.4, -5.6);
+    glow.scale.set(16, 4.4, 1);
+    glow.renderOrder = 1;
+    this.group.add(glow);
   }
 
   /** Aim fighter `i`'s key and rim lights, beam and lamp at `at` (their feet). */
   aim(i: number, at: THREE.Vector3) {
     const side = i === 0 ? -1 : 1; // the fighter's outside
-    const lamp = this.lamps[i].position.set(at.x + side * 0.45, 2.3, at.z + 0.9);
+    const lamp = this.lamps[i].position.set(at.x + side * 0.4, 1.75, at.z + 1.15);
     const key = this.spots[i];
     if (key) {
       key.position.copy(lamp);
@@ -533,6 +804,10 @@ export class Stage {
     this.moteMaterial.opacity = 0.7 * k;
     this.motes.rotation.y = this.time * 0.02;
     this.motes.position.y = Math.sin(this.time * 0.3) * 0.02;
+    this.crowd.update(this.beat, this.time, k);
+    this.lanterns.update(this.time, k);
+    this.backglow.uniforms.uTime.value = this.time;
+    this.backglow.uniforms.uAmount.value = k;
   }
 
   dispose() {
@@ -545,6 +820,9 @@ export class Stage {
     for (const b of this.beams) b.material.dispose();
     for (const h of this.hazes) h.material.dispose();
     for (const s of [...this.spots, ...this.rims]) s.dispose();
+    this.crowd.dispose();
+    this.lanterns.dispose();
+    this.backglow.dispose();
   }
 }
 

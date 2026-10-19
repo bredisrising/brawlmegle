@@ -98,7 +98,7 @@ export class FighterView {
   /** Called once when a K.O.'d body hits the floor (world point), for the dust. */
   onLand: ((at: THREE.Vector3) => void) | null = null;
   private flash = 0;
-  private readonly motion: Motion = { lunge: 0, tilt: 0, lift: 0 };
+  private readonly motion: Motion = { lunge: 0, tilt: 0, lift: 0, slide: 0, turn: 0, roll: 0 };
   /** Stepped animation: time since the shown pose last changed, and what the engine was doing then. */
   private sinceStep = Infinity;
   private shownPhase = '';
@@ -312,8 +312,8 @@ export class FighterView {
     this.shownPhase = phaseKey;
     // Smooth mode eases a little to hide the odd pop (a strike cut off by a hit); stepped mode pops on purpose.
     for (const j of JOINTS) this.pose[j].lerp(this.target[j], stepped ? 1 : 0.6);
-    this.body.position.set(0, this.motion.lift, this.motion.lunge);
-    this.body.rotation.set(this.motion.tilt, 0, 0);
+    this.body.position.set(this.motion.slide, this.motion.lift, this.motion.lunge);
+    this.body.rotation.set(this.motion.tilt, this.motion.turn, this.motion.roll);
     this.show();
     this.updateFlash(dt);
   }

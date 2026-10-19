@@ -1,50 +1,163 @@
-import { Vector3 } from 'three';
-import { GUARD_POSE, copyPose, type Pose } from './pose';
+import { Euler, Quaternion, Vector3 } from 'three';
+import type { PlayerId } from '../types';
+import { GUARD_POSE, JOINTS, copyPose, type JointName, type Pose } from './pose';
 import { crouch, lean, solve, twist } from './fightPose';
-import { clamp01, smoothstep, type Signature } from './walkoutTiming';
+import { BEAT, clamp01, easeInOut, smoothstep, type Beats } from './walkoutTiming';
 
 /**
- * The walkout's body language, on the joint pose (fighter space: +z the way the fighter faces, +x their left, feet at
- * y = 0, ~1 m tall). During the walkout the fighters face the camera (the director turns them), so these are built
- * square to the front from a relaxed stand, not on the bladed fight stance: walking up to the mark, waiting with arms
- * folded, and one signature action each. `inner` is the hand on the opponent's side (1 = left, P1; -1 = right, P2).
+ * The walkout's choreography: Jamie's walkout from Street Fighter 6, move for move, on the joint pose (fighter space:
+ * +z the way the fighter faces, +x their left, feet at y = 0, ~1 m tall). The director turns both fighters to the
+ * camera, so it's all built square to the front from a relaxed stand:
+ *
+ *   fighter 1  dance-walks in, swings an arm up overhead and down across, flings it out, rolling hands, the finger wag,
+ *              both hands thrown up; then in the two-shot drops into a handstand freeze (legs scissoring) and wheels
+ *              over onto their feet, a hand in their hair and the other arm out.
+ *   fighter 2  walks in and grooves while fighter 1's on; then an arm up overhead into a full spin, chin up, a hand on
+ *              the chest; in the two-shot rolling hands, a quick spin, a hand on the hip and a flick by the face.
+ *
+ * Hands follow keyed paths (`[time, x, y, z]`, x toward the other fighter); the body turns, leans, sinks and bounces on
+ * the beat. The tricks (spins, the handstand) move the whole body: `perform` fills a Body the view applies to its body
+ * group (Motion's slide, lift, turn and roll).
  */
 const UPPER_ARM = GUARD_POSE.lShoulder.distanceTo(GUARD_POSE.lElbow);
 const FOREARM = GUARD_POSE.lElbow.distanceTo(GUARD_POSE.lWrist);
-const ARM = UPPER_ARM + FOREARM;
+const THIGH = GUARD_POSE.lHip.distanceTo(GUARD_POSE.lKnee);
+const SHIN = GUARD_POSE.lKnee.distanceTo(GUARD_POSE.lAnkle);
+/** How far apart the fighters stand for the walkout (each one this far out from their mark, fighter units). */
+const SPREAD = 0.16;
+/** Where fighter 1 drops into the freeze from, out past their spot (they wheel back onto it). */
+const FREEZE_FROM = 0.34;
+/** The lowest point of a body in the middle of a trick sits this high (a hand or a foot on the floor). */
+const FLOOR = 0.025;
+
+/** Whole-body motion for the trick moves, in the fighter's own space (the view's body group). */
+export type Body = {
+  /** Sideways (+x, the fighter's left) and up. */
+  slide: number;
+  lift: number;
+  /** Turn about the feet (a spin) and roll about the facing axis (the handstand), radians. */
+  turn: number;
+  roll: number;
+  /** Where the fighter's spot is, sideways (the slide without a trick's own travel): the camera frames this. */
+  spot: number;
+};
+
+type Key = readonly [t: number, x: number, y: number, z: number];
+type Num = readonly [t: number, v: number];
+type Side = 1 | -1;
+
 const a = new Vector3();
 const b = new Vector3();
-const hint = new Vector3();
-const lateral = new Vector3();
+const pole = new Vector3();
+const pivot = new Vector3();
+const moved = new Vector3();
+const quat = new Quaternion();
+const euler = new Euler();
+const base = createScratch();
+const layer = createScratch();
 
-type Side = 1 | -1;
-const arm = (s: Side) => (s === 1 ? (['lShoulder', 'lElbow', 'lWrist'] as const) : (['rShoulder', 'rElbow', 'rWrist'] as const));
-const shoulder = (p: Pose, s: Side) => p[arm(s)[0]];
-
-/** Put a hand at `target` (fighter space); the elbow bends toward `pole`. */
-function reach(p: Pose, s: Side, target: Vector3, pole: Vector3) {
-  const [sh, el, wr] = arm(s);
-  solve(p[sh], target, UPPER_ARM, FOREARM, pole, p[el], p[wr]);
-}
-
-/** Put a hand at an offset from its own shoulder. */
-function reachFrom(p: Pose, s: Side, dx: number, dy: number, dz: number, pole: Vector3) {
-  reach(p, s, a.copy(shoulder(p, s)).add(b.set(dx, dy, dz)), pole);
-}
-
-/** 0 -> 1 -> 0 over [start, start + len]: a quick strike out and back. */
-function strike(t: number, start: number, out = 0.08, hold = 0.06, back = 0.16) {
-  const u = t - start;
-  if (u < 0 || u > out + hold + back) return 0;
-  if (u < out) return smoothstep(u / out);
-  if (u < out + hold) return 1;
-  return 1 - smoothstep((u - out - hold) / back);
+function createScratch(): Pose {
+  return Object.fromEntries(JOINTS.map((j) => [j, new Vector3()])) as Pose;
 }
 
 /** 0 before `start`, easing to 1 over `len`. */
 const ramp = (t: number, start: number, len: number) => smoothstep((t - start) / len);
 /** 1 inside [from, to] (eased in and out over `edge`), else 0. */
-const span = (t: number, from: number, to: number, edge = 0.25) => Math.min(ramp(t, from, edge), 1 - ramp(t, to - edge, edge));
+const span = (t: number, from: number, to: number, edge = 0.2) => Math.min(ramp(t, from - edge, edge), 1 - ramp(t, to, edge));
+
+/** Catmull-Rom through keyed values: smooth arcs through every key, held at the ends. */
+function cr(t: number, n: number, time: (i: number) => number, value: (i: number) => number) {
+  if (t <= time(0)) return value(0);
+  if (t >= time(n - 1)) return value(n - 1);
+  let i = 0;
+  while (t > time(i + 1)) i++;
+  const s = (t - time(i)) / Math.max(1e-6, time(i + 1) - time(i));
+  const p0 = value(Math.max(0, i - 1));
+  const p1 = value(i);
+  const p2 = value(i + 1);
+  const p3 = value(Math.min(n - 1, i + 2));
+  const s2 = s * s;
+  const s3 = s2 * s;
+  return 0.5 * (2 * p1 + (p2 - p0) * s + (2 * p0 - 5 * p1 + 4 * p2 - p3) * s2 + (3 * p1 - p0 - 3 * p2 + p3) * s3);
+}
+
+/** A keyed scalar at `t`. */
+function curve(keys: readonly Num[], t: number) {
+  return cr(t, keys.length, (i) => keys[i][0], (i) => keys[i][1]);
+}
+
+/** A keyed hand position at `t`, with x toward the inner side (`inner` flips it into fighter space). */
+function path(out: Vector3, keys: readonly Key[], t: number, inner: Side) {
+  const time = (i: number) => keys[i][0];
+  return out.set(
+    inner * cr(t, keys.length, time, (i) => keys[i][1]),
+    cr(t, keys.length, time, (i) => keys[i][2]),
+    cr(t, keys.length, time, (i) => keys[i][3]),
+  );
+}
+
+const arm = (s: Side) => (s === 1 ? (['lShoulder', 'lElbow', 'lWrist'] as const) : (['rShoulder', 'rElbow', 'rWrist'] as const));
+
+/**
+ * Put a hand at `target`. The elbow hangs down and back with the hand low, and swings out to the side as the hand goes
+ * up past the shoulder (unless `hint` says where it goes).
+ */
+function reach(p: Pose, s: Side, target: Vector3, hint?: Vector3) {
+  const [sh, el, wr] = arm(s);
+  if (!hint) {
+    const up = clamp01((target.y - p[sh].y + 0.05) / 0.2);
+    hint = pole.set(s * (0.5 + 0.5 * up), -1 + 1.3 * up, -0.5 + 0.2 * up);
+  }
+  solve(p[sh], target, UPPER_ARM, FOREARM, hint, p[el], p[wr]);
+}
+
+/** `reach`, eased on by `k`: the hand moves `k` of the way from where it is now to `target`. */
+function reachFrom(p: Pose, s: Side, target: Vector3, hint: Vector3 | undefined, k: number) {
+  if (k <= 0) return;
+  reach(p, s, target.lerpVectors(p[arm(s)[2]], target, Math.min(1, k)), hint);
+}
+
+/** Bend both knees to reach the feet where they are now (after moving the hips or the feet). */
+function plant(p: Pose) {
+  pole.set(0, 0, 1);
+  solve(p.lHip, a.copy(p.lAnkle), THIGH, SHIN, pole, p.lKnee, p.lAnkle);
+  solve(p.rHip, a.copy(p.rAnkle), THIGH, SHIN, pole, p.rKnee, p.rAnkle);
+}
+
+/**
+ * Make every limb its own length again, keeping where its end is and which way its middle joint points: blends between
+ * poses and the lean's shear stretch them a little.
+ */
+function rebuild(p: Pose) {
+  for (const [root, mid, end, l1, l2] of LIMBS) {
+    a.copy(p[end]);
+    b.copy(p[mid]).sub(p[root]);
+    solve(p[root], a, l1, l2, b, p[mid], p[end]);
+  }
+}
+const LIMBS = [
+  ['lShoulder', 'lElbow', 'lWrist', UPPER_ARM, FOREARM],
+  ['rShoulder', 'rElbow', 'rWrist', UPPER_ARM, FOREARM],
+  ['lHip', 'lKnee', 'lAnkle', THIGH, SHIN],
+  ['rHip', 'rKnee', 'rAnkle', THIGH, SHIN],
+] as const;
+
+/** Shift the hips and everything above sideways, feet planted. */
+function sway(p: Pose, dx: number) {
+  for (const j of JOINTS) if (j !== 'lAnkle' && j !== 'rAnkle' && j !== 'lKnee' && j !== 'rKnee') p[j].x += dx;
+  plant(p);
+}
+
+function blend(dst: Pose, src: Pose, k: number, joints: readonly JointName[] = JOINTS) {
+  if (k <= 0) return;
+  for (const j of joints) dst[j].lerp(src[j], Math.min(1, k));
+}
+
+/** The beat's bounce: 1 down on the beat, 0 up between. */
+function dip(clock: number) {
+  const c = Math.cos((2 * Math.PI * clock) / BEAT);
+  return ((1 + c) / 2) ** 2;
+}
 
 /** A relaxed stand, square to the front: feet apart, arms hanging, breathing. */
 export function stand(p: Pose, clock: number) {
@@ -54,203 +167,305 @@ export function stand(p: Pose, clock: number) {
   crouch(p, 0.012);
   const breathe = Math.sin(clock * 2 * Math.PI * 0.32);
   for (const j of ['neck', 'head', 'lShoulder', 'rShoulder'] as const) p[j].y += 0.004 * breathe;
-  for (const s of [1, -1] as const) reachFrom(p, s, s * 0.05, -0.27, 0.03, hint.set(s, 0, -1));
-}
-
-/** Walking forward (to the mark): `phase` in radians of the stride, `amount` 0..1 (0 = standing). */
-export function walk(p: Pose, phase: number, amount: number) {
-  if (amount <= 0) return;
-  const s = Math.sin(phase);
-  const lift = (v: number) => 0.045 * Math.max(0, v) * amount;
-  p.lAnkle.z += 0.1 * s * amount;
-  p.rAnkle.z -= 0.1 * s * amount;
-  p.lAnkle.y += lift(Math.cos(phase));
-  p.rAnkle.y += lift(-Math.cos(phase));
-  crouch(p, 0.012 * amount * (1 - Math.cos(2 * phase)) * 0.5);
-  twist(p, 0.08 * s * amount);
-  // Arms swing against the legs.
-  for (const sd of [1, -1] as const) reachFrom(p, sd, sd * 0.05, -0.26, 0.03 - 0.09 * s * sd * amount, hint.set(sd, 0, -1));
-}
-
-/** Waiting their turn: arms folded high across the chest, weight on one hip, chin up. */
-export function folded(p: Pose, clock: number, inner: Side) {
-  const sway = Math.sin(clock * 2 * Math.PI * 0.25);
-  // Each hand tucks under the opposite upper arm; the elbows stick out a little in front.
-  reach(p, 1, a.set(-0.075, 0.665 + 0.003 * sway, 0.1), hint.set(1, -0.4, 0.9));
-  reach(p, -1, a.set(0.075, 0.69 + 0.003 * sway, 0.115), hint.set(-1, -0.4, 0.9));
-  p.head.y += 0.008;
-  p.head.z -= 0.01;
-  p.head.x += inner * 0.01; // looking a touch toward the other one
-  p.lHip.y += 0.006 * inner;
-  p.rHip.y -= 0.006 * inner;
+  for (const s of [1, -1] as const) reach(p, s, a.copy(p[arm(s)[0]]).add(b.set(s * 0.05, -0.27, 0.03)));
 }
 
 /**
- * A fighter's signature action, `t` seconds in (about 2.4 s; it holds the last position after). Big, clear shapes:
- * they're read from a medium shot on a forged model, so every move is a whole-arm move.
+ * Walking up to the mark, a step on every beat: `clock` seconds of the music's beat, `amount` 0..1 (0 = standing),
+ * `swagger` 0..1 how much the hips roll and the shoulders and arms swing with it.
  */
-export function signature(p: Pose, kind: Signature, t: number, inner: Side) {
+export function walk(p: Pose, clock: number, amount: number, swagger: number) {
+  if (amount <= 0) return;
+  const phase = (Math.PI * clock) / BEAT;
+  const s = Math.sin(phase);
+  const c = Math.cos(phase);
+  p.lAnkle.z += 0.12 * s * amount;
+  p.rAnkle.z -= 0.12 * s * amount;
+  p.lAnkle.y += 0.06 * Math.max(0, c) * amount;
+  p.rAnkle.y += 0.06 * Math.max(0, -c) * amount;
+  // Down onto each step, the hips rolling over the planted foot, the shoulders rolling against them.
+  crouch(p, (0.01 + 0.03 * swagger) * s * s * amount);
+  sway(p, 0.035 * swagger * c * amount);
+  twist(p, (0.1 + 0.12 * swagger) * s * amount);
+  lean(p, 0.012 * swagger * amount, -0.02 * swagger * c * amount);
+  for (const sd of [1, -1] as const) {
+    const swing = -s * sd * amount;
+    reach(p, sd, a.copy(p[arm(sd)[0]]).add(b.set(sd * (0.06 + 0.05 * swagger), -0.25 + 0.05 * swagger * Math.max(0, swing), 0.03 + (0.09 + 0.08 * swagger) * swing)));
+  }
+  p.head.x -= 0.014 * swagger * c * amount;
+  plant(p);
+}
+
+/** Waiting for their turn: a light groove, hands loose in front, the head and shoulders on the beat. */
+export function groove(p: Pose, clock: number, inner: Side) {
+  const d = dip(clock);
+  const roll = Math.sin((Math.PI * clock) / BEAT);
+  crouch(p, 0.008 + 0.012 * d);
+  sway(p, 0.012 * roll);
+  for (const s of [1, -1] as const) {
+    const [sh] = arm(s);
+    p[sh].y += 0.006 * roll * s;
+    reach(p, s, a.set(s * 0.12, 0.6 + 0.012 * d, 0.12 + 0.01 * roll * s));
+  }
+  p.head.y -= 0.008 * d;
+  p.head.x += inner * 0.006;
+}
+
+/** Rolling hands: each hand circles about the line across the chest, half a turn apart. */
+function rolling(hand: Vector3, t: number, s: Side, amount: number) {
+  if (amount <= 0) return;
+  const phi = 2 * Math.PI * 4 * t + (s === 1 ? 0 : Math.PI);
+  hand.y += 0.04 * Math.sin(phi) * amount;
+  hand.z += 0.04 * Math.cos(phi) * amount;
+}
+
+/** Elbows out and down for hands working in front of the chest. */
+const chestHint = (s: Side) => pole.set(s, -0.7, -0.3);
+
+// --- Fighter 1: the arm up, the sweep, the finger wag, the hands up (their shot, ~2.6 s; walking in before 0) ---
+
+const SHOW_OUTER: readonly Key[] = [
+  [-0.75, -0.17, 0.53, 0.05], [-0.45, -0.25, 0.73, 0.1], [-0.2, -0.15, 1.02, 0.05], [0, -0.07, 1.06, 0.02],
+  [0.12, 0.02, 0.99, 0.1], [0.27, 0.11, 0.72, 0.18], [0.4, 0.07, 0.58, 0.16], [0.55, -0.36, 0.76, 0.12],
+  [0.7, -0.36, 0.78, 0.1], [0.85, -0.04, 0.68, 0.17], [1.25, -0.04, 0.68, 0.17], [1.35, -0.1, 0.6, 0.14],
+  [1.5, -0.13, 0.83, 0.22], [2, -0.13, 0.83, 0.22], [2.12, -0.16, 0.72, 0.16], [2.25, -0.35, 1.04, 0.1],
+  [2.45, -0.37, 1.06, 0.08], [2.61, -0.28, 0.84, 0.12],
+];
+const SHOW_INNER: readonly Key[] = [
+  [-0.1, 0.17, 0.54, 0.06], [0.1, 0.16, 0.58, 0.1], [0.3, 0.13, 0.62, 0.15], [0.55, 0.11, 0.64, 0.17],
+  [0.85, 0.04, 0.66, 0.17], [1.25, 0.04, 0.66, 0.17], [1.38, 0.14, 0.56, 0.06], [1.5, 0.14, 0.53, 0],
+  [2.05, 0.14, 0.53, 0], [2.25, 0.35, 1.04, 0.1], [2.45, 0.37, 1.06, 0.08], [2.61, 0.28, 0.84, 0.12],
+];
+const SHOW_TWIST: readonly Num[] = [
+  [-0.6, 0], [-0.2, -0.12], [0, -0.15], [0.15, 0.05], [0.3, 0.35], [0.45, 0.22], [0.58, -0.3], [0.75, -0.18],
+  [0.9, 0], [1.25, 0], [1.5, -0.12], [2, -0.1], [2.25, 0], [2.61, 0],
+];
+const SHOW_LEAN: readonly Num[] = [
+  [-0.6, 0], [-0.2, -0.02], [0, -0.035], [0.3, 0.045], [0.45, 0.03], [0.6, -0.01], [0.9, 0.02], [1.25, 0.02],
+  [1.5, -0.03], [2, -0.035], [2.25, -0.06], [2.45, -0.065], [2.61, -0.04],
+];
+const SHOW_SIDE: readonly Num[] = [[-0.6, 0], [-0.2, 0.015], [0, 0.02], [0.3, -0.01], [0.6, 0.02], [0.9, 0], [1.5, 0.015], [2, 0.015], [2.3, 0]];
+const SHOW_SINK: readonly Num[] = [[-0.3, 0], [0, 0], [0.3, 0.045], [0.5, 0.02], [0.9, 0.01], [2.1, 0.01], [2.25, 0.025], [2.61, 0.01]];
+
+function showoff(p: Pose, u: number, clock: number, inner: Side) {
   const outer = -inner as Side;
-  switch (kind) {
-    case 'shadowbox': {
-      // Guard up, bouncing; a combo thrown across at the other one (side-on to the camera, so it reads): jab, jab,
-      // cross, hook, cross; then it holds, high guard, chin down.
-      const g = ramp(t, 0, 0.25);
-      const hold = ramp(t, 2.0, 0.25);
-      crouch(p, (0.04 + 0.014 * Math.sin(t * 2 * Math.PI * 2.4) * (1 - hold)) * g);
-      const throws: [Side, number, 'straight' | 'hook'][] = [
-        [inner, 0.35, 'straight'], [inner, 0.6, 'straight'], [outer, 0.9, 'straight'], [inner, 1.3, 'hook'], [outer, 1.68, 'straight'],
-      ];
-      let turn = 0;
-      let reachOut = 0;
-      for (const s of [1, -1] as const) {
-        let out = 0;
-        let hook = false;
-        for (const [hand, at, style] of throws) {
-          if (hand !== s) continue;
-          const k = strike(t, at, 0.07, 0.07, 0.16);
-          if (k > out) {
-            out = k;
-            hook = style === 'hook';
-          }
-        }
-        // Each punch turns the shoulders into it; the cross (far hand) turns the most.
-        turn += inner * (s === inner ? 0.25 : 0.55) * out;
-        reachOut = Math.max(reachOut, out);
-        const guard = a.set(s * 0.055, 0.84, 0.13).lerp(b.copy(shoulder(p, s)).add(hint.set(s * 0.03, -0.27, 0.03)), 1 - g);
-        if (hook) {
-          b.copy(shoulder(p, s)).add(lateral.set(inner * 0.24, 0.02, 0.2));
-          reach(p, s, guard.lerp(b, out), hint.set(s, 0.8, -0.3));
-        } else {
-          b.copy(shoulder(p, s)).add(lateral.set(inner * 0.62, 0.05, 0.55).normalize().multiplyScalar(ARM * 0.97));
-          reach(p, s, guard.lerp(b, out), hint.set(s, -1, 0));
-        }
-      }
-      twist(p, turn);
-      lean(p, 0.03 * reachOut, inner * 0.02 * reachOut);
-      p.head.y -= 0.015 * g;
-      p.head.z += 0.015 * g;
-      return;
+  crouch(p, curve(SHOW_SINK, u) + 0.012 * dip(clock) * ramp(u, -0.2, 0.3));
+  sway(p, 0.018 * Math.sin((Math.PI * clock) / BEAT) * ramp(u, -0.2, 0.3));
+  // Each arm eases on from the walk's swing: the outer one rising overhead as they walk, the inner one at the mark.
+  const hand = path(a, SHOW_OUTER, u, inner);
+  rolling(hand, u - 0.85, outer, span(u, 0.85, 1.25, 0.08));
+  // The finger wag: tsk, tsk, in front of the face.
+  hand.x += 0.035 * Math.sin(2 * Math.PI * 4.6 * (u - 1.55)) * span(u, 1.55, 2, 0.08);
+  reachFrom(p, outer, hand, u > 0.75 && u < 1.3 ? chestHint(outer) : undefined, ramp(u, -0.75, 0.3));
+  const h = path(a, SHOW_INNER, u, inner);
+  rolling(h, u - 0.85, inner, span(u, 0.85, 1.25, 0.08));
+  const onHip = span(u, 1.5, 2.05, 0.12);
+  reachFrom(p, inner, h, onHip > 0.5 ? pole.set(inner, 0.1, -0.6) : u > 0.75 && u < 1.3 ? chestHint(inner) : undefined, ramp(u, -0.1, 0.25));
+  twist(p, inner * curve(SHOW_TWIST, u));
+  lean(p, curve(SHOW_LEAN, u), inner * curve(SHOW_SIDE, u));
+  const wag = span(u, 1.55, 2, 0.08);
+  p.head.x -= 0.008 * Math.sin(2 * Math.PI * 4.6 * (u - 1.55)) * wag;
+  p.head.x += inner * 0.01 * span(u, 1.5, 2.05, 0.15);
+  const laugh = span(u, 2.2, 2.6, 0.12);
+  p.head.y += 0.006 * laugh;
+  p.head.z -= 0.025 * laugh;
+}
+
+// --- Fighter 2: the arm up, a full spin, chin up (their shot, ~2.6 s) ---
+
+const SPIN_OUTER: readonly Key[] = [
+  [0, -0.17, 0.54, 0.06], [0.35, -0.25, 0.78, 0.12], [0.7, -0.11, 1.04, 0.02], [0.95, -0.05, 1.04, -0.05],
+  [1.2, -0.34, 0.86, 0.04], [1.7, -0.34, 0.86, 0.04], [1.95, -0.2, 0.7, 0.12], [2.12, -0.04, 0.7, 0.16],
+  [2.35, -0.03, 0.71, 0.17], [2.61, 0.1, 0.75, 0.2],
+];
+const SPIN_INNER: readonly Key[] = [
+  [0, 0.17, 0.54, 0.06], [0.7, 0.13, 0.62, 0.12], [0.95, 0.08, 0.66, 0.16], [1.95, 0.08, 0.66, 0.16],
+  [2.12, 0.14, 0.55, 0.03], [2.61, 0.14, 0.53, 0],
+];
+const SPIN_TWIST: readonly Num[] = [[0, 0], [0.6, 0.15], [0.95, -0.1], [1.4, -0.2], [1.95, 0], [2.35, 0.05], [2.61, 0.2]];
+const SPIN_LEAN: readonly Num[] = [[0, 0], [0.7, -0.02], [0.95, 0.01], [1.95, 0], [2.2, -0.03], [2.61, -0.02]];
+const SPIN_SINK: readonly Num[] = [[0, 0.01], [0.8, 0.035], [1.1, 0], [1.8, 0], [2, 0.025], [2.3, 0.01]];
+
+function spin(p: Pose, body: Body, v: number, clock: number, inner: Side) {
+  const outer = -inner as Side;
+  crouch(p, curve(SPIN_SINK, v) + 0.01 * dip(clock) * (1 - span(v, 0.9, 1.95, 0.1)));
+  // Up on the ball of the inner foot, the outer knee lifted, for the turn.
+  const pirouette = span(v, 1.05, 1.85, 0.15);
+  const foot = outer === 1 ? p.lAnkle : p.rAnkle;
+  foot.y += 0.1 * pirouette;
+  foot.z += 0.04 * pirouette;
+  foot.x -= outer * 0.04 * pirouette;
+  plant(p);
+  reach(p, outer, path(a, SPIN_OUTER, v, inner));
+  reach(p, inner, path(a, SPIN_INNER, v, inner), v > 2 ? pole.set(inner, 0.1, -0.6) : chestHint(inner));
+  twist(p, inner * curve(SPIN_TWIST, v));
+  lean(p, curve(SPIN_LEAN, v));
+  const chin = ramp(v, 1.95, 0.25);
+  p.head.y += 0.008 * chin;
+  p.head.z -= 0.015 * chin;
+  // The spin itself, toward the raised arm.
+  body.turn += outer * 2 * Math.PI * easeInOut((v - 0.95) / 1.0);
+}
+
+// --- The two-shot: fighter 1's handstand freeze, fighter 2's rolling hands and quick spin (~2.6 s) ---
+
+// Arms wide overhead in a V going over (a cartwheel's star), closer in for the handstand itself.
+const FREEZE_OUTER: readonly Key[] = [
+  [0, -0.17, 0.55, 0.06], [0.3, -0.2, 0.52, -0.06], [0.4, -0.25, 1.0, 0.02], [0.62, -0.15, 1.04, 0.02],
+  [1.3, -0.15, 1.04, 0.02], [1.38, -0.25, 1.0, 0.02], [1.5, -0.27, 0.95, 0.04], [1.62, -0.28, 0.78, 0.1],
+  [1.95, -0.06, 0.95, -0.02], [2.61, -0.05, 0.95, -0.02],
+];
+const FREEZE_INNER: readonly Key[] = [
+  [0, 0.17, 0.55, 0.06], [0.3, 0.24, 0.3, 0.16], [0.4, 0.25, 1.0, 0.02], [0.62, 0.15, 1.04, 0.02],
+  [1.3, 0.15, 1.04, 0.02], [1.38, 0.25, 1.0, 0.02], [1.5, 0.27, 0.95, 0.04], [1.62, 0.28, 0.78, 0.1],
+  [1.95, 0.36, 0.8, 0.14], [2.25, 0.38, 0.8, 0.16], [2.32, 0.37, 0.82, 0.21], [2.42, 0.38, 0.8, 0.15], [2.61, 0.38, 0.8, 0.15],
+];
+const FREEZE_SINK: readonly Num[] = [[0, 0], [0.3, 0.16], [0.4, 0.04], [0.5, 0], [1.48, 0], [1.6, 0.13], [1.85, 0.05], [2.61, 0.035]];
+const FREEZE_LEAN: readonly Num[] = [[0, 0], [0.3, 0.08], [0.4, 0], [1.48, 0], [1.62, 0.06], [1.9, 0], [2.61, -0.01]];
+const FREEZE_SIDE: readonly Num[] = [[1.95, 0], [2.2, -0.035], [2.61, -0.035]];
+const FREEZE_TWIST: readonly Num[] = [[0, 0], [0.3, 0.15], [0.4, 0], [1.95, 0], [2.2, 0.1], [2.61, 0.12]];
+/** The wheel: kick up to upside down, hold the freeze, over onto the feet on the far side. */
+const FREEZE_ROLL: readonly Num[] = [[0.38, 0], [0.5, 0.9], [0.6, Math.PI], [1.3, Math.PI], [1.4, 1.5 * Math.PI], [1.5, 2 * Math.PI]];
+const FREEZE_TRAVEL: readonly Num[] = [[0, 0], [0.38, 0], [1, 0.5], [1.5, 1]];
+
+function freeze(p: Pose, body: Body, w: number, clock: number, inner: Side) {
+  const outer = -inner as Side;
+  crouch(p, curve(FREEZE_SINK, w) + 0.01 * dip(clock) * ramp(w, 1.9, 0.3));
+  // Going over: legs wide like a star; upside down, split in a V and scissoring.
+  const legs = span(w, 0.4, 1.48, 0.06);
+  if (legs > 0) {
+    const sc = Math.sin((2 * Math.PI * (w - 0.62)) / 0.6) * span(w, 0.62, 1.3, 0.1);
+    const wide = 0.26 + 0.07 * (1 - span(w, 0.6, 1.3, 0.08));
+    for (const s of [1, -1] as const) {
+      const ankle = s === 1 ? p.lAnkle : p.rAnkle;
+      ankle.lerp(a.set(s * wide, 0.12, s * inner * 0.14 * sc), legs);
     }
-    case 'knuckles': {
-      // Fingers laced, arms pushed straight out to crack the knuckles; then a fist raised high and smashed into the
-      // open palm, twice; it holds, fist in palm, head down.
-      const meet = ramp(t, 0.05, 0.3);
-      const push = span(t, 0.35, 0.95, 0.18);
-      const crack = Math.sin(clamp01((t - 0.6) / 0.25) * Math.PI) * 0.012;
-      // The palm: in front of the chest (pushed out to arm's length for the stretch).
-      const palm = a.set(inner * 0.03, 0.66 + 0.1 * push, 0.2 + 0.24 * push);
-      reach(p, inner, b.copy(shoulder(p, inner)).add(lateral.set(0, -0.27, 0.03)).lerp(palm, meet), hint.set(inner, -1, -0.3));
-      // The fist: laced with the palm, then raised above the head and brought down onto it at 1.35 and 1.8 s.
-      const raised = Math.max(span(t, 1.0, 1.32, 0.15), span(t, 1.45, 1.77, 0.15));
-      const fist = lateral.set(-inner * 0.02, 0.69 + 0.1 * push + 0.3 * raised, 0.23 + 0.24 * push - 0.05 * raised);
-      reach(p, outer, b.copy(shoulder(p, outer)).add(hint.set(0, -0.27, 0.03)).lerp(fist, meet), hint.set(outer, -0.5 + raised, -0.4));
-      twist(p, inner * 0.15 * raised);
-      lean(p, 0.03 * push + 0.04 * ramp(t, 1.85, 0.3));
-      p.head.x += crack;
-      const glare = ramp(t, 1.85, 0.3);
-      p.head.y -= 0.02 * glare;
-      p.head.z += 0.02 * glare;
-      return;
+    plant(p);
+  }
+  reach(p, outer, path(a, FREEZE_OUTER, w, inner), w > 1.8 ? pole.set(outer, 0.6, -0.4) : undefined);
+  reach(p, inner, path(a, FREEZE_INNER, w, inner));
+  twist(p, inner * curve(FREEZE_TWIST, w));
+  lean(p, curve(FREEZE_LEAN, w), inner * curve(FREEZE_SIDE, w));
+  const smirk = ramp(w, 1.95, 0.2);
+  p.head.y -= 0.008 * smirk;
+  p.head.x += outer * 0.008 * smirk;
+  // Wheeling over toward the other fighter: the head goes over first.
+  const roll = curve(FREEZE_ROLL, w) + 0.05 * Math.sin(2 * Math.PI * 1.7 * (w - 0.62)) * span(w, 0.66, 1.26, 0.08);
+  body.roll += -inner * (roll >= 2 * Math.PI - 1e-4 ? 0 : roll);
+}
+
+const COOL_OUTER: readonly Key[] = [
+  [0, 0.1, 0.75, 0.2], [0.15, -0.03, 0.7, 0.17], [0.5, -0.03, 0.7, 0.17], [0.6, -0.04, 0.67, 0.17],
+  [1.4, -0.04, 0.67, 0.17], [1.48, -0.2, 0.8, 0.08], [1.75, -0.2, 0.8, 0.08], [1.9, -0.1, 0.88, 0.17],
+  [2.1, -0.1, 0.88, 0.17], [2.22, -0.22, 0.93, 0.2], [2.35, -0.12, 0.88, 0.17], [2.61, -0.12, 0.88, 0.17],
+];
+const COOL_INNER: readonly Key[] = [
+  [0, 0.14, 0.53, 0], [0.5, 0.14, 0.53, 0], [0.6, 0.04, 0.66, 0.17], [1.4, 0.04, 0.66, 0.17],
+  [1.48, 0.2, 0.8, 0.08], [1.75, 0.2, 0.8, 0.08], [1.9, 0.14, 0.53, 0], [2.61, 0.14, 0.53, 0],
+];
+const COOL_SINK: readonly Num[] = [[0, 0.01], [1.4, 0.03], [1.5, 0], [1.8, 0], [1.9, 0.02], [2.61, 0.01]];
+const COOL_LEAN: readonly Num[] = [[0, -0.02], [0.5, -0.02], [1.4, 0.01], [1.9, -0.03], [2.61, -0.03]];
+const COOL_TWIST: readonly Num[] = [[0, 0.2], [0.3, 0], [1.9, 0], [2.2, -0.1], [2.61, -0.08]];
+
+function cool(p: Pose, body: Body, w: number, clock: number, inner: Side) {
+  const outer = -inner as Side;
+  crouch(p, curve(COOL_SINK, w) + 0.012 * dip(clock) * (1 - span(w, 1.45, 1.8, 0.05)));
+  sway(p, 0.014 * Math.sin((Math.PI * clock) / BEAT));
+  const rolls = span(w, 0.62, 1.4, 0.08);
+  const ho = path(a, COOL_OUTER, w, inner);
+  rolling(ho, w, outer, rolls);
+  reach(p, outer, ho, w < 1.45 ? chestHint(outer) : w > 1.85 ? pole.set(outer, -0.3, -0.5) : undefined);
+  const hi = path(b, COOL_INNER, w, inner);
+  rolling(hi, w, inner, rolls);
+  reach(p, inner, hi, w < 0.55 || w > 1.85 ? pole.set(inner, 0.1, -0.6) : chestHint(inner));
+  twist(p, inner * curve(COOL_TWIST, w));
+  lean(p, curve(COOL_LEAN, w));
+  p.head.y += 0.008 * ramp(w, 1.85, 0.2);
+  body.turn += outer * 2 * Math.PI * easeInOut((w - 1.45) / 0.36);
+}
+
+/** Seconds into a stretch from `from` to `to`, scaled so the keyed `len` seconds fit it (a custom track's beats). */
+const local = (t: number, from: number, to: number, len = 2.61) => ((t - from) * len) / Math.max(0.4, to - from);
+
+/**
+ * Fighter `id`'s pose and trick motion `t` seconds into the walkout, everything but the fight stance at the end (the
+ * director blends into that). `p` gets the pose; `body` the whole-body motion. Pure: the same `t` gives the same frame
+ * on both laptops.
+ */
+export function perform(p: Pose, body: Body, id: PlayerId, t: number, B: Beats) {
+  const inner: Side = id === 'p1' ? 1 : -1;
+  const clock = t - B.open;
+  body.slide = body.lift = body.turn = body.roll = 0;
+  stand(p, t + (id === 'p2' ? 1.3 : 0));
+  const walkEnd = B.p1 - 0.25;
+  walk(p, clock + (id === 'p2' ? BEAT * 0.5 : 0), 1 - ramp(t, walkEnd - 0.4, 0.4), id === 'p1' ? 1 : 0.55);
+  copyPose(base, p);
+  if (id === 'p1') {
+    // Their act from the walk to the cut; then (out of shot) a groove while they step out for the freeze; the freeze.
+    if (t < B.p2 + 0.3) showoff(p, local(t, B.p1, B.p2), clock, inner);
+    const waiting = span(t, B.p2 + 0.3, B.two, 0.3);
+    if (waiting > 0) {
+      copyPose(layer, base);
+      groove(layer, clock, inner);
+      if (t >= B.two) copyPose(p, base);
+      blend(p, layer, waiting);
     }
-    case 'neckroll': {
-      // A slow circle of the head, a shrug that rolls the shoulders, then the fists clench and the chin drops.
-      const roll = clamp01((t - 0.15) / 1.25);
-      const ang = roll * Math.PI * 2;
-      const on = Math.sin(roll * Math.PI);
-      p.head.x += 0.04 * Math.sin(ang) * on;
-      p.head.z += 0.025 * Math.cos(ang) * on - 0.01 * on;
-      p.head.y -= 0.012 * on;
-      p.neck.x += 0.015 * Math.sin(ang) * on;
-      const shrug = Math.sin(clamp01((t - 1.4) / 0.5) * Math.PI);
-      for (const j of ['lShoulder', 'rShoulder'] as const) {
-        p[j].y += 0.035 * shrug;
-        p[j].z -= 0.015 * shrug;
-      }
-      const clench = ramp(t, 1.95, 0.25);
-      for (const s of [1, -1] as const) reachFrom(p, s, s * (0.05 + 0.06 * clench), -0.27 + 0.03 * clench, 0.03 + 0.04 * clench, hint.set(s, 0, -1));
-      lean(p, 0.025 * clench);
-      p.head.y -= 0.012 * clench;
-      p.head.z += 0.01 * clench;
-      return;
+    if (t >= B.two) {
+      const w = local(t, B.two, B.vs);
+      copyPose(layer, p);
+      copyPose(p, base);
+      freeze(p, body, w, clock, inner);
+      blend(p, layer, 1 - ramp(w, 0, 0.2));
     }
-    case 'beckon': {
-      // Off hand on the hip, chin up; the near hand reaches out at the other one and waves them in: "come on".
-      reach(p, outer, a.copy(shoulder(p, outer)).add(b.set(outer * 0.07, -0.25, -0.03)).lerp(lateral.copy(shoulder(p, outer)).add(hint.set(outer * 0.03, -0.27, 0.03)), 1 - ramp(t, 0, 0.3)), hint.set(outer, 0.2, -1));
-      const out = ramp(t, 0.15, 0.35); // held out to the end: the beckon is the pose
-      const flick = Math.max(strike(t, 0.85, 0.1, 0.03, 0.18), strike(t, 1.25, 0.1, 0.03, 0.18), strike(t, 1.65, 0.1, 0.03, 0.18));
-      const extended = a.copy(shoulder(p, inner)).add(b.set(inner * 0.16, -0.02, 0.26));
-      const curled = lateral.copy(shoulder(p, inner)).add(b.set(inner * 0.11, 0.06, 0.15));
-      extended.lerp(curled, flick);
-      reach(p, inner, b.copy(shoulder(p, inner)).add(hint.set(inner * 0.05, -0.27, 0.03)).lerp(extended, out), hint.set(inner, -1, -0.2));
-      twist(p, inner * 0.18 * out);
-      lean(p, -0.025 * out);
-      p.head.y += 0.008 * out;
-      p.head.z -= 0.012 * out;
-      p.head.x += inner * 0.012 * out;
-      return;
+  } else {
+    // A groove once they're on their mark, until their shot: the spin; then the two-shot.
+    const act = ramp(t, B.p2 - 0.15, 0.15);
+    if (act < 1) {
+      copyPose(layer, base);
+      groove(layer, clock, inner);
+      blend(p, layer, (1 - act) * ramp(t, B.p1 - 0.6, 0.5));
     }
-    case 'chestpound': {
-      // Right, right, left on the chest, then both arms flung up and out: a roar.
-      const roar = ramp(t, 1.65, 0.3);
-      for (const s of [1, -1] as const) {
-        const hits = s === outer ? [0.55, 0.95] : [1.3];
-        const raised = s === outer ? span(t, 0.2, 1.2, 0.2) : span(t, 0.95, 1.55, 0.2);
-        let hit = 0;
-        for (const at of hits) hit = Math.max(hit, strike(t, at, 0.07, 0.05, 0.15));
-        const down = a.copy(shoulder(p, s)).add(b.set(s * 0.05, -0.27, 0.03));
-        const cocked = lateral.set(s * 0.04, 0.75, 0.24);
-        const chest = b.set(s * 0.045, 0.71, 0.1);
-        const fist = down.lerp(cocked.lerp(chest, hit), raised);
-        const up = hint.copy(shoulder(p, s)).add(b.set(s * 0.3, 0.17, 0.04));
-        reach(p, s, fist.lerp(up, roar), b.set(s, -0.4 + 0.6 * roar, -0.5));
-      }
-      lean(p, 0.02 * span(t, 0.4, 1.5, 0.2) - 0.04 * roar);
-      crouch(p, 0.025 * roar);
-      p.head.y += 0.012 * roar;
-      p.head.z -= 0.025 * roar;
-      return;
-    }
-    case 'gloves': {
-      // The near forearm held across the chest, the other hand on its wrist yanking the glove tight, twice; then the
-      // fists knock together twice at the chin, and it holds there, chin down.
-      const tug = span(t, 0.1, 1.35, 0.25);
-      const yank = Math.max(strike(t, 0.5, 0.08, 0.05, 0.18), strike(t, 0.9, 0.08, 0.05, 0.18));
-      const knock = ramp(t, 1.35, 0.25);
-      const tap = Math.max(strike(t, 1.7, 0.07, 0.04, 0.14), strike(t, 2.05, 0.07, 0.04, 0.14));
-      for (const s of [1, -1] as const) {
-        const down = a.copy(shoulder(p, s)).add(b.set(s * 0.05, -0.27, 0.03));
-        // Tugging: the near fist out across the chest; the far hand on its wrist, pulled back hard on each yank.
-        const held = s === inner
-          ? lateral.set(-inner * 0.08 + inner * 0.05 * yank, 0.7, 0.22)
-          : lateral.set(inner * 0.06 + outer * 0.09 * yank, 0.7, 0.2 - 0.03 * yank);
-        const knocking = hint.set(s * (0.03 + 0.09 * (1 - tap) * (1 - ramp(t, 2.15, 0.15))), 0.8, 0.18);
-        const target = down.lerp(held, tug).lerp(knocking, knock);
-        reach(p, s, target, b.set(s, -1, -0.3));
-      }
-      twist(p, outer * 0.12 * tug * (0.5 + yank));
-      lean(p, 0.02 * Math.max(tug, knock));
-      p.head.y -= 0.015 * Math.max(tug, knock);
-      p.head.z += 0.018 * Math.max(tug, knock);
-      return;
-    }
-    case 'flex': {
-      // Arms come up into a double biceps and pulse; then down into a "most muscular", chin down.
-      const up = span(t, 0.25, 1.75, 0.35);
-      const crab = ramp(t, 1.75, 0.3);
-      const pulse = Math.sin(clamp01((t - 0.8) / 0.9) * Math.PI * 3) ** 2 * up;
-      lateral.copy(p.lShoulder).sub(p.rShoulder).setY(0).normalize();
-      for (const s of [1, -1] as const) {
-        const down = a.copy(shoulder(p, s)).add(b.set(s * 0.05, -0.27, 0.03));
-        const biceps = b.copy(shoulder(p, s)).addScaledVector(lateral, s * (0.14 + 0.01 * pulse)).add(hint.set(0, 0.16 + 0.01 * pulse, 0.02));
-        const target = down.lerp(biceps, up).lerp(hint.set(s * 0.045, 0.5, 0.15), crab);
-        reach(p, s, target, b.copy(lateral).multiplyScalar(s).add(hint.set(0, crab > 0.5 ? 0.3 : -0.25, crab * 0.3)));
-      }
-      crouch(p, 0.02 * up + 0.04 * crab + 0.006 * pulse);
-      lean(p, 0.045 * crab - 0.015 * up);
-      p.head.y -= 0.015 * crab;
-      p.head.z += 0.015 * crab;
-      return;
+    if (t >= B.p2 - 0.15 && t < B.two) {
+      copyPose(layer, base);
+      spin(layer, body, local(t, B.p2, B.two), clock, inner);
+      blend(p, layer, act);
+    } else if (t >= B.two) {
+      copyPose(p, base);
+      cool(p, body, local(t, B.two, B.vs), clock, inner);
     }
   }
+  rebuild(p);
+  body.spot = spotOf(id, t, B);
+  body.slide += body.spot;
+  if (body.roll) ground(p, body);
+}
+
+/**
+ * Where fighter `id` stands, sideways from their mark (fighter units, +x their left): out from each other for the
+ * walkout, fighter 1 further out while lining up the freeze and wheeling back in, both back on the mark under the fire.
+ */
+export function spotOf(id: PlayerId, t: number, B: Beats) {
+  const inner: Side = id === 'p1' ? 1 : -1;
+  let away = 0;
+  if (id === 'p1') away = t >= B.two ? 1 - curve(FREEZE_TRAVEL, local(t, B.two, B.vs)) : ramp(t, B.p2 + 0.3, 0.6);
+  const home = 1 - ramp(t, B.vs + 0.1, Math.max(0.2, B.end - B.vs - 0.3));
+  return -inner * (SPREAD + FREEZE_FROM * away) * home;
+}
+
+/**
+ * The roll turns the body about its hips, not its feet: move it so it does, and so its lowest point stays on the floor
+ * (hands down in the handstand, feet down as it comes over).
+ */
+function ground(p: Pose, body: Body) {
+  pivot.copy(p.lHip).add(p.rHip).multiplyScalar(0.5);
+  quat.setFromEuler(euler.set(0, body.turn, body.roll));
+  moved.copy(pivot).applyQuaternion(quat);
+  body.slide += pivot.x - moved.x;
+  body.lift += pivot.y - moved.y;
+  let low = Infinity;
+  for (const j of JOINTS) low = Math.min(low, moved.copy(p[j]).applyQuaternion(quat).y);
+  const upright = Math.min(Math.abs(body.roll) % (2 * Math.PI), 2 * Math.PI - (Math.abs(body.roll) % (2 * Math.PI)));
+  // Sideways (going over), the body's up off the floor a little: it springs through, it doesn't lie down.
+  const spring = 0.12 * Math.sin(body.roll) ** 2;
+  body.lift += (FLOOR + spring - (low + body.lift)) * smoothstep(upright / 0.3);
 }

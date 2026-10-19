@@ -49,6 +49,10 @@ export type Motion = {
   tilt: number;
   /** Lift off the floor (a K.O.'d body's thickness). */
   lift: number;
+  /** Sideways (+x, the fighter's left), a turn about the feet, and a roll about the facing axis: the walkout's tricks. */
+  slide: number;
+  turn: number;
+  roll: number;
 };
 
 export type ActionInput = {
@@ -163,6 +167,9 @@ export function applyAction(pose: Pose, input: ActionInput, motion: Motion): Pos
   motion.lunge = 0;
   motion.tilt = 0;
   motion.lift = 0;
+  motion.slide = 0;
+  motion.turn = 0;
+  motion.roll = 0;
   const { state } = input;
 
   if (input.hurt > 0 && state.phase !== 'ko') beatUp(pose, input.hurt, input.clock);
