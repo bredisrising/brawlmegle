@@ -15,6 +15,8 @@ export type Line = { voice: Voice; text: string };
 const MAX_QUEUE = 2;
 /** A queued line older than this is old news: dropped. */
 const STALE_MS = 3500;
+/** How much faster than recorded the commentator's clips play (ElevenLabs' own speed tops out at 1.2). */
+const PACE = 1.2;
 /** Voices on unless turned off in the menu (remembered here) or `?voices=0`. */
 const VOICES_KEY = 'brawlmegle.voices';
 
@@ -132,6 +134,9 @@ export class Commentary {
     if (!url) return wait(1200 + line.text.length * 35);
     const audio = new Audio(url);
     audio.volume = 0.95;
+    // A hype caster talks fast: the clip a fifth faster than ElevenLabs says it, at the same pitch.
+    audio.preservesPitch = true;
+    audio.playbackRate = PACE;
     this.audio = audio;
     await new Promise<void>((resolve) => {
       audio.onended = audio.onerror = () => resolve();
