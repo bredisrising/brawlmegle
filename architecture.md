@@ -82,8 +82,10 @@ Also in the fight:
   no randomness, so both laptops and the replay show the same fall).
 - Commentators (game/Commentary.ts): the host picks the moments (react/callIntro/callFinish in Game.ts): instant
   template lines for big moments, LLM-written intro and K.O. lines from the forge server (POST /api/commentary, using
-  the fighters' forge briefs), voiced through GET /api/tts (ElevenLabs eleven_v3, OpenAI fallback, cached; voices
-  only with `?voices=1`, captions always) ; mirrored as `call` events. Announcer barks and crowd: public/announcer/.
+  the fighters' forge briefs), voiced through GET /api/tts (ElevenLabs eleven_v3 only, cached; at most 4 calls at
+  once on the server, lines said now ahead of `prefetch=1` ones, a 429 retried; a line it can't voice in 3.5 s is a
+  caption only, never another voice; voices off with `?voices=0`, captions always); mirrored as `call` events.
+  Announcer barks and crowd: public/announcer/.
 - K.O. replay: both laptops keep the last ~4 s as drawn and replay the finish slowly from a sweeping camera.
 - Highlights (game/HighlightRecorder.ts): the laptop running the fight (host or Practice; not Training, the client or
   phones) records the K.O. replay off the WebGL canvas (960x540 VP9, ~1.2 MB) and uploads it with who, the move and
