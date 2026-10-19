@@ -52,7 +52,7 @@ export class Commentary {
   /** Fetch these lines' voices now, so saying them later is instant. Resolves when they're in (or failed). */
   prefetch(lines: Line[]): Promise<unknown> {
     if (this.muted || !config.forgeApi) return Promise.resolve();
-    return Promise.all(lines.map((l) => this.clip(l)));
+    return Promise.all(lines.map((l) => this.clip(l, true)));
   }
 
   /** Lines written by the LLM on the forge server; nothing (and no fuss) if it's slow or down. */
@@ -78,7 +78,6 @@ export class Commentary {
   hush() {
     this.queue = [];
     this.audio?.pause();
-    if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel();
     useGameStore.setState({ caption: null });
   }
 
@@ -104,12 +103,13 @@ export class Commentary {
     }
   }
 
-  /** The line's voice clip (an object URL), fetched once. */
-  private clip(line: Line): Promise<string | null> {
+  /** The line's voice clip (an object URL), fetched once. `ahead`: fetched before it's needed (it waits its turn). */
+  private clip(line: Line, ahead = false): Promise<string | null> {
     const key = keyOf(line);
     let clip = this.clips.get(key);
     if (!clip) {
-      clip = fetch(`${api()}/api/tts?voice=${line.voice}&text=${encodeURIComponent(line.text)}`, {
+      // v=2: clips cached before the server stopped filling in with another voice aren't reused.
+      clip = fetch(`${api()}/api/tts?voice=${line.voice}&v=2${ahead ? '&prefetch=1' : ''}&text=${encodeURIComponent(line.text)}`, {
         headers: { 'x-forge-key': config.forgeKey },
         signal: AbortSignal.timeout(8000),
       })
@@ -123,10 +123,13 @@ export class Commentary {
     return clip;
   }
 
-  /** Server voice (ElevenLabs), else the browser's own. A clip that isn't in within 2.5 s isn't worth the wait. */
+  /**
+   * The commentator's voice (ElevenLabs, from the server). A clip that isn't in within 3.5 s isn't worth the wait: the
+   * line shows as a caption only (never another voice: that sounds like someone else took the mic).
+   */
   private async voice(line: Line) {
-    const url = await Promise.race([this.clip(line), wait(2500).then(() => null)]);
-    if (!url) return this.browserVoice(line);
+    const url = await Promise.race([this.clip(line), wait(3500).then(() => null)]);
+    if (!url) return wait(1200 + line.text.length * 35);
     const audio = new Audio(url);
     audio.volume = 0.95;
     this.audio = audio;
@@ -134,18 +137,6 @@ export class Commentary {
       audio.onended = audio.onerror = () => resolve();
       audio.play().catch(() => resolve());
       setTimeout(resolve, 9000);
-    });
-  }
-
-  private browserVoice(line: Line) {
-    if (typeof speechSynthesis === 'undefined') return wait(1200 + line.text.length * 35);
-    return new Promise<void>((resolve) => {
-      const u = new SpeechSynthesisUtterance(line.text.replace(/\[[^\]]*\]\s*/g, ''));
-      u.rate = line.voice === 'A' ? 1.15 : 1.0;
-      u.pitch = line.voice === 'A' ? 0.9 : 1.0;
-      u.onend = u.onerror = () => resolve();
-      speechSynthesis.speak(u);
-      setTimeout(resolve, 8000);
     });
   }
 }

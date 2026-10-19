@@ -98,7 +98,9 @@ function WalkoutTitles() {
       {CLOCK && <div ref={use<HTMLDivElement>((t, el) => void (el.textContent = t.toFixed(2)))} className="absolute left-2 top-2 bg-ink px-2 font-mono text-xl text-hp" />}
       {host && (
         <div
-          ref={use<HTMLDivElement>((t, el) => void (el.style.opacity = String(kf(t, [[0.6, 0], [1.0, 0.6], [B().vs - 0.3, 0.6], [B().vs, 0]]))))}
+          ref={use<HTMLDivElement>((t, el) => {
+            el.style.opacity = String(game.walkout.skippable ? kf(t, [[0.6, 0], [1.0, 0.6], [B().vs - 0.3, 0.6], [B().vs, 0]]) : 0);
+          })}
           className="absolute bottom-[calc(var(--bar)+12px)] right-4 font-cond text-xs font-bold uppercase tracking-[0.3em] text-paper/80 sm:right-8"
           style={{ opacity: 0 }}
         >

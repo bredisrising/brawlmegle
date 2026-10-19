@@ -242,7 +242,7 @@ export class Game {
     this.intent = { p1: new IntentReader('p1'), p2: new IntentReader('p2') };
     for (const v of Object.values(this.views)) this.renderer.scene.add(v.root);
 
-    this.walkout = new Walkout(this.renderer, this.effects, this.views, this.announcer, this.sfx, () => this.skipWalkout());
+    this.walkout = new Walkout(this.renderer, this.effects, this.views, this.announcer, this.sfx, () => this.skipWalkout(), () => !this.liveMatch());
     this.renderer.onFrame(this.update);
     // Render quality steps down when this laptop's pose tracker starves (QualityGovernor).
     this.renderer.watchPose(() => poseRateOf(this.localInputSource()), (on) => setOnePose(this.localInputSource(), on));

@@ -52,10 +52,8 @@ export class Walkout {
   /** This walkout's beats (the track's). */
   beats: Beats = DEFAULT_BEATS;
   private prevT = -1;
-  /** Fast frames seen since the walkout started (-1 once it's running, see frame()). */
-  private settling = -1;
+  /** When it started (performance.now()): the clock when the music isn't playing (muted, or audio not allowed yet). */
   private startedAt = 0;
-  private lastFrameAt = 0;
   private readonly stage: Stage;
   /** Embers for the VS burst (its flame sheets stay out: the wall is the fire). */
   private readonly fire = new Fire(VS_FIRE, config.lowPower);
@@ -84,8 +82,10 @@ export class Walkout {
     private readonly views: Record<PlayerId, FighterView>,
     private readonly announcer: Announcer,
     private readonly sfx: Sfx,
-    /** Host: end the walkout now (any key or click). Not set on the client laptop: the host's skip carries over. */
+    /** Host: end the walkout now (its end, or a skip). Not set on the client laptop: the host's end carries over. */
     private readonly onSkip: (() => void) | null,
+    /** Whether a key or click may skip it: not in a match with someone on another laptop (it'd skip theirs too). */
+    private readonly canSkip: () => boolean = () => true,
   ) {
     this.stage = new Stage(config.lowPower);
     renderer.scene.add(this.stage.group, this.stage.lights, this.fire.group, this.wall.group, this.sign.mesh);
@@ -209,10 +209,10 @@ export class Walkout {
     this.dim(true);
     this.renderer.direct((camera) => this.shoot(camera));
     useGameStore.setState({ walkout: true });
-    // The music (and the clock) wait for the frames to flow: the first frames after the countdown starts can stall
-    // (a fighter that just spawned uploads its textures), and the walkout shouldn't open by skipping its first shot.
-    this.settling = 0;
-    this.startedAt = this.lastFrameAt = performance.now();
+    // The music starts now, on both laptops alike (the client starts when the host's countdown reaches it): the first
+    // frames can stall (a fighter that just spawned uploads its textures), but that's under the white it opens on.
+    this.startedAt = performance.now();
+    this.music = this.announcer.playMusic(this.track.url, 0.62, this.track.start);
     this.announcer.crowd('murmur', 0.3);
   }
 
@@ -267,14 +267,18 @@ export class Walkout {
     return false;
   }
 
+  /** Any key or click may skip it now (the host, not in a match with someone on another laptop). */
+  get skippable() {
+    return !!this.onSkip && useGameStore.getState().role !== 'client' && this.canSkip();
+  }
+
   /** Any key or click on the host skips (after a moment, so the click that started the fight doesn't). */
   private onKey = (e: Event) => {
-    if (this.t < 0.3 || !this.onSkip) return;
+    if (this.t < 0.3 || !this.skippable) return;
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     // Any key but mute (M), a lone modifier, or a key held down from before.
     if (e instanceof KeyboardEvent && (e.repeat || e.code === 'KeyM' || ['Shift', 'Control', 'Alt', 'Meta'].includes(e.key))) return;
-    if (useGameStore.getState().role === 'client') return;
-    this.onSkip();
+    this.onSkip?.();
   };
 
   private crossed(at: number) {
@@ -293,21 +297,11 @@ export class Walkout {
     this.wall.update(dt);
     this.stage.update(dt, this.renderer.camera);
     if (this.t < 0) return;
-    if (this.settling >= 0) {
-      // Hold at the start (under the fade up from black) until two frames in a row come quickly (real time: the
-      // frame dt is clamped), or 0.8 s at most on a machine that's just slow.
-      const now = performance.now();
-      this.settling = now - this.lastFrameAt < 70 ? this.settling + 1 : 0;
-      this.lastFrameAt = now;
-      if (this.settling < 2 && now - this.startedAt < 800 && this.hold === null) return;
-      this.settling = -1;
-      const { url, start } = this.track;
-      this.music = this.announcer.playMusic(url, 0.62, start);
-    }
     this.prevT = this.t;
-    // The music is the clock while it plays (the cuts stay on its beats through any frame hitches); else frame time.
+    // The music is the clock while it plays (the cuts stay on its beats through any frame hitches); else real time
+    // since it started (not frame time: frames are capped, so a slow laptop would play it slow and get cut off).
     const heard = this.music?.clock();
-    this.t = this.hold ?? (heard != null ? Math.max(this.t, heard) : this.t + dt);
+    this.t = this.hold ?? Math.max(this.t, heard ?? (performance.now() - this.startedAt) / 1000);
     const B = this.beats;
     this.stage.amount = Math.min(1, this.t / 0.6);
     this.stage.beat = this.t - B.open;

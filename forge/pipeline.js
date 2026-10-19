@@ -476,30 +476,61 @@ export function voiceKey(voice) {
   return process.env.ELEVENLABS_API_KEY ? `${ELEVEN_VOICES[voice] ?? ELEVEN_VOICES.A}:${ELEVEN_MODEL}:${JSON.stringify(ELEVEN_SETTINGS)}` : `openai:${VOICES[voice] ?? VOICES.A}`;
 }
 
-async function speakEleven(text, voice) {
-  const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${ELEVEN_VOICES[voice] ?? ELEVEN_VOICES.A}?output_format=mp3_44100_128`, {
-    method: "POST",
-    headers: { "xi-api-key": process.env.ELEVENLABS_API_KEY, "content-type": "application/json" },
-    body: JSON.stringify({
-      text,
-      model_id: ELEVEN_MODEL,
-      voice_settings: ELEVEN_SETTINGS,
-    }),
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!res.ok) throw new Error(`ElevenLabs TTS ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  return Buffer.from(await res.arrayBuffer());
+/**
+ * Our ElevenLabs plan takes 5 calls at once; past that they come back 429. A match asks for its lines all together
+ * (both laptops), so calls wait for a slot here: lines being said right now first, lines fetched ahead after.
+ */
+const ELEVEN_AT_ONCE = Number(process.env.ELEVEN_CONCURRENCY ?? 4);
+let elevenBusy = 0;
+const elevenWaiting = { now: [], ahead: [] };
+function elevenSlot(urgent) {
+  if (elevenBusy < ELEVEN_AT_ONCE) {
+    elevenBusy++;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => elevenWaiting[urgent ? "now" : "ahead"].push(resolve));
+}
+function elevenDone() {
+  const next = elevenWaiting.now.shift() ?? elevenWaiting.ahead.shift();
+  if (next) next();
+  else elevenBusy--;
 }
 
-/** One commentator line as MP3 bytes (ElevenLabs when configured, else OpenAI). */
-export async function speak(text, voice) {
-  if (process.env.ELEVENLABS_API_KEY) {
+async function speakEleven(text, voice, urgent) {
+  for (let attempt = 0; ; attempt++) {
+    await elevenSlot(urgent);
+    let res;
     try {
-      return await speakEleven(text, voice);
-    } catch (err) {
-      console.warn("elevenlabs failed, falling back to openai:", err.message);
+      res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${ELEVEN_VOICES[voice] ?? ELEVEN_VOICES.A}?output_format=mp3_44100_128`, {
+        method: "POST",
+        headers: { "xi-api-key": process.env.ELEVENLABS_API_KEY, "content-type": "application/json" },
+        body: JSON.stringify({
+          text,
+          model_id: ELEVEN_MODEL,
+          voice_settings: ELEVEN_SETTINGS,
+        }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (res.ok) return Buffer.from(await res.arrayBuffer());
+    } finally {
+      elevenDone();
     }
+    // Busy (someone else on the key, or the plan's limit): wait and go again rather than give up.
+    if (res.status === 429 && attempt < 4) {
+      await new Promise((r) => setTimeout(r, 400 * (attempt + 1) + Math.random() * 300));
+      continue;
+    }
+    throw new Error(`ElevenLabs TTS ${res.status}: ${(await res.text()).slice(0, 200)}`);
   }
+}
+
+/**
+ * One commentator line as MP3 bytes: ElevenLabs when configured (and only ElevenLabs: another voice for some lines
+ * sounds like a different commentator, so a line it can't voice isn't voiced), else OpenAI. `urgent`: to be said now,
+ * as opposed to fetched ahead.
+ */
+export async function speak(text, voice, { urgent = true } = {}) {
+  if (process.env.ELEVENLABS_API_KEY) return speakEleven(text, voice, urgent);
   const res = await fetch(API + "/audio/speech", {
     method: "POST",
     headers: { authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "content-type": "application/json" },

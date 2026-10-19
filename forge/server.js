@@ -243,7 +243,7 @@ function ttsRemember(key, audio) {
   ttsCache.set(key, audio);
   if (ttsCache.size > 400) ttsCache.delete(ttsCache.keys().next().value);
 }
-async function ttsClip(text, voice) {
+async function ttsClip(text, voice, urgent = true) {
   const key = `${voiceKey(voice)}|${text}`;
   const cached = ttsCache.get(key);
   if (cached) return cached;
@@ -255,7 +255,7 @@ async function ttsClip(text, voice) {
   }
   if (!ttsPending.has(key)) {
     if (!ttsAllowed()) throw Object.assign(new Error("voices are resting"), { status: 429 });
-    const job = speak(text, voice).then((audio) => {
+    const job = speak(text, voice, { urgent }).then((audio) => {
       ttsRemember(key, audio);
       fs.writeFile(file, audio, (err) => err && console.warn("tts save failed:", err.message));
       return audio;
@@ -463,7 +463,8 @@ async function handle(req, res) {
     if (!text.trim()) return json(res, 400, { error: "no text" });
     let audio;
     try {
-      audio = await ttsClip(text, voice);
+      // Lines fetched ahead of the moment wait behind lines being said now.
+      audio = await ttsClip(text, voice, url.searchParams.get("prefetch") !== "1");
     } catch (err) {
       if (err.status === 429) return json(res, 429, { error: err.message });
       console.warn("tts failed:", err.message);
