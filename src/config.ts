@@ -12,7 +12,7 @@ const turnUrl = env.VITE_TURN_URL as string | undefined;
  * The public server: the game, the forge (/api/) and the matchmaker (/ws) share one domain. A page served from one of
  * those names talks to that same name (no cross-origin calls); anywhere else (local dev) uses the main one.
  */
-const PUBLIC_HOSTS = ['brawlmegle.vip', 'www.brawlmegle.vip', '54-149-60-196.sslip.io'];
+const PUBLIC_HOSTS = ['brawlmegle.com', 'www.brawlmegle.com', 'brawlmegle.vip', 'www.brawlmegle.vip', '54-149-60-196.sslip.io'];
 const SERVER = PUBLIC_HOSTS.includes(window.location.hostname) ? window.location.host : '54-149-60-196.sslip.io';
 
 export const config = {
