@@ -12,7 +12,7 @@ NODE=${WIN_NODE:-"/mnt/c/Users/ankit/Desktop/dev/C++Tools/emsdk/node/20.18.0_64b
 TAG=${PERF_TAG:-brawlperf}; PORT=${PERF_PORT:-9222}
 WINTMP="C:\\Users\\ankit\\AppData\\Local\\Temp\\$TAG"
 LINTMP=/mnt/c/Users/ankit/AppData/Local/Temp/$TAG
-CLIP=${CLIP:-/tmp/claude-1000/-home-ankit-dev-brawlegle/94cabf95-3524-48bb-a860-e52c581a22b1/scratchpad/clips/40256_360.y4m}
+CLIP=${CLIP:-$HOME/dev/brawlegle-data/clips/40256_360.y4m}
 OUTDIR=${OUTDIR:-$HERE/results}
 mkdir -p "$LINTMP" "$OUTDIR"
 CLIPNAME=${CLIPNAME:-clip.y4m}
