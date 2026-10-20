@@ -1,4 +1,5 @@
-// Re-rigs a forged fighter's existing model (no new model): for fighters whose rig failed, Tripo's or our own.
+// Re-rigs a forged fighter's existing model: for fighters whose rig failed, Tripo's or our own. A fighter with no model
+// at all (its GPU job failed, or Tripo was out of credit) gets a new one made from its sheet, like a forge would.
 //
 //   sudo bash -c 'set -a; . /etc/brawlegle/forge.env; node forge/gpu/rescue.mjs [options] /var/lib/brawlegle/forge/<id> [...]'
 //
@@ -9,7 +10,7 @@
 //   --force       install even if the rig check fails
 //
 // Rigs model.orig.glb, model.glb or else rigged.orig.glb (the rigger drops the old skeleton and weights) with the
-// fighter's sheet.png. The GPU box needs FORGE_3D_URL and FORGE_3D_KEY. The optimized GLB the game will load must
+// fighter's sheet.png; with none of them, the GPU box makes the model too, and model.glb keeps it for a later re-rig. The GPU box needs FORGE_3D_URL and FORGE_3D_KEY. The optimized GLB the game will load must
 // pass forge/rigcheck.js or nothing is changed. Before anything is overwritten, the originals are kept once as
 // fighter.json.pre-rescue, rigged.pre-rescue.glb and rigged.orig.pre-rescue.glb. Then rigged.orig.glb is the new rig,
 // rigged.glb its optimized copy, and fighter.json's glbUrl points at it again (brokenGlbUrl, set aside while the rig
@@ -42,21 +43,26 @@ for (const dir of dirs) {
     let rigged = null;
     let original;
     let rig = null;
+    let made = null;
     if (glbFile) {
       original = fs.readFileSync(glbFile);
       if (value("--path")) rig = { path: value("--path"), rescue: "local" };
     } else {
       const model = [file("model.orig.glb"), file("model.glb"), file("rigged.orig.glb")].find((f) => fs.existsSync(f));
-      if (!model || !fs.existsSync(file("sheet.png"))) {
-        console.log(`${dir}: needs sheet.png and model.orig.glb, model.glb or rigged.orig.glb`);
+      if (!fs.existsSync(file("sheet.png"))) {
+        console.log(`${dir}: needs sheet.png`);
         continue;
       }
       const { makeModelLocal } = await import("../pipeline.js");
-      const out = await makeModelLocal(fs.readFileSync(file("sheet.png")), () => {}, fs.readFileSync(model), attempt > 1 ? { rigAttempt: attempt } : {});
+      const out = await makeModelLocal(fs.readFileSync(file("sheet.png")), () => {}, model ? fs.readFileSync(model) : null, attempt > 1 ? { rigAttempt: attempt } : {});
       rig = out.rig ?? null;
       if (out.optimized) [rigged, original] = [out.rigged, await out.original()];
       else original = out.rigged;
-      console.log(`  ${name}: rigged ${path.basename(model)} on the GPU box`, rig ? `(${rig.path}${rig.ok ? "" : ", its own check FAILED"})` : "");
+      if (!model) {
+        made = out.timings ?? {};
+        fs.writeFileSync(file("model.glb"), await out.unrigged());
+      }
+      console.log(`  ${name}: ${model ? `rigged ${path.basename(model)}` : "made a model from the sheet and rigged it"} on the GPU box`, rig ? `(${rig.path}${rig.ok ? "" : ", its own check FAILED"})` : "");
     }
     // Like a normal forge: the game gets the optimized GLB (rigged.orig.glb keeps the original).
     if (!rigged) {
@@ -88,6 +94,7 @@ for (const dir of dirs) {
     fighter.rigEngine = "local";
     fighter.glbOptimized = rigged !== original;
     if (rig) fighter.gpuRig = rig;
+    if (made) Object.assign(fighter, { engine3d: "local", gpuTimings: made });
     if (check) fighter.rigCheck = { ...check, rescued: new Date().toISOString() };
     if (unhide) {
       delete fighter.hidden;

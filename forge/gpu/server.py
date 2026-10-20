@@ -145,6 +145,26 @@ def gpu_worker():
         except Exception as err:  # noqa: BLE001
             traceback.print_exc()
             job.update(status="failed", error=f"model: {err}")
+            # A CUDA error (out of memory in CuMesh, say) can leave the card's memory taken and fail every job after it
+            # (2026-10-20, on a 24 GB L4: two players in a row). Start over instead: systemd restarts the service, and
+            # it's ready again in ~35 s; new forges wait for it like for a cold box.
+            if "CUDA" in str(err):
+                state["ready"] = False
+                threading.Thread(target=restart_when_rigged, daemon=True).start()
+                return
+
+
+def restart_when_rigged():
+    """Exits once the forge has seen the failure and the rig thread is done with anything it's rigging."""
+    time.sleep(3)
+    for _ in range(90):
+        with jobs_lock:
+            rigging = any(j["status"] == "rig" for j in jobs.values())
+        if not rigging and rig_q.empty():
+            break
+        time.sleep(1)
+    log("CUDA error: restarting to free the card")
+    os._exit(1)
 
 
 def rig(job_dir, out_name="rigged.glb", attempt=1):
