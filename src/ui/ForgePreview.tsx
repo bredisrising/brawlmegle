@@ -44,7 +44,7 @@ function useTyped(text: string | undefined, cps = 30): string {
 /**
  * The forging card's live preview, so a forge is something to watch: the brief typing out, the sheet developing,
  * then (from the GPU box) a voxel hologram building up, the clay sculpt and the finished fighter with its rig
- * flashing, before it materializes in the arena. Without the GPU box's intermediates (Tripo) it holds the sheet.
+ * flashing, before it materializes in the arena. Without the GPU box's intermediates it holds the sheet.
  */
 /**
  * The preview's height: about half the screen's height, and no wider than its half of the screen allows (3:4). The

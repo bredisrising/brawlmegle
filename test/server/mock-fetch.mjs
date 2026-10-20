@@ -1,8 +1,8 @@
-// Preloaded into the forge server by test/server/forge.test.ts (node --import): stands in for OpenAI and
-// Tripo so the tests never spend credits. MOCK_DELAY_MS slows each OpenAI call; MOCK_CARD_FAIL=1 fails the card.
+// Preloaded into the forge server by test/server/forge.test.ts (node --import): stands in for OpenAI and the GPU box
+// so the tests never spend credits. MOCK_DELAY_MS slows each OpenAI call; MOCK_CARD_FAIL=1 fails the card.
 // Rigged models are real tiny fighters (fixtures/rigFixtures.mjs), so the forge's rig check has something to check:
 // MOCK_RIG=collapsed makes every rig a broken one (all weights on one spine bone), MOCK_RIG=collapsed-once only the
-// first. MOCK_TRIPO=nocredits turns every Tripo call down like an account out of credits.
+// first.
 import fs from "node:fs";
 // A real 1x1 PNG, so the optimizer can make its WebP copies.
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
@@ -29,8 +29,8 @@ globalThis.fetch = async (input, init = {}) => {
       return json({ choices: [{ message: { content: JSON.stringify(brief) } }] });
     }
     if (url.endsWith("/images/edits")) {
-      const model = init.body.get("model");
-      if (process.env.MOCK_CARD_FAIL && model === (process.env.FORGE_CARD_MODEL ?? "gpt-image-2.5-flare")) {
+      // The card: its own prompt (it can be the same image model as the sheet).
+      if (process.env.MOCK_CARD_FAIL && /character select render/.test(String(init.body.get("prompt")))) {
         return json({ error: { message: "Your request was rejected by the safety system" } }, 400);
       }
       // The sheet streams (stream=true): one partial image, then the final one, like gpt-image-2.5-sunburst.
@@ -45,16 +45,6 @@ globalThis.fetch = async (input, init = {}) => {
       return json({ data: [{ b64_json: PNG.toString("base64") }] });
     }
   }
-  if (url.startsWith("https://openapi.tripo3d.ai/")) {
-    if (process.env.MOCK_TRIPO === "nocredits") return json({ code: 2010, message: "You don't have enough credit" }, 403);
-    if (url.endsWith("/animations/rig")) return json({ code: 0, data: { task_id: "rig1" } });
-    if (url.endsWith("/tasks/rig1")) return json({ code: 0, data: { status: "success", output: { model_url: "https://tripo.mock/rigged.glb" } } });
-    if (url.endsWith("/files")) return json({ code: 0, data: { file_token: "tok" } });
-    if (url.includes("/tasks/")) return json({ code: 0, data: { status: "success", output: { model_url: "https://tripo.mock/m.glb" } } });
-    return json({ code: 0, data: { task_id: "task" } });
-  }
-  if (url === "https://tripo.mock/rigged.glb") return rigged();
-  if (url.startsWith("https://tripo.mock/")) return new Response(Buffer.from("glTF"));
   // The ZeroGPU Space (forge/gpu/zerogpu/app.py) through Gradio's API. MOCK_GRADIO=error fails the call.
   if (url.startsWith("https://gradio.mock/")) {
     if (new Headers(init.headers).get("authorization") !== "Bearer hf_x") return json({ error: "Repository not found" }, 404);

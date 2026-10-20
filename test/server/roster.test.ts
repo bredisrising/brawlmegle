@@ -19,7 +19,7 @@ async function startForge(data: string) {
   const port = 20000 + Math.floor(Math.random() * 20000);
   const child = spawn(process.execPath, ['--import', path.join(__dirname, 'mock-fetch.mjs'), 'forge/server.js'], {
     cwd: ROOT,
-    env: { ...process.env, OPENAI_API_KEY: 'sk-test', TRIPO_API_KEY: 'tripo-test', FORGE_PORT: String(port), FORGE_DATA: data },
+    env: { ...process.env, OPENAI_API_KEY: 'sk-test', FORGE_PORT: String(port), FORGE_DATA: data },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   running.push(child);

@@ -1,4 +1,4 @@
-// "Delete my fighter": the real forge/server.js (OpenAI and Tripo mocked, mock-fetch.mjs) hands out an owner key and a
+// "Delete my fighter": the real forge/server.js (OpenAI and the GPU box mocked, mock-fetch.mjs) hands out an owner key and a
 // delete code once per forge, keeps only their hashes, and deletes a fighter for good with either: its folder, its
 // record, its highlights and its memory-card entry. Also the admin script (forge/delete-fighter.mjs).
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
@@ -35,7 +35,7 @@ async function startForge(env: Record<string, string> = {}, data = fs.mkdtempSyn
   const port = 20000 + Math.floor(Math.random() * 20000);
   const child = spawn(process.execPath, ['--import', path.join(__dirname, 'mock-fetch.mjs'), 'forge/server.js'], {
     cwd: ROOT,
-    env: { ...process.env, OPENAI_API_KEY: 'sk-test', TRIPO_API_KEY: 'tripo-test', FORGE_ACCESS_KEY: KEY, FORGE_PORT: String(port), FORGE_DATA: data, ...env },
+    env: { ...process.env, OPENAI_API_KEY: 'sk-test', FORGE_ACCESS_KEY: KEY, FORGE_PORT: String(port), FORGE_DATA: data, ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   running.push(child);

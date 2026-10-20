@@ -1,15 +1,14 @@
-// The forge pipeline: scan frames -> brief -> model sheet -> card art, next to (back view ->) 3D model -> rig.
+// The forge pipeline: scan frames -> brief -> model sheet -> card art, next to the 3D model and its rig (our GPU box).
 // Settings below were picked in research/forge-quality.md (2026-10-17); every one can be overridden from the env.
-import { BRIEF_PROMPT, STYLE, sheetPrompt, cardPrompt, backPrompt } from "./prompts.js";
+import { BRIEF_PROMPT, STYLE, sheetPrompt, cardPrompt } from "./prompts.js";
 import { optimizeFighter, optimizeImage } from "./optimize.js";
 import { checkRig, available as rigCheckAvailable } from "./rigcheck.js";
 
 const API = "https://api.openai.com/v1";
 const BRIEF_MODEL = process.env.FORGE_BRIEF_MODEL ?? "gpt-5.4-mini";
 /**
- * Our GPU box builds the model (FORGE_3D=local or gradio; Tripo is then only the fallback). Sunburst follows the style
- * prompt best for Tripo (about 19 s at 1536x2304). For the GPU box, flare at 1024x1536 draws a sheet TRELLIS turns
- * into an equally good fighter in 12-13 s (research/forge-gpu.md); FORGE_GPU_SHEET=0 keeps sunburst 1536x2304.
+ * Our GPU box builds the model (FORGE_3D=local or gradio). Flare at 1024x1536 draws a sheet TRELLIS turns into as
+ * good a fighter as sunburst's 1536x2304 in 12-13 s less (research/forge-gpu.md); FORGE_GPU_SHEET=0 keeps sunburst.
  */
 const FAST_SHEET = Boolean(process.env.FORGE_3D_URL) && ["local", "gradio"].includes(process.env.FORGE_3D) && (process.env.FORGE_GPU_SHEET ?? "1") !== "0";
 const IMAGE_MODEL = process.env.FORGE_IMAGE_MODEL ?? (FAST_SHEET ? "gpt-image-2.5-flare" : "gpt-image-2.5-sunburst");
@@ -17,13 +16,9 @@ const CARD_MODEL = process.env.FORGE_CARD_MODEL ?? "gpt-image-2.5-flare";
 const IMAGE_QUALITY = process.env.FORGE_IMAGE_QUALITY ?? "medium";
 /** "high" keeps faces closer to the photos. Only gpt-image-1 models accept it; gpt-image-2 rejects it. */
 const INPUT_FIDELITY = process.env.FORGE_INPUT_FIDELITY ?? "high";
-// FORGE_STYLE=goldsrc brings back the whole previous forge (low-poly sheet, 30k faces, single image), not just the look.
+// FORGE_STYLE=goldsrc brings back the old low-poly Half-Life 1 look of the sheet.
 const GOLDSRC = STYLE === "goldsrc";
-const flag = (name, fallback) => (process.env[name] ?? (fallback ? "1" : "0")) !== "0";
-/**
- * Tripo only rebuilds the detail the sheet has, so for Tripo the detailed style draws it at the biggest
- * non-experimental 2:3 size (about 3 s slower than 1024x1536). TRELLIS reads the sheet at 1024 px tall anyway.
- */
+/** TRELLIS reads the sheet at 1024 px tall; sunburst draws it at the biggest 2:3 size (FORGE_GPU_SHEET=0). */
 const SHEET_SIZE = process.env.FORGE_SHEET_SIZE ?? (GOLDSRC || FAST_SHEET ? "1024x1536" : "1536x2304");
 /**
  * A showcase forge (`quality: "hq"`, the game's `?forge=hq`): the big sunburst sheet and the GPU box's slower settings
@@ -31,53 +26,24 @@ const SHEET_SIZE = process.env.FORGE_SHEET_SIZE ?? (GOLDSRC || FAST_SHEET ? "102
  */
 const HQ = { imageModel: "gpt-image-2.5-sunburst", sheetSize: "1536x2304", gpu: { steps: 12, faces: 60000, texture: 2048 } };
 const CARD_SIZE = "1024x1536";
-/**
- * Draw the back of the sheet too and build the model from front + back (multiview): a real back and hair from
- * behind. Off by default for speed (+20 s on the player's wait); FORGE_MULTIVIEW=1 turns it on.
- */
-const MULTIVIEW = flag("FORGE_MULTIVIEW", false);
 /** Partial sheet images streamed for the forging screen's preview (0 turns streaming off). */
 const SHEET_PARTIALS = Number(process.env.FORGE_SHEET_PARTIALS ?? 3);
-
-// --- Tripo (model sheet -> textured 3D model -> Mixamo-rigged GLB) ---------------------------------------
-// https://developers.tripo3d.ai/llms.txt. Output URLs expire after 5 minutes, so models are downloaded at once.
-const TRIPO = "https://openapi.tripo3d.ai/v3";
-const TRIPO_MODEL = process.env.FORGE_TRIPO_MODEL ?? "v3.1-20260211";
-/** 60000 suits Ultra geometry (FORGE_GEOMETRY_QUALITY=detailed); standard geometry doesn't use more than this. */
-const FACE_LIMIT = Number(process.env.FORGE_FACE_LIMIT ?? (GOLDSRC ? 30000 : 40000));
-/**
- * "detailed" is Tripo's Ultra geometry (+20 credits, about +12 s): crisper faces, ears, folds. Standard by default:
- * the new sheet and delight off carry most of the look, and players are waiting (research/forge-quality.md).
- */
-const GEOMETRY_QUALITY = process.env.FORGE_GEOMETRY_QUALITY ?? "standard";
-/**
- * Delight strips the lighting out of the sheet before texturing. Off keeps the sheet's painted shading (folds,
- * brows, cheekbones), which is most of what made the textures look flat. On is Tripo's default.
- */
-const DELIGHT = flag("FORGE_DELIGHT", GOLDSRC);
-/** v1.0 is Tripo's humanoid (biped) rigger; v3.0-20260909 is newer and opt-in. */
-const RIG_MODEL = process.env.FORGE_RIG_MODEL ?? "v1.0-20240301";
 
 // --- Our own GPU box (forge/gpu): model sheet -> textured, Mixamo-rigged GLB with TRELLIS.2 + Blender ----------
 /**
  * "local" sends the sheet to the GPU service's job API (the AWS box, or the Docker Space); "gradio" to the ZeroGPU
- * Space's /forge3d endpoint. Tripo stays the fallback for any failure or timeout.
+ * Space's /forge3d endpoint. Without either, fighters ship without a 3D model (the game gives them the default body).
  */
 const ENGINE_3D = process.env.FORGE_3D_URL && ["local", "gradio"].includes(process.env.FORGE_3D) ? process.env.FORGE_3D : null;
 const LOCAL_URL = (process.env.FORGE_3D_URL ?? "").replace(/\/$/, "");
 const LOCAL_TIMEOUT_MS = Number(process.env.FORGE_3D_TIMEOUT ?? 90) * 1000;
 
-const tripoSettings = `tripo ${TRIPO_MODEL}${MULTIVIEW ? " multiview" : ""}, ${GEOMETRY_QUALITY} geometry, ${FACE_LIMIT} faces, delight ${DELIGHT ? "on" : "off"} + mixamo rig`;
 export const models = {
   brief: BRIEF_MODEL,
   sheet: `${IMAGE_MODEL} ${SHEET_SIZE}, ${STYLE} style`,
   card: CARD_MODEL,
   quality: IMAGE_QUALITY,
-  threeD: ENGINE_3D
-    ? `GPU service (${ENGINE_3D}, ${LOCAL_URL}), then ${process.env.TRIPO_API_KEY ? tripoSettings : "nothing"} as the fallback`
-    : process.env.TRIPO_API_KEY
-      ? tripoSettings
-      : "off (no TRIPO_API_KEY or FORGE_3D)",
+  threeD: ENGINE_3D ? `GPU service (${ENGINE_3D}, ${LOCAL_URL})` : "off (no FORGE_3D)",
 };
 
 // A private Hugging Face Space (forge/gpu/hf_space.py) also wants an HF token on every request.
@@ -113,8 +79,8 @@ export function boxRig(report) {
 }
 
 /**
- * Model sheet -> rigged GLB on our GPU box. Same result as makeModel ({ model, rigged }), plus the box's own
- * timings and its rig report (`rig`, see boxRig). Throws on any failure, or if it isn't done within FORGE_3D_TIMEOUT, so the caller can fall back to Tripo.
+ * Model sheet -> rigged GLB on our GPU box ({ model, rigged }, as buffers), plus the box's own
+ * timings and its rig report (`rig`, see boxRig). Throws on any failure, or if it isn't done within FORGE_3D_TIMEOUT.
  * With `model` (a GLB), the box only rigs that model (forge/gpu/rescue.mjs).
  */
 /** How long a scan waits for a warming GPU box before giving up on it, and how often it looks in on it. */
@@ -141,8 +107,8 @@ const health = () => local("/health", {}, 3_000).then((res) => res.json(), () =>
 export async function makeModelLocal(sheet, onStep, model = null, { onPreview, settings, rigAttempt, face, faceOnly } = {}) {
   // A stopped box doesn't refuse the connection, it just never answers: find out in 3 s, not 20.
   let state = await health();
-  // Stopped (idle), starting or warming up (~3 min from cold): wait for it rather than fail the scan (Tripo, the
-  // fallback, may be out of credits). A box that's up but broken still fails straight away.
+  // Stopped (idle), starting or warming up (~3 min from cold): wait for it rather than fail the scan. A box that's up
+  // but broken still fails straight away.
   if (!state?.ready) {
     wantGpu();
     onStep("warmup");
@@ -249,95 +215,6 @@ export async function makeModelGradio(sheet, onStep) {
       }
     }
   }
-}
-
-async function tripo(path, init = {}, timeoutMs = 60_000) {
-  const res = await fetch(TRIPO + path, {
-    ...init,
-    headers: { authorization: `Bearer ${process.env.TRIPO_API_KEY}`, ...init.headers },
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok || body.code !== 0) throw new Error(`Tripo ${path} ${res.status}: ${body.message ?? body.msg ?? JSON.stringify(body).slice(0, 200)}`);
-  return body.data;
-}
-
-const tripoJson = (path, payload) =>
-  tripo(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
-
-/** Polls a Tripo task until it finishes; returns its output. */
-async function tripoWait(taskId, onProgress, timeoutMs = 300_000) {
-  const start = Date.now();
-  let misses = 0;
-  for (;;) {
-    let task;
-    try {
-      task = await tripo(`/tasks/${taskId}`);
-      misses = 0;
-    } catch (err) {
-      // One dropped status poll shouldn't throw away a model that's still generating (and already paid for).
-      if (++misses > 3 || Date.now() - start > timeoutMs) throw err;
-      await new Promise((r) => setTimeout(r, 2000));
-      continue;
-    }
-    if (task.status === "success") return task.output;
-    if (["failed", "cancelled", "banned", "expired", "unknown"].includes(task.status)) throw new Error(`Tripo task ${task.status}`);
-    onProgress?.(task.progress ?? 0);
-    if (Date.now() - start > timeoutMs) throw new Error("Tripo task timed out");
-    await new Promise((r) => setTimeout(r, 2000));
-  }
-}
-
-async function download(url) {
-  const res = await fetch(url, { signal: AbortSignal.timeout(120_000) });
-  if (!res.ok) throw new Error(`download ${res.status}`);
-  return Buffer.from(await res.arrayBuffer());
-}
-
-async function upload(png) {
-  const form = new FormData();
-  form.append("file", new Blob([png], { type: "image/png" }), "sheet.png");
-  return (await tripo("/files", { method: "POST", body: form })).file_token;
-}
-
-/**
- * Model sheet (+ its back view, if any) -> rigged GLB. Returns { model, rigged } as buffers; `rigged` is null if
- * rigging failed, so the game can still use the static model (or its default fighter).
- */
-export async function makeModel(sheet, onStep, back = null) {
-  const [front, behind] = await Promise.all([upload(sheet), back ? upload(back) : null]);
-
-  onStep("model");
-  const settings = {
-    model: TRIPO_MODEL,
-    face_limit: FACE_LIMIT,
-    geometry_quality: GEOMETRY_QUALITY,
-    texture: true,
-    pbr: true,
-    texture_version: "v3.5-20260815",
-    texture_quality: "detailed",
-    delight: DELIGHT,
-  };
-  const gen = behind
-    ? await tripoJson("/generation/multiview-to-model", { inputs: [{ front }, { back: behind }], ...settings })
-    : await tripoJson("/generation/image-to-model", { input: front, ...settings });
-  const genOut = await tripoWait(gen.task_id);
-  const model = await download(genOut.pbr_model_url ?? genOut.model_url);
-
-  onStep("rig");
-  // The rig model must be explicit: Tripo otherwise infers one from the generation and rejects it.
-  const rig = async () => {
-    const task = await tripoJson("/animations/rig", { input: gen.task_id, model: RIG_MODEL, rig_type: "biped", spec: "mixamo", out_format: "glb" });
-    return download((await tripoWait(task.task_id)).model_url);
-  };
-  let rigged = null;
-  try {
-    rigged = await rig();
-  } catch (err) {
-    console.warn("rig failed, using the static model:", err.message);
-  }
-  // `rerig`: Tripo's rig once more, if the rig check turns this one down.
-  return { model, rigged, rerig: rig };
 }
 
 // --- Rig QA: no fighter ships a rig that doesn't move (forge/rigcheck.js) ----------------------------------------------
@@ -690,8 +567,8 @@ export async function runForge(job, frames, store) {
     const webpCopies = () => (store.dir ? optimizeFighter(store.dir, {}, { glb: false }) : Promise.resolve());
     webpCopies();
 
-    // The card and the 3D model both only need the sheet, so they run side by side. Without a Tripo key (or if
-    // it fails) glbUrl stays empty and the game uses its default fighter.
+    // The card and the 3D model both only need the sheet, so they run side by side. Without a GPU service (or if it
+    // fails) glbUrl stays empty and the game uses its default fighter.
     job.step = "model";
     store.save();
     const sheetRef = [{ data: sheet, type: "image/png" }];
@@ -706,21 +583,8 @@ export async function runForge(job, frames, store) {
         job.cardError = String(err.message ?? err);
         console.warn("card step failed:", job.cardError);
       });
-    // The back view only sharpens the model: if it fails, the model is built from the front alone.
-    const backView = () =>
-      timed("back", () => editImage(sheetRef, backPrompt()))
-        .then((back) => (store.write("back.png", back), back))
-        .catch((err) => (console.warn("back view failed, building from the front only:", err.message ?? err), null));
     const onStep = (step) => ((job.step = step), store.save());
-    const tripoModel = () =>
-      (MULTIVIEW ? backView() : Promise.resolve(null)).then((back) => {
-        job.engine3d = "tripo";
-        return timed("model", () => makeModel(sheet, onStep, back));
-      });
-    // Our GPU service first (FORGE_3D=local or gradio). On any failure or timeout Tripo builds the model as before;
-    // the GPU's try stays in timings.localTry so the wait it added shows up.
-    const localStart = Date.now();
-    // The box's intermediates for the forging screen: stage 1's sparse voxels, then the untextured shape.
+    // Our GPU service (FORGE_3D=local or gradio) builds and rigs the model. The box's intermediates for the forging screen: stage 1's sparse voxels, then the untextured shape.
     const PREVIEWS = { "voxels.bin": ["preview-voxels.bin", "previewVoxelsUrl"], "shape.glb": ["preview-shape.glb", "previewMeshUrl"] };
     const onPreview = (name, data) => {
       if (!PREVIEWS[name] || job.status !== "forging") return;
@@ -738,26 +602,10 @@ export async function runForge(job, frames, store) {
           job.glbOptimized = Boolean(out.optimized);
           original = out.original ?? null;
           return out;
-        })
-        .catch((err) => {
-          job.localError = String(err.message ?? err);
-          job.timings.localTry = Date.now() - localStart;
-          console.warn("GPU 3D step failed:", job.localError, process.env.TRIPO_API_KEY ? "(falling back to Tripo)" : "");
-          if (!process.env.TRIPO_API_KEY) throw err;
-          job.step = "model";
-          return tripoModel();
         });
-    // When the rig check turns a rig down: the engine that made it tries once more, then the other engine has a go.
+    // When the rig check turns a rig down: the GPU box rigs the same model once more, another way.
     const rescuesFor = (out) => {
       const list = [];
-      if (job.engine3d === "tripo") {
-        if (out.rerig) list.push({ name: "Tripo re-rig", engine: "tripo", run: async () => ({ rigged: await out.rerig(), engine: "tripo" }) });
-        // The GPU box can rig Tripo's static model (like forge/gpu/rescue.mjs).
-        if (ENGINE_3D === "local" && out.model) {
-          list.push({ name: "GPU rig of the Tripo model", engine: "local", run: async () => ({ ...(await makeModelLocal(sheet, () => {}, out.model)), engine: "local" }) });
-        }
-        return list;
-      }
       if (ENGINE_3D === "local" && out.unrigged) {
         list.push({
           name: "GPU re-rig",
@@ -765,29 +613,17 @@ export async function runForge(job, frames, store) {
           run: async () => ({ ...(await makeModelLocal(sheet, () => {}, await out.unrigged(), { rigAttempt: 2 })), engine: "local" }),
         });
       }
-      // A whole Tripo model + rig: costs Tripo credits, and fails fast without them.
-      if (process.env.TRIPO_API_KEY) {
-        list.push({
-          name: "Tripo model + rig",
-          engine: "tripo",
-          run: async () => {
-            const t = await makeModel(sheet, () => {});
-            if (!t.rigged) throw new Error("Tripo rig failed");
-            return { rigged: t.rigged, engine: "tripo" };
-          },
-        });
-      }
       return list;
     };
     const modelJob =
-      ENGINE_3D || process.env.TRIPO_API_KEY
-        ? (ENGINE_3D ? localModel() : tripoModel())
+      ENGINE_3D
+        ? localModel()
             .then(async (out) => {
               if (out.model) job.modelUrl = store.write("model.glb", out.model);
               let rigged = out.rigged;
               if (rigged) {
                 // Checked before glbUrl is set, so not even the forging preview shows a rig that doesn't move.
-                const first = { ...out, engine: job.engine3d ?? "tripo" };
+                const first = { ...out, engine: job.engine3d };
                 const passed = await timed("rigCheck", () => gateRig(job, first, rescuesFor(out), store));
                 if (!passed) {
                   // No glbUrl: a ready fighter without one fights with the default fighter's body (FighterView).

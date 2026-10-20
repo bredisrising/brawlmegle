@@ -1,5 +1,5 @@
-// Runs the real forge server (forge/server.js) with OpenAI and Tripo mocked out (mock-fetch.mjs), so these never
-// spend credits.
+// Runs the real forge server (forge/server.js) with OpenAI and the GPU box mocked out (mock-fetch.mjs), so these
+// never spend credits.
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -16,6 +16,8 @@ const GOOD_RIG = fs.readFileSync(path.join(__dirname, 'fixtures/rig-good.glb'));
 const COLLAPSED_RIG = fs.readFileSync(path.join(__dirname, 'fixtures/rig-collapsed.glb'));
 const bytes = async (res: Response) => Buffer.from(await res.arrayBuffer());
 /** The rig checker needs the forge's own packages (cd forge && npm ci); without them the gate is skipped. */
+/** The mocked GPU box (forge/gpu/server.py) every forge builds its model on, unless a test says otherwise. */
+const GPU = { FORGE_3D: 'local', FORGE_3D_URL: 'http://gpu.mock', FORGE_3D_KEY: 'gpu-key' };
 const hasRigCheck = fs.existsSync(path.join(ROOT, 'forge/node_modules/@gltf-transform/core'));
 
 afterEach(() => {
@@ -27,7 +29,7 @@ async function startForge(env: Record<string, string> = {}) {
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-test-'));
   const child = spawn(process.execPath, ['--import', path.join(__dirname, 'mock-fetch.mjs'), 'forge/server.js'], {
     cwd: ROOT,
-    env: { ...process.env, OPENAI_API_KEY: 'sk-test', TRIPO_API_KEY: 'tripo-test', FORGE_ACCESS_KEY: KEY, FORGE_PORT: String(port), FORGE_DATA: data, ...env },
+    env: { ...process.env, ...GPU, OPENAI_API_KEY: 'sk-test', FORGE_ACCESS_KEY: KEY, FORGE_PORT: String(port), FORGE_DATA: data, ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   running.push(child);
@@ -129,7 +131,7 @@ describe('forge server', () => {
   });
 
   describe('FORGE_3D=local (the GPU box)', () => {
-    const gpu = { FORGE_3D: 'local', FORGE_3D_URL: 'http://gpu.mock', FORGE_3D_KEY: 'gpu-key' };
+    const gpu = GPU;
     const done = (x: Record<string, unknown>) => x.status !== 'scanning' && x.status !== 'forging';
 
     it("relays the box's previews and keeps its optimized GLB as it is", async () => {
@@ -147,7 +149,7 @@ describe('forge server', () => {
       expect(fs.readFileSync(path.join(data, id, 'rigged.orig.glb'), 'utf8')).toBe('glTF-local-orig');
     });
 
-    it('builds the rigged model on the GPU box, not Tripo', async () => {
+    it('builds the rigged model on the GPU box', async () => {
       const { base, forge, until } = await startForge(gpu);
       const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
       const f = await until(id, done);
@@ -159,23 +161,22 @@ describe('forge server', () => {
       expect(await (await fetch(`${base}/api/forge/${id}/model.glb`)).text()).toBe('glTF-local');
     });
 
-    it('falls back to Tripo when the GPU job fails', async () => {
+    // No other engine to fall back on: the fighter ships with its card and no 3D model (the game's default body).
+    it('a failed GPU job: the fighter is ready without a model, and says why', async () => {
       const { forge, until } = await startForge({ ...gpu, MOCK_GPU: 'fail' });
       const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
       const f = await until(id, done);
       expect(f.status).toBe('ready');
-      expect(f.engine3d).toBe('tripo');
-      expect(String(f.localError)).toMatch(/blender/);
-      expect(f.glbUrl).toMatch(/rigged\.glb(\?v=\d+)?$/);
+      expect(String(f.modelError)).toMatch(/blender/);
+      expect(f.glbUrl).toBeUndefined();
     });
 
-    it('falls back to Tripo when the GPU job takes too long', async () => {
+    it('a GPU job that takes too long is given up on', async () => {
       const { forge, until } = await startForge({ ...gpu, MOCK_GPU: 'hang', FORGE_3D_TIMEOUT: '1' });
       const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
       const f = await until(id, done);
-      expect(f.engine3d).toBe('tripo');
-      expect(String(f.localError)).toMatch(/timed out/);
-      expect(f.glbUrl).toMatch(/rigged\.glb(\?v=\d+)?$/);
+      expect(String(f.modelError)).toMatch(/timed out/);
+      expect(f.glbUrl).toBeUndefined();
     });
 
     it('sends the HF token to a private Space', async () => {
@@ -184,20 +185,18 @@ describe('forge server', () => {
       expect((await until(id, done)).engine3d).toBe('local');
     });
 
-    it('a box that is still warming up falls back to Tripo once the wait runs out', async () => {
+    it('a box still warming up when the wait runs out: no model', async () => {
       const { forge, until } = await startForge({ ...gpu, MOCK_GPU: 'cold', FORGE_3D_WARMUP_WAIT: '0' });
       const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
       const f = await until(id, done);
-      expect(f.engine3d).toBe('tripo');
-      expect(String(f.localError)).toMatch(/not ready/);
+      expect(String(f.modelError)).toMatch(/not ready/);
     });
 
-    it('a wrong GPU key falls back to Tripo too', async () => {
+    it('a wrong GPU key: no model', async () => {
       const { forge, until } = await startForge({ ...gpu, FORGE_3D_KEY: 'nope' });
       const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
       const f = await until(id, done);
-      expect(f.engine3d).toBe('tripo');
-      expect(String(f.localError)).toMatch(/403/);
+      expect(String(f.modelError)).toMatch(/403/);
     });
   });
 
@@ -216,17 +215,16 @@ describe('forge server', () => {
       expect((await bytes(await fetch(`${base}/api/forge/${id}/rigged.glb`))).equals(GOOD_RIG)).toBe(true);
     });
 
-    it('falls back to Tripo when the Space errors', async () => {
+    it('a Space that errors: no model', async () => {
       const { forge, until } = await startForge({ ...space, MOCK_GRADIO: 'error' });
       const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
       const f = await until(id, done);
-      expect(f.engine3d).toBe('tripo');
-      expect(String(f.localError)).toMatch(/GPU Space/);
+      expect(String(f.modelError)).toMatch(/GPU Space/);
     });
   });
 
   describe.skipIf(!hasRigCheck)('the rig check gate', () => {
-    const gpu = { FORGE_3D: 'local', FORGE_3D_URL: 'http://gpu.mock', FORGE_3D_KEY: 'gpu-key' };
+    const gpu = GPU;
     const done = (x: Record<string, unknown>) => x.status !== 'scanning' && x.status !== 'forging';
     type RigCheck = { ok: boolean; score: number; engine: string; problems?: string[]; attempts?: { engine: string; ok: boolean; error?: string }[] };
 
@@ -243,7 +241,7 @@ describe('forge server', () => {
     });
 
     it('a rig that fails the check is re-rigged on the GPU box, and the good one ships', async () => {
-      const { base, data, forge, until } = await startForge({ ...gpu, MOCK_RIG: 'collapsed-once', TRIPO_API_KEY: '' });
+      const { base, data, forge, until } = await startForge({ ...gpu, MOCK_RIG: 'collapsed-once' });
       const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
       const f = await until(id, done);
       expect(f.status).toBe('ready');
@@ -259,7 +257,7 @@ describe('forge server', () => {
     });
 
     it('a rig that keeps failing never ships: no glbUrl, so the game uses the default body', async () => {
-      const { base, forge, until } = await startForge({ ...gpu, MOCK_RIG: 'collapsed', MOCK_TRIPO: 'nocredits' });
+      const { base, forge, until } = await startForge({ ...gpu, MOCK_RIG: 'collapsed' });
       const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
       const f = await until(id, done);
       expect(f.status).toBe('ready');
@@ -267,23 +265,12 @@ describe('forge server', () => {
       expect(f.rigged).toBe(false);
       const check = f.rigCheck as RigCheck;
       expect(check.ok).toBe(false);
-      // The GPU's rig, its re-rig, then Tripo (out of credits).
-      expect(check.attempts!.map((a) => a.engine)).toEqual(['local', 'local', 'tripo']);
-      expect(check.attempts![0].ok).toBe(false);
-      expect(String(check.attempts![2].error)).toMatch(/credit/);
+      // The GPU's rig, then its re-rig another way.
+      expect(check.attempts!.map((a) => [a.engine, a.ok])).toEqual([['local', false], ['local', false]]);
       // Still on the memory card (with its card art); the broken GLB isn't reachable.
       const list = (await (await fetch(`${base}/api/fighters`)).json()) as { id: string }[];
       expect(list.map((x) => x.id)).toContain(id);
       expect((await fetch(`${base}/api/forge/${id}/rigged.glb`)).status).toBe(404);
-    });
-
-    it('a Tripo rig that fails the check gets Tripo\'s rig once more', async () => {
-      const { forge, until } = await startForge({ MOCK_RIG: 'collapsed-once' });
-      const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
-      const f = await until(id, done);
-      const check = f.rigCheck as RigCheck;
-      expect(check.attempts!.map((a) => [a.engine, a.ok])).toEqual([['tripo', false], ['tripo', true]]);
-      expect(f.glbUrl).toMatch(/rigged\.glb(\?v=\d+)?$/);
     });
   });
 
@@ -291,7 +278,6 @@ describe('forge server', () => {
     const waker = 'waker-secret';
     const { base, forge, until } = await startForge({
       FORGE_3D: 'local', FORGE_3D_URL: 'http://gpu.mock', FORGE_3D_KEY: 'gpu-key', MOCK_GPU: 'asleep', FORGE_3D_WARMUP_POLL: '50', FORGE_GPU_WAKER_KEY: waker,
-      TRIPO_API_KEY: '', // no fallback: a ready fighter means the GPU box built it
     });
     const wanted = async (key = waker) => {
       const res = await fetch(`${base}/api/gpu/wanted`, { headers: { 'x-waker-key': key } });

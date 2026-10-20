@@ -1,4 +1,4 @@
-// ONE real scan + forge through the game, like a new player: costs OpenAI + Tripo credits, so it only runs with
+// ONE real scan + forge through the game, like a new player: costs OpenAI credits and GPU time, so it only runs with
 // E2E_PAID=1 and E2E_VIDEO (a .y4m of a person turning around). Logs each status line with its time.
 //   E2E_PAID=1 E2E_VIDEO=person.y4m node test/e2e/forge-live.mjs
 import { BASE, FORGE, PERSON_VIDEO, assert, createRoom, done, http, launch, note, open, shot, sleep, test } from "./lib.mjs";

@@ -357,7 +357,7 @@ async function handle(req, res) {
     return json(res, 200, { username, fighter: ready ? view(ready, base) : null, forging: forging?.id ?? null });
   }
 
-  /** Every forge spends OpenAI and Tripo credits: cap them. Null when there's room. */
+  /** Every forge spends OpenAI credits and GPU time: cap them. Null when there's room. */
   function capacityError() {
     const active = [...fighters.values()].filter((f) => f.status === "forging" || f.status === "scanning").length + uploading;
     if (active >= MAX_ACTIVE) return `${active} forges already running, try again in a minute`;

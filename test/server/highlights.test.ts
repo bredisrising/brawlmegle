@@ -1,5 +1,5 @@
 // The forge server's highlights (K.O. replay clips for the title screen's reel): the real forge/server.js, with
-// OpenAI and Tripo mocked out (mock-fetch.mjs) like forge.test.ts.
+// OpenAI and the GPU box mocked out (mock-fetch.mjs) like forge.test.ts.
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -35,7 +35,7 @@ async function startForge(env: Record<string, string> = {}, data = fs.mkdtempSyn
   const port = 20000 + Math.floor(Math.random() * 20000);
   const child = spawn(process.execPath, ['--import', path.join(__dirname, 'mock-fetch.mjs'), 'forge/server.js'], {
     cwd: ROOT,
-    env: { ...process.env, OPENAI_API_KEY: 'sk-test', TRIPO_API_KEY: 'tripo-test', FORGE_ACCESS_KEY: KEY, FORGE_PORT: String(port), FORGE_DATA: data, ...env },
+    env: { ...process.env, OPENAI_API_KEY: 'sk-test', FORGE_ACCESS_KEY: KEY, FORGE_PORT: String(port), FORGE_DATA: data, ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   running.push(child);

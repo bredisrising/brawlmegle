@@ -36,7 +36,7 @@ Copy `.env.example` to `.env`. The client is usable with the defaults; these var
 | `VITE_SIGNAL_URL` | WebSocket signaling endpoint for friend rooms and matchmaking. |
 | `VITE_TURN_URL`, `VITE_TURN_USER`, `VITE_TURN_PASS` | Optional TURN server configuration for WebRTC fallback. |
 
-Never put OpenAI, Tripo, or other server-side credentials in `VITE_*` values: Vite exposes them to the browser.
+Never put OpenAI or other server-side credentials in `VITE_*` values: Vite exposes them to the browser.
 
 ## Running the supporting services
 
@@ -52,7 +52,7 @@ npm ci
 npm start
 ```
 
-It listens at `http://127.0.0.1:8787`. Set `VITE_FORGE_API=http://127.0.0.1:8787` in the root `.env`, then restart Vite. Add server-only credentials such as `OPENAI_API_KEY` and `TRIPO_API_KEY` to the root `.env` only when running a real paid forge. See [forge/README.md](forge/README.md) for the API, pipeline, and environment settings.
+It listens at `http://127.0.0.1:8787`. Set `VITE_FORGE_API=http://127.0.0.1:8787` in the root `.env`, then restart Vite. Add server-only credentials such as `OPENAI_API_KEY` to the root `.env` only when running a real paid forge. See [forge/README.md](forge/README.md) for the API, pipeline, and environment settings.
 
 ### Matchmaker
 

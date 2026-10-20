@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs the forge on the matchmaker box as a service, behind nginx at /api/ (see matchmaker/deploy/setup.sh).
-# Secrets go in /etc/brawlegle/forge.env (root-only), written separately: OPENAI_API_KEY, TRIPO_API_KEY,
-# FORGE_ACCESS_KEY. Safe to re-run. Usage, from a copy of the forge folder on the server: sudo deploy/setup-forge.sh
+# Secrets go in /etc/brawlegle/forge.env (root-only), written separately: OPENAI_API_KEY, ELEVENLABS_API_KEY,
+# FORGE_ACCESS_KEY, FORGE_3D_KEY, FORGE_GPU_WAKER_KEY. Safe to re-run.
+# Usage, from a copy of the forge folder on the server: sudo deploy/setup-forge.sh
 set -euo pipefail
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
 APP=/opt/brawlegle/forge

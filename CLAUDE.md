@@ -14,7 +14,7 @@ Read `SPEC.md` (what we're building) and `architecture.md` (how the code is laid
 
 **https://brawlmegle.vip/** is the whole thing on one domain (AWS box, see `matchmaker/README.md`). The old name, https://54-149-60-196.sslip.io/, serves the same site (`matchmaker/deploy/add-domain.sh` adds names):
 - `/` the game (static build of this repo), `/tuner/` move tester, `/scan/` scan test
-- `/api/` the forge (scan → fighter, usernames, OpenAI + Tripo keys live only on the server), `/ws` matchmaker
+- `/api/` the forge (scan → fighter, usernames, the OpenAI key lives only on the server), `/ws` matchmaker
 - Locally, `npm run dev` uses the same shared forge and matchmaker by default, so fighters/usernames are the same everywhere.
 
 ## Running things

@@ -1,6 +1,6 @@
 // Forge prompts. FORGE_STYLE picks the look of the model sheet (and the card that follows it):
 //   detailed (default)  a modern 3D fighting-game character (Street Fighter 6 / Tekken 8 stylization): heroic
-//                       proportions, saturated colors, crisp sculpted detail. Tripo rebuilds whatever the sheet shows,
+//                       proportions, saturated colors, crisp sculpted detail. The 3D model rebuilds whatever the sheet shows,
 //                       so a sharp, bold sheet is what gives a sharp, lively model (research/forge-quality.md)
 //   goldsrc             the team's original Half-Life 1 / GoldSrc low-poly look
 // The likeness, build and costume ideas come from the brief either way.
@@ -73,15 +73,4 @@ Dynamic fighting stance, a heroic three-quarter view with the camera at chest he
 Street Fighter 6 style character select render: crisp sculpted detail, saturated colors, dramatic key light with a colored rim light.
 Plain dark background, no text.
 ${DIGNITY}`;
-}
-
-/**
- * The back of the model sheet, for Tripo's multiview step (front + back). Takes the sheet as its only reference,
- * so pose, framing and costume line up with the front.
- */
-export function backPrompt() {
-  return `The exact same character as the reference image, seen from directly behind: a back view for a 3D character model sheet.
-Keep everything identical: costume, colors, hair, body proportions, stylized 3D game render style, and the same symmetrical A-pose with the arms angled about 40 degrees away from the body and the hands in loose fists, legs straight, feet shoulder-width apart.
-Same camera height, lens and framing as the reference: the whole body from the top of the head to the soles of the feet, centered, the same size in the frame. The character faces away from the camera, so we see the back of the head, the back of the costume and the heels; no face is visible.
-Soft, even, shadowless studio light. Plain flat light gray background, nothing else: no floor shadow, no props, no text, no extra views.`;
 }
