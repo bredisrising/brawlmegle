@@ -8,6 +8,10 @@ set -u
 AWS=${AWS:-$HOME/.local/bin/aws}
 REGION=${FORGE3D_REGION:-us-east-1}
 INSTANCE=${FORGE3D_INSTANCE:-i-02b680f2662c0b82f}
+# GPUs to try, best first: AWS often has no L40S free in the box's zone (InsufficientInstanceCapacity), and a stopped box
+# can't move zones (its disk lives there). All fit the account's 8-vCPU GPU quota, and the forge fits all of them: L40S
+# 48 GB (~12 s a model), L4 24 GB, A10G 24 GB (~35 s); see research/forge-gpu.md.
+TYPES=${FORGE3D_TYPES:-g6e.xlarge g6.2xlarge g5.2xlarge}
 URL=${WAKER_URL:-https://brawlmegle.vip/api/gpu/wanted}
 KEY_FILE=$HOME/.config/brawlegle/waker-key
 
@@ -39,8 +43,14 @@ while true; do
     # Stopping (it just powered itself off): next round, once it's stopped.
     if [ "$state" = stopped ] && [ $(($(date +%s) - last)) -ge 30 ]; then
       last=$(date +%s)
-      echo "wanted and $state: starting $INSTANCE"
-      $AWS ec2 start-instances --region "$REGION" --instance-ids "$INSTANCE" --query 'StartingInstances[0].CurrentState.Name' --output text
+      for type in $TYPES; do
+        $AWS ec2 modify-instance-attribute --region "$REGION" --instance-id "$INSTANCE" --instance-type "Value=$type" || continue
+        if out=$($AWS ec2 start-instances --region "$REGION" --instance-ids "$INSTANCE" --query 'StartingInstances[0].CurrentState.Name' --output text 2>&1); then
+          echo "wanted and stopped: started $INSTANCE as $type ($out)"
+          break
+        fi
+        echo "no $type: ${out##*: }"
+      done
     fi
   fi
   sleep 5

@@ -73,9 +73,11 @@ class Generator:
         from trellis2.pipelines import Trellis2ImageTo3DPipeline
 
         self.pipe = Trellis2ImageTo3DPipeline.from_pretrained(model_dir)
-        # TRELLIS.2 defaults to moving each model onto the GPU only while it runs. A 48 GB card holds them all, which
-        # saves seconds per stage; FORGE3D_LOW_VRAM=1 for small cards (8-24 GB).
-        self.pipe.low_vram = os.environ.get("FORGE3D_LOW_VRAM", "0") == "1"
+        # TRELLIS.2 defaults to moving each model onto the GPU only while it runs. Keeping them all there saves seconds
+        # per stage, and at 1024 cascade it fits a 24 GB card (16.1 GiB held, 18.8 GiB at the peak, measured on an
+        # A10G); smaller cards get low_vram. FORGE3D_LOW_VRAM=1 (or 0) forces it either way.
+        flag = os.environ.get("FORGE3D_LOW_VRAM")
+        self.pipe.low_vram = flag == "1" if flag in ("0", "1") else torch.cuda.get_device_properties(0).total_memory < 20 * 2**30
         # ZhengPeng7/BiRefNet loads in fp16, but TRELLIS.2's wrapper feeds it fp32 images.
         if getattr(self.pipe.rembg_model, "model", None) is not None:
             self.pipe.rembg_model.model.float()
@@ -137,6 +139,11 @@ class Generator:
 
         s = {**self.settings, **{k: v for k, v in overrides.items() if v is not None}}
         timings = {}
+        # GPU memory, in GiB: held before the run (the models kept on the card), then each step's peak (allocated:
+        # tensors; reserved: what the card actually holds, PyTorch's cache included).
+        gib = lambda n: round(n / 2**30, 2)
+        timings["vram_idle"] = gib(torch.cuda.memory_allocated())
+        torch.cuda.reset_peak_memory_stats()
         t = time.time()
         sampler = {"steps": int(s["steps"])}
         restore = self._hooks(on_preview) if on_preview else (lambda: None)
@@ -153,6 +160,9 @@ class Generator:
             restore()
         torch.cuda.synchronize()
         timings["generate"] = round(time.time() - t, 2)
+        timings["vram_generate"] = gib(torch.cuda.max_memory_allocated())
+        timings["vram_generate_reserved"] = gib(torch.cuda.max_memory_reserved())
+        torch.cuda.reset_peak_memory_stats()
         t = time.time()
         mesh.simplify(16777216)  # nvdiffrast limit
         glb = o_voxel.postprocess.to_glb(
@@ -171,6 +181,8 @@ class Generator:
         )
         torch.cuda.synchronize()
         timings["bake"] = round(time.time() - t, 2)
+        timings["vram_bake"] = gib(torch.cuda.max_memory_allocated())
+        timings["vram_bake_reserved"] = gib(torch.cuda.max_memory_reserved())
         t = time.time()
         glb.export(out_path, extension_webp=False)
         timings["export"] = round(time.time() - t, 2)

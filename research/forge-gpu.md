@@ -11,6 +11,35 @@ Bodies, costumes and silhouettes are on par with Tripo. **Faces are clearly soft
 *Each row pair: the model sheet, then Tripo's model (top) and ours (bottom) from the front, 3/4, side (the arena
 camera), back, and a face close-up. Same sheets, both rigged.*
 
+## Update 2026-10-20: GPU memory, and only paying while it forges
+
+**VRAM, measured** (`timings.vram_*` in every job since 2026-10-20, GiB; a real player's sheet, 8 steps, 40k faces,
+1024 texture; on an A10G 24 GB, but the memory is the model's, not the card's):
+
+| | Held at rest | Generate peak (reserved) | Bake peak | Time on the A10G |
+|---|---|---|---|---|
+| 1024 cascade, models kept on the card (our setting) | 16.1 | 18.4 (18.8) | 18.6 | 24 s + 8 s bake |
+| 1024 cascade, `low_vram` (each model on the card only while it runs) | 0 | 3.1 (3.6) | 1.3 | 22 s + 5 s (warm-up run) |
+| 1536 cascade, models kept on the card | 16.1 | out of memory at 22.3 GB on the card, in CuMesh | | |
+| 1536 cascade, `low_vram` | 0 | never reported: the job ran the box out of **host** RAM (the kernel OOM-killed it at 31.2 GB of 32) | | |
+
+- So about 16 GiB of TRELLIS.2 is weights (its flow models, VAEs, DINOv3, BiRefNet), and a 1024 cascade run needs
+  only ~3-3.5 GiB more at the peak. Our setting fits any 24 GB card with ~5 GiB to spare; `low_vram` would fit an 8 GB
+  card but parks the weights in host RAM. `gen3d.py` now picks: models on the card unless it has under 20 GiB.
+- 1536 roughly doubles the working memory (more voxels and a far bigger mesh before simplification): over 6 GiB on
+  the card (it OOMed with 16.1 held on 22.5), so it needs the 48 GB L40S; an estimate, not measured, since no L40S was
+  free. It also needs a lot of host RAM somewhere in the mesh step, more than the 32 GB these boxes have with the
+  weights parked there. Test it on an L40S (weights on the card) before believing it fits g6e.xlarge's 32 GB.
+- Speed: the A10G is ~2-3x slower than the L40S per model (24 s vs 5.5-9 s generate). The first job on a new GPU type
+  pays FlexGEMM's kernel tuning once (~120 s), cached in `/root/.flex_gemm/`.
+
+**Only paying while it forges.** The box powers itself off after 15 idle minutes and bingus's waker starts it when
+someone opens the scan (see `forge/gpu/README.md`). The catch, found on the first real try: once stopped, the box may
+not get a GPU back. AWS answered `InsufficientInstanceCapacity` for g6e.xlarge, g6e.2xlarge and g6.2xlarge in us-east-1d
+for over 10 minutes (g6e.4xlarge is over the account's 8-vCPU G quota), and the box can't change zones (its disk is
+there). g5.2xlarge (A10G) started at once. The waker now tries g6e.xlarge, then g6.2xlarge (L4), then g5.2xlarge.
+Raising the G vCPU quota (free, a support request) would add g6e.2xlarge/4xlarge as more pools to try.
+
 ## Update 2026-10-18: a 35 s forge, and a live preview while it forges
 
 **Result:** a forge now takes **about 35 s on the server** (brief 1.9-2.6 s, sheet 11.4-11.6 s, GPU 20.2-21.9 s,
