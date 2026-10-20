@@ -8,6 +8,8 @@
 //                 fighter folder only; --path NAME records the rigger's path that made it (fighter.json gpuRig)
 //   --unhide      also take the fighter off the hidden list (rigcheck-all.js --hide put broken rigs there)
 //   --force       install even if the rig check fails
+//   --sheet FILE  make a new model from FILE instead of sheet.png (and rig with it): a crop of an old multi-panel sheet,
+//                 whose extra views TRELLIS builds into the model; one fighter folder only
 //
 // Rigs model.orig.glb, model.glb or else rigged.orig.glb (the rigger drops the old skeleton and weights) with the
 // fighter's sheet.png; with none of them, the GPU box makes the model too, and model.glb keeps it for a later re-rig. The GPU box needs FORGE_3D_URL and FORGE_3D_KEY. The optimized GLB the game will load must
@@ -24,9 +26,10 @@ const attempt = Number(value("--attempt") ?? 1);
 const glbFile = value("--glb");
 const unhide = args.includes("--unhide");
 const force = args.includes("--force");
-const dirs = args.filter((a, i) => !a.startsWith("--") && !["--attempt", "--glb", "--path"].includes(args[i - 1]));
-if (glbFile && dirs.length !== 1) {
-  console.log("--glb installs one GLB into one fighter folder");
+const sheetFile = value("--sheet");
+const dirs = args.filter((a, i) => !a.startsWith("--") && !["--attempt", "--glb", "--path", "--sheet"].includes(args[i - 1]));
+if ((glbFile || sheetFile) && dirs.length !== 1) {
+  console.log("--glb and --sheet are for one fighter folder");
   process.exit(2);
 }
 
@@ -48,13 +51,14 @@ for (const dir of dirs) {
       original = fs.readFileSync(glbFile);
       if (value("--path")) rig = { path: value("--path"), rescue: "local" };
     } else {
-      const model = [file("model.orig.glb"), file("model.glb"), file("rigged.orig.glb")].find((f) => fs.existsSync(f));
-      if (!fs.existsSync(file("sheet.png"))) {
-        console.log(`${dir}: needs sheet.png`);
+      const model = sheetFile ? null : [file("model.orig.glb"), file("model.glb"), file("rigged.orig.glb")].find((f) => fs.existsSync(f));
+      const sheet = sheetFile ?? file("sheet.png");
+      if (!fs.existsSync(sheet)) {
+        console.log(`${dir}: needs ${sheet}`);
         continue;
       }
       const { makeModelLocal } = await import("../pipeline.js");
-      const out = await makeModelLocal(fs.readFileSync(file("sheet.png")), () => {}, model ? fs.readFileSync(model) : null, attempt > 1 ? { rigAttempt: attempt } : {});
+      const out = await makeModelLocal(fs.readFileSync(sheet), () => {}, model ? fs.readFileSync(model) : null, attempt > 1 ? { rigAttempt: attempt } : {});
       rig = out.rig ?? null;
       if (out.optimized) [rigged, original] = [out.rigged, await out.original()];
       else original = out.rigged;
