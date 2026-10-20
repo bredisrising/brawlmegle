@@ -17,6 +17,8 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 
+from weights import ONLY_FOR
+
 
 class TimmDinoV3FeatureExtractor:
     """Drop-in for trellis2's DinoV3FeatureExtractor: every token (cls, registers, patches) after the last block,
@@ -65,25 +67,68 @@ def _to_y_up(v):
     return torch.stack([v[:, 0], v[:, 2], -v[:, 1]], dim=1)
 
 
+def _load_on_gpu(path: str, **kwargs):
+    """trellis2.models.from_pretrained, built on the GPU and read straight into it. The stock one builds each model on
+    the CPU with random weights and loads the checkpoint over them, then the pipeline copies it all across: 19 s per
+    1.3B-parameter model on the L4 box, against 8.5 s this way (about the disk's speed). Same weights either way."""
+    import json
+
+    import trellis2.models as models
+    from safetensors.torch import load_file
+
+    if os.path.exists(f"{path}.json"):
+        config_file, model_file = f"{path}.json", f"{path}.safetensors"
+    else:
+        from huggingface_hub import hf_hub_download
+
+        repo, name = "/".join(path.split("/")[:2]), "/".join(path.split("/")[2:])
+        config_file, model_file = hf_hub_download(repo, f"{name}.json"), hf_hub_download(repo, f"{name}.safetensors")
+    with open(config_file) as f:
+        config = json.load(f)
+    with torch.device("cuda"):
+        model = getattr(models, config["name"])(**config["args"], **kwargs)
+    model.load_state_dict(load_file(model_file, device="cuda"), strict=False)
+    return model
+
+
 class Generator:
     def __init__(self, model_dir: str, pipeline_type: str = "1024_cascade", steps: int = 12, faces: int = 60000, texture: int = 2048):
+        import trellis2.models as models
         import trellis2.modules.image_feature_extractor as fe
 
         fe.TimmDinoV3FeatureExtractor = TimmDinoV3FeatureExtractor
         from trellis2.pipelines import Trellis2ImageTo3DPipeline
 
-        self.pipe = Trellis2ImageTo3DPipeline.from_pretrained(model_dir)
         # TRELLIS.2 defaults to moving each model onto the GPU only while it runs. Keeping them all there saves seconds
-        # per stage, and at 1024 cascade it fits a 24 GB card (16.1 GiB held, 18.8 GiB at the peak, measured on an
-        # A10G); smaller cards get low_vram. FORGE3D_LOW_VRAM=1 (or 0) forces it either way.
+        # per stage, and at 1024 cascade it fits a 24 GB card (13.6 GiB held, 16.4 GiB at the peak, measured on an
+        # L4); smaller cards get low_vram. FORGE3D_LOW_VRAM=1 (or 0) forces it either way.
         flag = os.environ.get("FORGE3D_LOW_VRAM")
-        self.pipe.low_vram = flag == "1" if flag in ("0", "1") else torch.cuda.get_device_properties(0).total_memory < 20 * 2**30
+        low_vram = flag == "1" if flag in ("0", "1") else torch.cuda.get_device_properties(0).total_memory < 20 * 2**30
+        self.model_dir = model_dir
+        self.load = models.from_pretrained if low_vram else _load_on_gpu
+        stock = (models.from_pretrained, Trellis2ImageTo3DPipeline.model_names_to_load)
+        models.from_pretrained = self.load
+        Trellis2ImageTo3DPipeline.model_names_to_load = [n for n in stock[1] if pipeline_type in ONLY_FOR.get(n, pipeline_type).split()]
+        try:
+            self.pipe = Trellis2ImageTo3DPipeline.from_pretrained(model_dir)
+        finally:
+            models.from_pretrained, Trellis2ImageTo3DPipeline.model_names_to_load = stock
+        self.pipe.low_vram = low_vram
         # ZhengPeng7/BiRefNet loads in fp16, but TRELLIS.2's wrapper feeds it fp32 images.
         if getattr(self.pipe.rembg_model, "model", None) is not None:
             self.pipe.rembg_model.model.float()
         self.pipe.cuda()
         self.settings = {"pipeline": pipeline_type, "steps": steps, "faces": faces, "texture": texture,
                          "remesh": os.environ.get("FORGE3D_REMESH", "1") == "1"}
+
+    def _ensure(self, pipeline_type: str):
+        """Loads the models a job's pipeline type needs that startup skipped (a per-job "512" A/B test, say)."""
+        for name, types in ONLY_FOR.items():
+            if pipeline_type in types.split() and name not in self.pipe.models:
+                path = self.pipe._pretrained_args["models"][name]
+                self.pipe.models[name] = self.load(f"{self.model_dir}/{path}").eval()
+                if not self.pipe.low_vram:
+                    self.pipe.models[name].cuda()
 
     def _hooks(self, on_preview):
         """Wraps the pipeline's stages for this run: reports the sparse voxels and the untextured shape as soon as
@@ -139,6 +184,7 @@ class Generator:
 
         s = {**self.settings, **{k: v for k, v in overrides.items() if v is not None}}
         timings = {}
+        self._ensure(s["pipeline"])
         # GPU memory, in GiB: held before the run (the models kept on the card), then each step's peak (allocated:
         # tensors; reserved: what the card actually holds, PyTorch's cache included).
         gib = lambda n: round(n / 2**30, 2)

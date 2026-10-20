@@ -5,9 +5,11 @@ Downloads every model the service needs and patches TRELLIS.2's pipeline.json to
 
 Skips what's already there, so it's cheap to call at every start (the HF Space does).
 """
+import glob
 import json
 import os
 import sys
+import threading
 import urllib.request
 
 POSE_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task"
@@ -41,6 +43,42 @@ def ensure(model_dir: str, pose_path: str, trellis: bool = True) -> None:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             urllib.request.urlretrieve(url, path + ".part")
             os.replace(path + ".part", path)
+
+
+# The models each pipeline type runs that the others don't: gen3d.py loads only its type's, and the rest when a job
+# asks for that type.
+ONLY_FOR = {"tex_slat_flow_model_512": "512", "shape_slat_flow_model_512": "512 1024_cascade 1536_cascade",
+            "shape_slat_flow_model_1024": "1024 1024_cascade 1536_cascade", "tex_slat_flow_model_1024": "1024 1024_cascade 1536_cascade"}
+
+
+def prefetch(model_dir: str, pipeline_type: str, threads: int = 4) -> None:
+    """Reads the weights a start will load into the page cache, in the background and in load order, while Python's
+    still importing torch and TRELLIS. A cold start is mostly reading ~16 GB off the EBS disk, and it reads ~550 MB/s
+    four files at a time against ~335 one at a time."""
+    try:
+        with open(os.path.join(model_dir, "pipeline.json")) as f:
+            names = json.load(f)["args"]["models"]
+    except OSError:
+        return
+    files = [os.path.join(model_dir, f"{v}.safetensors") for k, v in names.items() if pipeline_type in ONLY_FOR.get(k, pipeline_type).split()]
+    # The rest is in the HF cache (DINOv3, BiRefNet, TRELLIS v1's structure decoder).
+    hub = os.path.join(os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface")), "hub")
+    files += sorted(glob.glob(os.path.join(hub, "models--*", "snapshots", "*", "**", "*.safetensors"), recursive=True))
+    todo = iter([f for f in files if os.path.exists(f)])
+    lock = threading.Lock()
+
+    def read():
+        while True:
+            with lock:
+                path = next(todo, None)
+            if path is None:
+                return
+            with open(path, "rb", buffering=0) as f:
+                while f.read(16 << 20):
+                    pass
+
+    for _ in range(threads):
+        threading.Thread(target=read, daemon=True).start()
 
 
 if __name__ == "__main__":

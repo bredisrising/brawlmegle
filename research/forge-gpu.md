@@ -11,6 +11,33 @@ Bodies, costumes and silhouettes are on par with Tripo. **Faces are clearly soft
 *Each row pair: the model sheet, then Tripo's model (top) and ours (bottom) from the front, 3/4, side (the arena
 camera), back, and a face close-up. Same sheets, both rigged.*
 
+## Update 2026-10-20, later: a cold box is ready in 71 s, not 191
+
+**Result:** with the box powered off, a player picking "scan" now has the GPU box ready **71 s later instead of 191**
+(measured end to end both times, on the live site, the waker trying the L40S first and getting an L4). Their own scan
+and sheet take ~35-40 s of that, so the 3D step waits ~30-40 s for the box instead of ~150. Where the time went:
+
+| Cold start, L4 (g6.2xlarge) | Before | Now | What changed |
+|---|---|---|---|
+| Waker notices, AWS has no L40S, starts an L4 | ~20 s | ~20 s | polls every 2 s, not 5 |
+| Booting, until the service answers | ~13 s | ~13 s | |
+| Python imports | 13 s | (overlapped) | `weights.prefetch` reads the weights off the disk meanwhile, 4 files at a time |
+| Loading TRELLIS.2 onto the GPU | 115 s | **~21 s** | `gen3d._load_on_gpu`: built on the GPU and read straight into it, skipping the 512 texture model 1024 cascade never runs |
+| Warm-up run | 29 s | **0** | `FORGE3D_WARMUPS=0` on the live box |
+| **Ready** | **191 s** | **71 s** | |
+
+- The stock loader built each 1.3B-parameter model on the CPU with random weights (19 s each on the L4 box's 8 vCPUs),
+  loaded the checkpoint over them, then copied everything to the GPU. Built on the GPU it's 8.5 s each: the disk's
+  speed. The weights come out identical (every model's parameter sum matches).
+- The disk (gp3, 500 MB/s provisioned) reads ~335 MB/s one file at a time and ~550 MB/s four at a time, so ~16 GB of
+  weights is ~30 s at best. That's the floor now, short of a faster disk.
+- Skipping `tex_slat_flow_model_512` also frees 2.4 GiB on the card: 13.6 GiB held, 16.4 GiB at the peak (was 16.1
+  and 18.8). A job asking for the `512` pipeline loads it then.
+- The warm-up bought ~2-3 s on the first job once a GPU type's kernels are tuned (cached on disk): first job vs
+  second, 7.2 vs 5.5 s generate on the L40S, 27.6 vs 24.7 s on the L4. It cost 12-29 s before every first job.
+- Not tried: waking the box earlier (on the avatar screen instead of on "scan") would hide another 10-30 s, but starts
+  it for players who pick a saved fighter too.
+
 ## Update 2026-10-20: GPU memory, and only paying while it forges
 
 **VRAM, measured** (`timings.vram_*` in every job since 2026-10-20, GiB; a real player's sheet, 8 steps, 40k faces,

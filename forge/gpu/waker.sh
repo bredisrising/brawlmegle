@@ -13,6 +13,7 @@ INSTANCE=${FORGE3D_INSTANCE:-i-02b680f2662c0b82f}
 # 48 GB (~12 s a model), L4 24 GB, A10G 24 GB (~35 s); see research/forge-gpu.md.
 TYPES=${FORGE3D_TYPES:-g6e.xlarge g6.2xlarge g5.2xlarge}
 URL=${WAKER_URL:-https://brawlmegle.vip/api/gpu/wanted}
+HEALTH=${FORGE3D_HEALTH:-http://54.161.35.172:8790/health}
 KEY_FILE=$HOME/.config/brawlegle/waker-key
 
 if [ "${1:-}" = install ]; then
@@ -38,7 +39,8 @@ fi
 KEY=$(cat "$KEY_FILE")
 last=0
 while true; do
-  if curl -fsS -m 5 -H "x-waker-key: $KEY" "$URL" 2>/dev/null | grep -q '"wanted":true'; then
+  # Wanted and not answering (an answering box is up: no need to ask AWS, whose CLI takes a couple of seconds).
+  if curl -fsS -m 5 -H "x-waker-key: $KEY" "$URL" 2>/dev/null | grep -q '"wanted":true' && ! curl -fsS -m 2 -o /dev/null "$HEALTH" 2>/dev/null; then
     state=$($AWS ec2 describe-instances --region "$REGION" --instance-ids "$INSTANCE" --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null)
     # Stopping (it just powered itself off): next round, once it's stopped.
     if [ "$state" = stopped ] && [ $(($(date +%s) - last)) -ge 30 ]; then
@@ -53,5 +55,5 @@ while true; do
       done
     fi
   fi
-  sleep 5
+  sleep 2
 done

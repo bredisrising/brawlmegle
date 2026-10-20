@@ -74,8 +74,8 @@ Blender 5.2, the app) and a systemd unit (`forge3d`, restarts on failure, starts
 | `FORGE3D_FACE_PROJECT` | `0`: `1` paints the sheet's face onto every model (`face_project.py`) |
 | `FORGE3D_FACE_MODEL` | `face_landmarker.task` next to the pose model (`weights.py` downloads it) |
 | `FORGE3D_IDLE_STOP_MIN` | `0` (never): power off after this many minutes with no forge (the live box: `15`) |
-| `FORGE3D_WARMUPS` | `2` warm-up runs at startup (the live box: `1`; the second only logs the steady-state time) |
-| `FORGE3D_LOW_VRAM` | unset: models stay on the card unless it has under 20 GiB (they need ~16 GiB, a run ~3.5 more); `1`/`0` forces it |
+| `FORGE3D_WARMUPS` | `2` warm-up runs at startup (the live box: `0`, so a cold start's first job doesn't wait ~30 s behind one; the second only logs the steady-state time) |
+| `FORGE3D_LOW_VRAM` | unset: models stay on the card unless it has under 20 GiB (they need ~13.6 GiB, a run ~3 more); `1`/`0` forces it |
 
 After changing it: `sudo systemctl restart forge3d`.
 
@@ -84,10 +84,10 @@ After changing it: `sudo systemctl restart forge3d`.
 An idle GPU costs as much as a busy one (~$1.86/h for this box), so the box powers itself off after
 `FORGE3D_IDLE_STOP_MIN` minutes with nothing to do (a stopped box costs only its disk, ~$16/month). It comes back on
 its own: the forge server marks the GPU "wanted" when someone opens the scan (`GET /api/capacity`) or a forge needs it,
-and `waker.sh` on bingus (which has the AWS key; the game server never does) polls `GET /api/gpu/wanted` every 5 s and
+and `waker.sh` on bingus (which has the AWS key; the game server never does) polls `GET /api/gpu/wanted` every 2 s and
 starts the box if it's stopped, as the first GPU AWS has free: g6e.xlarge (L40S), else g6.2xlarge (L4), else g5.2xlarge
-(A10G); a stopped box often can't get an L40S back (`research/forge-gpu.md`). From cold it's ready in about 3.5 min (boot ~1 min, model load ~2 min, one warm-up
-run); meanwhile the forge waits (`FORGE_3D_WARMUP_WAIT`, 6 min) and the player sees "Firing up the 3D forge". Forges
+(A10G); a stopped box often can't get an L40S back (`research/forge-gpu.md`). From cold it's ready in about 70 s (starting and booting ~35 s, the weights
+onto the GPU ~35 s, no warm-up run); meanwhile the forge waits (`FORGE_3D_WARMUP_WAIT`, 6 min) and the player sees "Firing up the 3D forge". Forges
 within the next 15 minutes find it warm. Set up the waker once on bingus:
 
 ```

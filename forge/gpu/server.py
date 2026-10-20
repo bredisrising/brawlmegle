@@ -66,9 +66,11 @@ SETTINGS = {
 }
 MAX_QUEUED = int(os.environ.get("FORGE3D_MAX_QUEUED", 6))
 # The box powers itself off after this many minutes with nothing to do (0: never). A stopped box costs only its disk;
-# the forge server starts it again when someone scans (forge/gpuwake.js), and it's ready about 3 min later.
+# bingus's waker starts it again when someone scans (waker.sh), and it's ready about a minute later.
 IDLE_STOP = float(os.environ.get("FORGE3D_IDLE_STOP_MIN", 0)) * 60
-# Warm-up runs at startup: the first compiles every kernel; a second one only logs the steady-state time.
+# Warm-up runs at startup: the first compiles every kernel; a second one only logs the steady-state time. 0 for a box
+# that's started for a scan: once a GPU type's kernels are compiled and tuned (cached on disk), the first real job is
+# only ~2 s slower than the rest, and a warm-up would make it wait 12-29 s.
 WARMUPS = int(os.environ.get("FORGE3D_WARMUPS", 2))
 JOB_TTL = 15 * 60
 MAX_BODY = 30 * 1024 * 1024
@@ -343,11 +345,13 @@ def load():
     global generator, landmarker
     try:
         start = time.time()
-        if os.environ.get("FORGE3D_DOWNLOAD") == "1":  # the HF Space fetches its weights on the first start
-            from weights import ensure
+        from weights import ensure, prefetch
 
+        if os.environ.get("FORGE3D_DOWNLOAD") == "1":  # the HF Space fetches its weights on the first start
             ensure(MODEL_DIR, POSE_MODEL)
             log(f"weights ready in {time.time() - start:.0f}s")
+        if not os.environ.get("FORGE3D_FAKE_GLB"):
+            prefetch(MODEL_DIR, SETTINGS["pipeline"])
         landmarker = Landmarker(POSE_MODEL)
         load_face()
         if os.environ.get("FORGE3D_FAKE_GLB"):
@@ -372,7 +376,7 @@ def load():
         warm_dir = os.path.join(WORK, "warmup")
         os.makedirs(warm_dir, exist_ok=True)
         sheet = warm_sheet()
-        for i in range(max(1, WARMUPS)):
+        for i in range(WARMUPS):
             start = time.time()
             timings = generator(sheet, os.path.join(warm_dir, "raw.glb"))
             find_landmarks({"id": "warmup", "sheet": sheet, "dir": warm_dir})

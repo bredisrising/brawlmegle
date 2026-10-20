@@ -85,7 +85,7 @@ export function boxRig(report) {
  */
 /** How long a scan waits for a warming GPU box before giving up on it, and how often it looks in on it. */
 const WARMUP_WAIT_MS = Number(process.env.FORGE_3D_WARMUP_WAIT ?? 360) * 1000;
-const WARMUP_POLL_MS = Number(process.env.FORGE_3D_WARMUP_POLL ?? 5000);
+const WARMUP_POLL_MS = Number(process.env.FORGE_3D_WARMUP_POLL ?? 2000);
 
 /**
  * The GPU box powers itself off when it's had nothing to do for a while (forge/gpu/server.py, FORGE3D_IDLE_STOP_MIN):
@@ -107,7 +107,7 @@ const health = () => local("/health", {}, 3_000).then((res) => res.json(), () =>
 export async function makeModelLocal(sheet, onStep, model = null, { onPreview, settings, rigAttempt, face, faceOnly } = {}) {
   // A stopped box doesn't refuse the connection, it just never answers: find out in 3 s, not 20.
   let state = await health();
-  // Stopped (idle), starting or warming up (~3 min from cold): wait for it rather than fail the scan. A box that's up
+  // Stopped (idle), starting or loading (~1 min from cold): wait for it rather than fail the scan. A box that's up
   // but broken still fails straight away.
   if (!state?.ready) {
     wantGpu();
