@@ -117,19 +117,42 @@ export function boxRig(report) {
  * timings and its rig report (`rig`, see boxRig). Throws on any failure, or if it isn't done within FORGE_3D_TIMEOUT, so the caller can fall back to Tripo.
  * With `model` (a GLB), the box only rigs that model (forge/gpu/rescue.mjs).
  */
-/** How long a scan waits for a warming GPU box before giving up on it. */
+/** How long a scan waits for a warming GPU box before giving up on it, and how often it looks in on it. */
 const WARMUP_WAIT_MS = Number(process.env.FORGE_3D_WARMUP_WAIT ?? 360) * 1000;
+const WARMUP_POLL_MS = Number(process.env.FORGE_3D_WARMUP_POLL ?? 5000);
+
+/**
+ * The GPU box powers itself off when it's had nothing to do for a while (forge/gpu/server.py, FORGE3D_IDLE_STOP_MIN):
+ * an idle GPU costs as much as a busy one. Someone about to forge "wants" it: that resets its idle clock if it's up,
+ * and bingus's waker (forge/gpu/waker.sh, polling GET /api/gpu/wanted) starts it if it's stopped. The waker holds the
+ * AWS key; this server never does.
+ */
+let gpuWanted = 0;
+export function wantGpu() {
+  if (ENGINE_3D !== "local") return;
+  gpuWanted = Date.now();
+  local("/keepalive", { method: "POST" }, 2_000).catch(() => {});
+}
+/** When a forge last wanted the GPU box (ms, 0 = never). */
+export const gpuWantedAt = () => gpuWanted;
+
+const health = () => local("/health", {}, 3_000).then((res) => res.json(), () => null);
 
 export async function makeModelLocal(sheet, onStep, model = null, { onPreview, settings, rigAttempt, face, faceOnly } = {}) {
   // A stopped box doesn't refuse the connection, it just never answers: find out in 3 s, not 20.
-  let health = await (await local("/health", {}, 3_000)).json();
-  // Warming up (a restart or a deploy, ~4 min): wait for it rather than fail the scan (Tripo, the fallback, may be out
-  // of credits). A box that's broken, not warming, still fails straight away.
-  for (const until = Date.now() + WARMUP_WAIT_MS; !health.ready && !health.error && Date.now() < until; ) {
-    await new Promise((r) => setTimeout(r, 5_000));
-    health = await (await local("/health", {}, 3_000)).json();
+  let state = await health();
+  // Stopped (idle), starting or warming up (~3 min from cold): wait for it rather than fail the scan (Tripo, the
+  // fallback, may be out of credits). A box that's up but broken still fails straight away.
+  if (!state?.ready) {
+    wantGpu();
+    onStep("warmup");
   }
-  if (!health.ready) throw new Error(`GPU box not ready: ${health.error ?? "warming up"}`);
+  for (const until = Date.now() + WARMUP_WAIT_MS; !state?.ready && !state?.error && Date.now() < until; ) {
+    await new Promise((r) => setTimeout(r, WARMUP_POLL_MS));
+    state = await health();
+    gpuWanted = Date.now();
+  }
+  if (!state?.ready) throw new Error(`GPU box not ready: ${state?.error ?? (state ? "warming up" : "not answering")}`);
   const deadline = Date.now() + LOCAL_TIMEOUT_MS;
   // rigAttempt > 1: a re-rig after the rig check turned the first one down (a box that knows another way to weight a
   // model can take it as the cue; one that doesn't just rigs it again).

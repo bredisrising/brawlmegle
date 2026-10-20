@@ -10,6 +10,7 @@ const delay = Number(process.env.MOCK_DELAY_MS ?? 0);
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let gpuPolls = 0;
+let gpuHealth = 0;
 const fixture = (name) => fs.readFileSync(new URL(`./fixtures/rig-${name}.glb`, import.meta.url));
 let rigs = 0;
 /** The next rigged model any engine hands back. */
@@ -76,8 +77,13 @@ globalThis.fetch = async (input, init = {}) => {
     if (process.env.MOCK_GPU_HF && new Headers(init.headers).get("authorization") !== `Bearer ${process.env.MOCK_GPU_HF}`) {
       return json({ error: "Repository not found" }, 404);
     }
-    if (url.endsWith("/health")) return json({ ok: true, ready: process.env.MOCK_GPU !== "cold", queued: 0 });
+    if (url.endsWith("/health")) {
+      // MOCK_GPU=asleep: a powered-off box (it never answers) for the first two looks, then up.
+      if (process.env.MOCK_GPU === "asleep" && gpuHealth++ < 2) throw new TypeError("fetch failed");
+      return json({ ok: true, ready: process.env.MOCK_GPU !== "cold", queued: 0 });
+    }
     if (new Headers(init.headers).get("x-forge3d-key") !== "gpu-key") return json({ error: "bad key" }, 403);
+    if (url.endsWith("/keepalive")) return json({ ok: true, ready: true });
     if (url.endsWith("/jobs")) return json({ id: "g1" }, 202);
     if (url.endsWith("/voxels.bin")) return new Response(Buffer.from([32, 0, 1, 2, 3]));
     if (url.endsWith("/shape.glb")) return new Response(Buffer.from("glTF-shape"));

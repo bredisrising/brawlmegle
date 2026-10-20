@@ -287,6 +287,26 @@ describe('forge server', () => {
     });
   });
 
+  it('a powered-off GPU box: the forge asks for it, waits while it starts, then builds on it', async () => {
+    const waker = 'waker-secret';
+    const { base, forge, until } = await startForge({
+      FORGE_3D: 'local', FORGE_3D_URL: 'http://gpu.mock', FORGE_3D_KEY: 'gpu-key', MOCK_GPU: 'asleep', FORGE_3D_WARMUP_POLL: '50', FORGE_GPU_WAKER_KEY: waker,
+      TRIPO_API_KEY: '', // no fallback: a ready fighter means the GPU box built it
+    });
+    const wanted = async (key = waker) => {
+      const res = await fetch(`${base}/api/gpu/wanted`, { headers: { 'x-waker-key': key } });
+      return res.ok ? ((await res.json()) as { wanted: boolean }).wanted : res.status;
+    };
+    expect(await wanted('nope')).toBe(403);
+    expect(await wanted()).toBe(false);
+    // Opening the scan is the cue: bingus's waker starts the box from here.
+    expect((await fetch(`${base}/api/capacity`)).ok).toBe(true);
+    expect(await wanted()).toBe(true);
+    const { id } = (await (await forge({ name: 'A', frames: [JPEG] })).json()) as { id: string };
+    const f = await until(id, (x) => x.status !== 'scanning' && x.status !== 'forging');
+    expect(f.status).toBe('ready');
+  });
+
   it('answers a JSON null body with 400, not 500', async () => {
     const { forge } = await startForge();
     expect((await forge(null)).status).toBe(400);

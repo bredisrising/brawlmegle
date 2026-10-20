@@ -73,8 +73,28 @@ Blender 5.2, the app) and a systemd unit (`forge3d`, restarts on failure, starts
 | `FORGE3D_YAW` | `0`: extra turn (degrees) before the rigger's own facing check |
 | `FORGE3D_FACE_PROJECT` | `0`: `1` paints the sheet's face onto every model (`face_project.py`) |
 | `FORGE3D_FACE_MODEL` | `face_landmarker.task` next to the pose model (`weights.py` downloads it) |
+| `FORGE3D_IDLE_STOP_MIN` | `0` (never): power off after this many minutes with no forge (the live box: `15`) |
+| `FORGE3D_WARMUPS` | `2` warm-up runs at startup (the live box: `1`; the second only logs the steady-state time) |
 
 After changing it: `sudo systemctl restart forge3d`.
+
+### Only paying while it forges
+
+An idle GPU costs as much as a busy one (~$1.86/h for this box), so the box powers itself off after
+`FORGE3D_IDLE_STOP_MIN` minutes with nothing to do (a stopped box costs only its disk, ~$16/month). It comes back on
+its own: the forge server marks the GPU "wanted" when someone opens the scan (`GET /api/capacity`) or a forge needs it,
+and `waker.sh` on bingus (which has the AWS key; the game server never does) polls `GET /api/gpu/wanted` every 5 s and
+starts the box if it's stopped. From cold it's ready in about 3.5 min (boot ~1 min, model load ~2 min, one warm-up
+run); meanwhile the forge waits (`FORGE_3D_WARMUP_WAIT`, 6 min) and the player sees "Firing up the 3D forge". Forges
+within the next 15 minutes find it warm. Set up the waker once on bingus:
+
+```
+mkdir -p ~/.config/brawlegle && (umask 077; echo "$FORGE_GPU_WAKER_KEY" > ~/.config/brawlegle/waker-key)
+bash waker.sh install                            # user service brawlegle-gpu-waker (systemd, lingering)
+journalctl --user -u brawlegle-gpu-waker -f      # "wanted and stopped: starting ..."
+```
+
+The game server needs the same key as `FORGE_GPU_WAKER_KEY` in `/etc/brawlegle/forge.env`.
 
 ## Or on Hugging Face
 

@@ -6,6 +6,7 @@ import type { ScanView } from './scanGuide';
 export const FORGE_STEPS: Record<NonNullable<ForgedFighter['step']>, string> = {
   brief: 'Sizing you up',
   sheet: 'Drawing your fighter',
+  warmup: 'Firing up the 3D forge (first one in a while: about 3 min)',
   model: 'Building your 3D model',
   cleanup: 'Polishing',
   rig: 'Rigging your fighter',

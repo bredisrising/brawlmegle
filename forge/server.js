@@ -21,7 +21,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import { pipeline } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { runForge, models, commentate, speak, voiceKey } from "./pipeline.js";
+import { runForge, models, commentate, speak, voiceKey, wantGpu, gpuWantedAt } from "./pipeline.js";
 import { available as rigCheckAvailable } from "./rigcheck.js";
 import { adminKey, matchesHash, newOwner, normalizeCode, publicFighter, purgeFighter, sha256 } from "./owner.js";
 
@@ -475,9 +475,18 @@ async function handle(req, res) {
   }
 
   // Whether a forge would be accepted right now, so the game can say so before the player spends ~20 s scanning.
+  // It's also the cue to get the GPU box up: their forge reaches it in ~40 s.
   if (req.method === "GET" && url.pathname === "/api/capacity") {
     const full = capacityError();
+    if (!full) wantGpu();
     return json(res, 200, full ? { ok: false, error: full } : { ok: true });
+  }
+
+  // For bingus's GPU waker (forge/gpu/waker.sh): has a forge wanted the GPU box in the last 10 minutes?
+  if (req.method === "GET" && url.pathname === "/api/gpu/wanted") {
+    const key = process.env.FORGE_GPU_WAKER_KEY;
+    if (!key || req.headers["x-waker-key"] !== key) return json(res, 403, { error: "bad waker key" });
+    return json(res, 200, { wanted: Date.now() - gpuWantedAt() < 10 * 60_000 });
   }
 
   if (req.method === "POST" && url.pathname === "/api/forge") {
@@ -485,6 +494,7 @@ async function handle(req, res) {
     if (ACCESS_KEY && req.headers["x-forge-key"] !== ACCESS_KEY) return json(res, 403, { error: "bad forge key" });
     const full = capacityError();
     if (full) return json(res, 429, { error: full });
+    wantGpu();
     // Hold the slot while the photos upload, so parallel requests can't all get past the caps above.
     uploading++;
     let body;

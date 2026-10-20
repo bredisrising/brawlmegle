@@ -112,7 +112,7 @@ export type ForgedFighter = {
   id: string;
   name: string; // typed in by the player before the scan
   status: 'scanning' | 'forging' | 'ready' | 'failed';
-  step?: 'brief' | 'sheet' | 'model' | 'cleanup' | 'rig';
+  step?: 'brief' | 'sheet' | 'warmup' | 'model' | 'cleanup' | 'rig';
   glbUrl?: string; // 1 m tall; forged models use Mixamo bones, static test models may be unrigged
   cardUrl?: string; // VS card art
   sheetUrl?: string; // A-pose model sheet (input to the 3D step)

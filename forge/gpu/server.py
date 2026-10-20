@@ -9,6 +9,7 @@ Forge 3D service: model sheet in, Mixamo-rigged GLB out, on one GPU box (see REA
                                     "face": {"painted", "seconds", ...} when the face step ran}
     GET  /jobs/<id>/rigged.glb ->  the rigged model (model.glb: the same model without a skeleton)
     GET  /health               ->  {"ok", "ready", "queued", "settings"}
+    POST /keepalive            ->  {"ok", "ready"}  (a scan's started: put off the idle power-off)
 
 Every call but /health needs the header x-forge3d-key: $FORGE3D_KEY. One GPU thread makes models (TRELLIS.2) and
 one CPU thread rigs them (MediaPipe on the sheet, then Blender), so back-to-back forges overlap.
@@ -64,6 +65,11 @@ SETTINGS = {
     "yaw": float(os.environ.get("FORGE3D_YAW", 0)),
 }
 MAX_QUEUED = int(os.environ.get("FORGE3D_MAX_QUEUED", 6))
+# The box powers itself off after this many minutes with nothing to do (0: never). A stopped box costs only its disk;
+# the forge server starts it again when someone scans (forge/gpuwake.js), and it's ready about 3 min later.
+IDLE_STOP = float(os.environ.get("FORGE3D_IDLE_STOP_MIN", 0)) * 60
+# Warm-up runs at startup: the first compiles every kernel; a second one only logs the steady-state time.
+WARMUPS = int(os.environ.get("FORGE3D_WARMUPS", 2))
 JOB_TTL = 15 * 60
 MAX_BODY = 30 * 1024 * 1024
 
@@ -71,7 +77,7 @@ jobs: dict[str, dict] = {}
 jobs_lock = threading.Lock()
 gpu_q: "queue.Queue[dict]" = queue.Queue()
 rig_q: "queue.Queue[dict]" = queue.Queue()
-state = {"ready": False, "error": None}
+state = {"ready": False, "error": None, "used": time.time()}
 generator = None
 landmarker = None
 landmark_lock = threading.Lock()
@@ -264,6 +270,7 @@ def rig_worker():
             traceback.print_exc()
             job.update(status="failed", error=f"rig: {err}")
         job["timings"]["total"] = round(time.time() - job["created"], 2)
+        state["used"] = time.time()
         log(job["id"][:8], job["status"], job["timings"], job.get("error", ""))
 
 
@@ -275,6 +282,13 @@ def janitor():
             old = [i for i, j in jobs.items() if now - j["created"] > JOB_TTL]
             for i in old:
                 shutil.rmtree(jobs.pop(i)["dir"], ignore_errors=True)
+            busy = any(j["status"] in ("queued", "model", "rig") for j in jobs.values())
+        # Nothing to do for IDLE_STOP: power off (still loading counts as busy; a box that failed to load stops too).
+        loading = not state["ready"] and state["error"] is None
+        if IDLE_STOP and not busy and not loading and gpu_q.empty() and rig_q.empty() and now - state["used"] > IDLE_STOP:
+            log(f"idle for {(now - state['used']) / 60:.0f} min: powering off")
+            subprocess.run(["systemctl", "poweroff"], check=False)
+            return
 
 
 def warm_sheet() -> Image.Image:
@@ -358,7 +372,7 @@ def load():
         warm_dir = os.path.join(WORK, "warmup")
         os.makedirs(warm_dir, exist_ok=True)
         sheet = warm_sheet()
-        for i in range(2):  # the second run shows the steady-state time
+        for i in range(max(1, WARMUPS)):
             start = time.time()
             timings = generator(sheet, os.path.join(warm_dir, "raw.glb"))
             find_landmarks({"id": "warmup", "sheet": sheet, "dir": warm_dir})
@@ -414,6 +428,7 @@ class Handler(BaseHTTPRequestHandler):
                                    "queued": gpu_q.qsize() + rig_q.qsize(), "settings": SETTINGS})
         if not self.authorized():
             return
+        state["used"] = time.time()
         if len(parts) >= 2 and parts[0] == "jobs":
             job = jobs.get(parts[1])
             if not job:
@@ -431,10 +446,15 @@ class Handler(BaseHTTPRequestHandler):
         self.send(404, {"error": "not found"})
 
     def do_POST(self):
-        if self.path.split("?")[0].rstrip("/") != "/jobs":
+        path = self.path.split("?")[0].rstrip("/")
+        if path not in ("/jobs", "/keepalive"):
             return self.send(404, {"error": "not found"})
         if not self.authorized():
             return
+        state["used"] = time.time()
+        if path == "/keepalive":
+            # Someone's scanning: don't power off now (their forge reaches the box in ~30 s).
+            return self.send(200, {"ok": state["error"] is None, "ready": state["ready"]})
         if not state["ready"]:
             return self.send(503, {"error": state["error"] or "warming up"})
         if gpu_q.qsize() >= MAX_QUEUED:
