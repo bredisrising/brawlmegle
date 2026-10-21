@@ -194,6 +194,8 @@ export class Game {
   private readonly cam = new CameraShare();
   /** Test hook: a camera stream to share when the local input has none (the mock input in dev and tests). */
   cameraOverride: MediaStream | null = null;
+  /** The local camera last told whether to use short exposure, and what (see tuneCamera). */
+  private tuned: { source: InputSource | null; on: boolean } = { source: null, on: false };
   /**
    * "Find a fight": this tab's matchmaker id, the fighter picked once and kept for every opponent (as host it's set up
    * as P1; as client it's sent as a pick), and the camera, kept running as the role flips between host and client.
@@ -1248,6 +1250,7 @@ export class Game {
   private update = (dt: number, frozen: boolean) => {
     this.effects.update(dt);
     this.shareCamera();
+    this.tuneCamera();
     this.checkNext();
     this.watchPeer();
     if (this.replayIn > 0 && !frozen && (this.replayIn -= dt) <= 0) {
@@ -1371,6 +1374,19 @@ export class Game {
   private shareCamera() {
     const video = this.localInputSource()?.video?.srcObject;
     this.cam.camera(video instanceof MediaStream ? video : this.cameraOverride);
+  }
+
+  /**
+   * Short exposure on this laptop's camera (less blur on every punch), except during the body scan: the forge's photos
+   * want the camera's own exposure. Cheap; every frame (it only tells the camera when something changed).
+   */
+  private tuneCamera() {
+    const { role, players } = useGameStore.getState();
+    const source = this.localInputSource() as (InputSource & { setShortExposure?: (on: boolean) => Promise<boolean> }) | null;
+    const on = players[localPlayerId(role)].status !== 'scanning';
+    if (source === this.tuned.source && on === this.tuned.on) return;
+    this.tuned = { source, on };
+    void source?.setShortExposure?.(on);
   }
 
   private async pollLink() {

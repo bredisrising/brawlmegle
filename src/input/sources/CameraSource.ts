@@ -6,6 +6,7 @@ import {
   type PoseDelegate, type PoseVariant, type PoseWorkerReply, type PoseWorkerRequest,
 } from './poseModel';
 import { PersonPicker } from './personPicker';
+import { ShortExposure, exposureCaps, medianLuma } from '../exposure';
 
 const PARAMS = new URLSearchParams(window.location.search);
 /** `full` is more accurate at a modest cost; phones get `lite` to keep the frame rate up. `?pose=lite|full` overrides. */
@@ -17,6 +18,8 @@ const NUM_POSES = PARAMS.get('poses') === '1' ? 1 : 2;
 const DELEGATE: PoseDelegate = PARAMS.get('posedelegate')?.toLowerCase() === 'cpu' ? 'CPU' : 'GPU';
 /** Detection runs in a worker where the browser can (`?poseworker=0` keeps it on the main thread, as before). */
 const WORKER_OK = PARAMS.get('poseworker') !== '0';
+/** `?exposure=0` leaves the camera's exposure to the camera (see setShortExposure). */
+const EXPOSURE_OK = PARAMS.get('exposure') !== '0';
 /**
  * Lite only pays off on the CPU delegate: on a GPU the time goes to the person detector, so lite measured no faster
  * (25.8 vs 29.5 ms on an RTX 4070, slower on a Radeon 780M) and only gave up accuracy. Full on a laptop's CPU managed 9
@@ -89,6 +92,10 @@ export class CameraSource implements InputSource {
   /** Copies of the frames being detected, so listeners can see the exact image a pose came from. */
   private readonly kept = new Map<number, VideoFrame>();
   private delivering: CanvasImageSource | null = null;
+  /** Short exposure (setShortExposure): wanted or not, the live camera's, and the tiny canvas it measures light on. */
+  private exposureWanted = false;
+  private exposure: ShortExposure | null = null;
+  private lumaCanvas: HTMLCanvasElement | null = null;
 
   get latestFrame() {
     return this._latestFrame;
@@ -124,26 +131,53 @@ export class CameraSource implements InputSource {
   }
 
   /**
-   * Short exposure (~1/250 s) cuts motion blur on fast punches, if the camera allows manual exposure
-   * (many Windows/Linux webcams do; MacBook cameras usually don't). Needs a bright room.
-   * Returns false if unsupported.
+   * Short exposure: less motion blur on fast punches, where the camera lets the page set its exposure (many Windows
+   * and Linux webcams; not MacBooks). As short as the room's light allows (exposure.ts), and the camera gets its own
+   * exposure back whenever the tab hides or closes, the camera stops, or anything fails. Asked for before the camera
+   * starts, it starts with it. Resolves false if this camera doesn't allow it (or with `?exposure=0`).
    */
   async setShortExposure(on: boolean): Promise<boolean> {
-    const track = this.stream?.getVideoTracks()[0];
-    const caps = (track?.getCapabilities?.() ?? {}) as MediaTrackCapabilities & { exposureMode?: string[]; exposureTime?: { min: number; max: number } };
-    if (!track || !caps.exposureMode?.includes('manual') || !caps.exposureTime) return false;
-    try {
-      if (!on) {
-        await track.applyConstraints({ advanced: [{ exposureMode: 'continuous' } as MediaTrackConstraintSet] });
-        return true;
-      }
-      // Two steps: exposureTime is ignored until manual mode is on. Units are 100 µs, so 40 = 1/250 s.
-      await track.applyConstraints({ advanced: [{ exposureMode: 'manual' } as MediaTrackConstraintSet] });
-      const time = Math.min(Math.max(40, caps.exposureTime.min), caps.exposureTime.max);
-      await track.applyConstraints({ advanced: [{ exposureTime: time } as MediaTrackConstraintSet] });
+    this.exposureWanted = on && EXPOSURE_OK;
+    if (!on) {
+      await this.exposure?.release();
       return true;
+    }
+    if (!this.stream) return EXPOSURE_OK;
+    this.startExposure();
+    return !!this.exposure && this.exposure.state !== 'failed';
+  }
+
+  /** Short exposure on the live camera, if it's wanted, the camera allows it and the tab is in view. */
+  private startExposure() {
+    const track = this.stream?.getVideoTracks()[0];
+    if (!this.exposureWanted || !track) return;
+    if (!this.exposure) {
+      const caps = exposureCaps(track);
+      if (!caps) return;
+      this.exposure = new ShortExposure(track, caps, () => this.measureLuma());
+    }
+    if (document.visibilityState !== 'hidden') this.exposure.start();
+  }
+
+  /** A hidden tab gives the camera its own exposure back (another app may open it), a visible one takes it again. */
+  private onVisibility = () => {
+    if (document.visibilityState === 'hidden') void this.exposure?.release();
+    else this.startExposure();
+  };
+
+  private releaseExposure = () => void this.exposure?.release();
+
+  /** The picture's median brightness, from a 32x24 copy of the current camera frame (null before there's one). */
+  private measureLuma(): number | null {
+    if (this.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return null;
+    try {
+      this.lumaCanvas ??= Object.assign(document.createElement('canvas'), { width: 32, height: 24 });
+      const ctx = this.lumaCanvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return null;
+      ctx.drawImage(this.video, 0, 0, 32, 24);
+      return medianLuma(ctx.getImageData(0, 0, 32, 24).data);
     } catch {
-      return false;
+      return null;
     }
   }
 
@@ -188,6 +222,9 @@ export class CameraSource implements InputSource {
       if (!this.worker) await this.startInPage();
       this.running = true;
       this.schedule();
+      document.addEventListener('visibilitychange', this.onVisibility);
+      window.addEventListener('pagehide', this.releaseExposure);
+      this.startExposure();
     } catch (error) {
       this.stop();
       throw error;
@@ -213,7 +250,18 @@ export class CameraSource implements InputSource {
     this.landmarker?.close();
     this.landmarker = null;
     this.picker.reset();
-    this.stream?.getTracks().forEach((track) => track.stop());
+    document.removeEventListener('visibilitychange', this.onVisibility);
+    window.removeEventListener('pagehide', this.releaseExposure);
+    const tracks = this.stream?.getTracks() ?? [];
+    const stopTracks = () => tracks.forEach((track) => track.stop());
+    const exposure = this.exposure;
+    this.exposure = null;
+    // The camera's own exposure back before letting it go: some webcams keep a manual one into the next app.
+    if (exposure?.manual) void exposure.release().finally(stopTracks);
+    else {
+      void exposure?.release();
+      stopTracks();
+    }
     this.stream = null;
     this.video.pause();
     this.video.srcObject = null;
