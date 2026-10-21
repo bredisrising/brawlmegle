@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { InputSource } from '../input/InputSource';
+import { FramingCoach } from '../input/framing';
 import { poseWarningOf, type PoseWarning } from '../input/poseHealth';
 import type { Landmark, PoseFrame } from '../types';
 import { localPlayerId, useGameStore } from '../game/store';
@@ -76,17 +77,20 @@ export function CameraPip() {
 
 /**
  * A strip over the camera picture when tracking is too slow to read moves well (few poses a second, a dim camera, no
- * GPU), saying what helps. The camera re-rates every 2 s; this looks once a second.
+ * GPU), saying what helps. Otherwise, when the player is framed badly (head cut off, too close, hands out of the shot),
+ * what to fix (FramingCoach). The camera re-rates every 2 s; this looks four times a second.
  */
 function PoseWarningNote({ source }: { source: InputSource }) {
   const [warning, setWarning] = useState<PoseWarning | null>(() => poseWarningOf(source));
   useEffect(() => {
+    const coach = new FramingCoach();
     const look = () => setWarning((old) => {
-      const now = poseWarningOf(source);
+      const framing = coach.update(source.latestFrame);
+      const now = poseWarningOf(source) ?? (framing && { kind: 'camera' as const, text: framing.text });
       return now?.text === old?.text ? old : now;
     });
     look();
-    const t = setInterval(look, 1000);
+    const t = setInterval(look, 250);
     return () => clearInterval(t);
   }, [source]);
   if (!warning) return null;
