@@ -92,18 +92,18 @@ export function TitleScreen() {
           <div className="flex w-full flex-col items-start gap-5 md:w-[31rem] md:shrink-0 md:items-end">
             {mode === 'pick' ? (
               <nav className="@container flex w-full max-w-[31rem] flex-col gap-[clamp(0.3rem,1vh,0.5rem)]">
-                <MenuItem primary index="01" label="Find a fight" fit={MAIN_FIT} hint="Fight a random opponent online" color="hover:bg-paper" bar="bg-ink" disabled={busy} onClick={() => game.findFight()} delay={100} />
-                <MenuItem index="02" label="Play a friend" fit={MAIN_FIT} hint="Make a room or join one with a code" color="hover:bg-p2" bar="bg-p2" disabled={busy} onClick={() => setMode('friend')} delay={180} />
-                <MenuItem index="03" label="VS CPU" fit={MAIN_FIT} hint="Fight the computer on this screen" color="hover:bg-hp" bar="bg-hp" disabled={busy} onClick={() => run(() => game.practice())} delay={260} />
-                <MenuItem index="04" label="Training" fit={MAIN_FIT} hint="Try your moves, no opponent" color="hover:bg-hp" bar="bg-hp" disabled={busy} onClick={() => run(() => game.practice('dummy'))} delay={340} />
-                <MenuItem index="05" label="Leaders" fit={MAIN_FIT} hint="See every fighter's record" color="hover:bg-paper" bar="bg-paper" disabled={busy} onClick={() => setMode('leaderboard')} delay={420} />
+                <MenuItem primary label="Find a fight" fit={MAIN_FIT} hint="Fight a random opponent online" color="hover:bg-paper" bar="bg-ink" disabled={busy} onClick={() => game.findFight()} delay={100} />
+                <MenuItem label="Play a friend" fit={MAIN_FIT} color="hover:bg-p2" bar="bg-p2" disabled={busy} onClick={() => setMode('friend')} delay={180} />
+                <MenuItem label="VS CPU" fit={MAIN_FIT} color="hover:bg-p1" bar="bg-p1" disabled={busy} onClick={() => run(() => game.practice())} delay={260} />
+                <MenuItem label="Training" fit={MAIN_FIT} color="hover:bg-low" bar="bg-low" disabled={busy} onClick={() => run(() => game.practice('dummy'))} delay={340} />
+                <MenuItem label="Leaders" fit={MAIN_FIT} color="hover:bg-paper" bar="bg-paper" disabled={busy} onClick={() => setMode('leaderboard')} delay={420} />
               </nav>
             ) : mode === 'friend' ? (
               <div className="@container animate-rise flex w-full max-w-[31rem] flex-col gap-[clamp(0.3rem,1vh,0.5rem)]">
                 <p className="font-cond text-sm font-bold uppercase tracking-[0.3em] text-paper/60">Play a friend</p>
-                <MenuItem index="A" label="Create a room" fit={FRIEND_FIT} hint="Get a code to send to your friend" color="hover:bg-p1" bar="bg-p1" disabled={busy} onClick={() => run(() => game.host())} delay={0} />
-                <MenuItem index="B" label="Join with a code" fit={FRIEND_FIT} hint="Type the code your friend sent you" color="hover:bg-p2" bar="bg-p2" disabled={busy} onClick={() => setMode('join')} delay={60} />
-                <MenuItem index="C" label="Watch a room" fit={FRIEND_FIT} hint="Show a fight here, like a TV" color="hover:bg-paper" bar="bg-paper" disabled={busy} onClick={() => setMode('watch')} delay={120} />
+                <MenuItem label="Create a room" fit={FRIEND_FIT} hint="Get a code to send to your friend" color="hover:bg-hp" bar="bg-hp" disabled={busy} onClick={() => run(() => game.host())} delay={0} />
+                <MenuItem label="Join with a code" fit={FRIEND_FIT} hint="Type the code your friend sent you" color="hover:bg-p2" bar="bg-p2" disabled={busy} onClick={() => setMode('join')} delay={60} />
+                <MenuItem label="Watch a room" fit={FRIEND_FIT} hint="Show a fight here, like a TV" color="hover:bg-paper" bar="bg-paper" disabled={busy} onClick={() => setMode('watch')} delay={120} />
                 <TextButton className="mt-1 self-start" onClick={() => setMode('pick')}>← Back</TextButton>
               </div>
             ) : mode === 'join' || mode === 'watch' ? (
@@ -255,13 +255,13 @@ function Podium({ top }: { top: { fighter: ForgedFighter; record: FighterRecord 
 const MAIN_FIT = 'Play a friend'.length;
 const FRIEND_FIT = 'Join with a code'.length;
 
-function MenuItem(props: { index: string; label: string; hint: string; color: string; bar: string; disabled: boolean; onClick: () => void; delay: number; fit: number; primary?: boolean }) {
-  const { index, label, hint, color, bar, disabled, onClick, delay, fit, primary } = props;
+/** A menu row. `hint` is for rows whose label doesn't say it all (the main menu keeps one, on Find a fight). */
+function MenuItem(props: { label: string; hint?: string; color: string; bar: string; disabled: boolean; onClick: () => void; delay: number; fit: number; primary?: boolean }) {
+  const { label, hint, color, bar, disabled, onClick, delay, fit, primary } = props;
   // The display face runs about 0.6 em per capital, and the label gets about two thirds of the menu's width.
   const fontSize = `min(clamp(1.4rem, min(5vh, 6.5vw), 3rem), ${(110 / fit).toFixed(2)}cqw)`;
-  // The primary action is filled in, so it's the obvious first click; its hint always shows (it says what it does).
-  const fill = primary ? 'bg-p1 text-ink' : 'bg-ink-3';
-  const muted = primary ? 'text-ink/60' : 'text-paper/45';
+  // The primary action is filled in (yellow, so it stands off the pink slab behind it): the obvious first click.
+  const fill = primary ? 'bg-hp text-ink' : 'bg-ink-3';
   const hintColor = primary ? 'text-ink/75' : 'text-paper/50 [@media(max-height:620px)]:hidden';
   return (
     <button
@@ -271,10 +271,9 @@ function MenuItem(props: { index: string; label: string; hint: string; color: st
       className={`animate-in-r group relative flex w-full items-center gap-3 sm:gap-5 ${fill} py-[clamp(0.45rem,1.7vh,1rem)] pr-4 pl-6 text-left sm:pr-6 sm:pl-8 transition-[background-color,padding,gap,width] duration-150 hover:w-[calc(100vw-1.5rem)] hover:gap-0 hover:py-[clamp(0.7rem,2.6vh,1.5rem)] hover:pr-6 hover:pl-6 hover:text-ink sm:hover:w-[calc(100%+2rem)] disabled:pointer-events-none disabled:opacity-40 ${color}`}
     >
       <span className={`absolute inset-y-0 left-0 w-2 ${bar} group-hover:bg-ink`} />
-      <span className={`hidden font-cond text-sm sm:inline font-bold tracking-[0.3em] ${muted} sm:group-hover:hidden`}>{index}</span>
       <span className="min-w-0 flex-1">
         <span className="block truncate font-display uppercase leading-none tracking-tight" style={{ fontSize }}>{label}</span>
-        <span className={`mt-1 block font-cond text-xs sm:truncate sm:text-sm font-semibold uppercase tracking-[0.15em] group-hover:text-ink/70 ${hintColor}`}>{hint}</span>
+        {hint && <span className={`mt-1 block font-cond text-xs sm:truncate sm:text-sm font-semibold uppercase tracking-[0.15em] group-hover:text-ink/70 ${hintColor}`}>{hint}</span>}
       </span>
       <Arrow className="text-3xl group-hover:hidden" />
     </button>

@@ -13,8 +13,9 @@ const TITLE = ['Reigning king', 'Contender', 'Contender'];
 /**
  * The title screen's reigning champions: the top three on the leaderboard take turns on one plate under the tagline,
  * like a fighting game's champion card: their forged fighter's face in a metal frame (gold, silver, bronze), the rank
- * stamped behind their name, a crown on the king, a flame on a hot streak, and a shine as each one slams in. Clicking
- * it opens the leaderboard. Nothing shows until someone has won a fight.
+ * stamped behind their name, a crown on the king, a flame on a hot streak, and a shine as each one slams in. Kept
+ * short so the menu still fits a laptop screen. Clicking it opens the leaderboard. Nothing shows until someone has
+ * won a fight.
  */
 export function Kings({ onOpen }: { onOpen: () => void }) {
   const [kings, setKings] = useState<{ fighter: ForgedFighter; record: FighterRecord }[]>([]);
@@ -46,33 +47,33 @@ export function Kings({ onOpen }: { onOpen: () => void }) {
   const hot = record.streak >= 3;
 
   return (
-    <button type="button" onClick={onOpen} title="See the leaderboard" style={metal} className="group mt-[clamp(0.7rem,2.2vh,1.3rem)] block max-w-[24rem] text-left">
+    <button type="button" onClick={onOpen} title="See the leaderboard" style={metal} className="group mt-[clamp(0.5rem,1.6vh,0.9rem)] block max-w-[22rem] text-left">
       <span key={fighter.id} className="animate-in-l relative flex items-stretch">
         {/* Portrait in a notched metal frame; the king wears the crown. */}
         <span className="relative shrink-0">
           <span className="cut block bg-[var(--metal)] p-[3px] [--cut:10px]">
-            <span className="cut relative block h-[4.6rem] w-[3.9rem] overflow-hidden bg-ink-3 [--cut:8px] sm:h-[5.4rem] sm:w-[4.5rem]">
+            <span className="cut relative block h-[3.6rem] w-[3rem] overflow-hidden bg-ink-3 [--cut:8px] sm:h-[4rem] sm:w-[3.4rem]">
               {fighter.cardUrl ? (
                 <img src={fighter.cardUrl} alt="" className="absolute left-1/2 top-[4%] h-[230%] w-auto max-w-none -translate-x-1/2 transition-transform duration-300 group-hover:scale-105" />
               ) : (
-                <span className="tex-dots grid size-full place-items-center font-display text-xl uppercase text-paper/30">{fighter.name.slice(0, 2)}</span>
+                <span className="tex-dots grid size-full place-items-center font-display text-lg uppercase text-paper/30">{fighter.name.slice(0, 2)}</span>
               )}
             </span>
           </span>
-          {rank === 0 && <Crown className="animate-bob absolute -top-3.5 -left-2.5 h-5 w-auto text-hp drop-shadow-[0_2px_0_#0b0a10] sm:-top-4 sm:h-6" />}
+          {rank === 0 && <Crown className="animate-bob absolute -top-3 -left-2 h-4 w-auto text-hp drop-shadow-[0_2px_0_#0b0a10] sm:-top-3.5 sm:h-5" />}
         </span>
 
         {/* The card: title, name over a big hollow rank number, record, streak. */}
-        <span className="slant relative -ml-1 flex min-w-0 flex-1 flex-col justify-center overflow-hidden bg-ink/90 py-1.5 pr-7 pl-5 [--slant:12px] group-hover:bg-ink-2">
-          <span aria-hidden className="text-hollow pointer-events-none absolute -top-3 right-3 font-display text-[4.8rem] leading-none [--hollow:color-mix(in_srgb,var(--metal)_35%,transparent)] sm:text-[5.6rem]">
+        <span className="slant relative -ml-1 flex min-w-0 flex-1 flex-col justify-center overflow-hidden bg-ink/90 py-1 pr-7 pl-4 [--slant:12px] group-hover:bg-ink-2">
+          <span aria-hidden className="text-hollow pointer-events-none absolute -top-2.5 right-3 font-display text-[3.8rem] leading-none [--hollow:color-mix(in_srgb,var(--metal)_35%,transparent)] sm:text-[4.4rem]">
             {rank + 1}
           </span>
           <span aria-hidden className="animate-shine pointer-events-none absolute inset-y-0 left-0 w-1/3 bg-gradient-to-r from-transparent via-white/25 to-transparent" />
           <span className="relative flex items-center gap-1.5 font-cond text-[0.68rem] font-extrabold uppercase tracking-[0.28em] text-[var(--metal)] sm:text-xs">
             {TITLE[rank]}{rank > 0 && ` #${rank + 1}`}
           </span>
-          <span className="relative block truncate font-display text-[1.7rem] uppercase leading-none tracking-tight text-paper sm:text-[2.1rem]">{fighter.name}</span>
-          <span className="relative mt-1 flex items-center gap-2 font-cond text-[0.68rem] font-bold uppercase tracking-[0.14em] text-paper/70 sm:text-xs">
+          <span className="relative block truncate font-display text-[1.4rem] uppercase leading-none tracking-tight text-paper sm:text-[1.7rem]">{fighter.name}</span>
+          <span className="relative mt-0.5 flex items-center gap-2 font-cond text-[0.68rem] font-bold uppercase tracking-[0.14em] text-paper/70 sm:text-xs">
             <span><b className="text-[var(--metal)]">{record.wins}W</b> · {record.losses}L</span>
             {hot ? (
               <span className="flex items-center gap-1 text-low"><Flame className="h-3 w-auto" />{record.streak} straight</span>
@@ -82,19 +83,6 @@ export function Kings({ onOpen }: { onOpen: () => void }) {
           </span>
         </span>
       </span>
-
-      {/* Whose turn: one pip per leader, the current one filling up until the next takes over. */}
-      {kings.length > 1 && (
-        <span className="mt-1.5 ml-[4.4rem] flex gap-1 sm:ml-[5rem]">
-          {kings.map((k, i) => (
-            <span key={k.fighter.id} className="relative h-[3px] w-5 overflow-hidden bg-paper/20">
-              {i === rank && (
-                <span key={turn} className="absolute inset-0 origin-left bg-[var(--metal)]" style={{ animation: `reel-fill ${HOLD_MS}ms linear both` }} />
-              )}
-            </span>
-          ))}
-        </span>
-      )}
     </button>
   );
 }
