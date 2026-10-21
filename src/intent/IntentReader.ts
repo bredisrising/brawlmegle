@@ -820,7 +820,8 @@ function otherHandAlong(body: Body, def: LimbDef, s: LimbState, tip: Vec3, shoul
   const ox = o.x - os.x - s.otherAtOnset.x, oy = o.y - os.y - s.otherAtOnset.y;
   const mx = tip.x - shoulder.x - s.tipAtOnset.x, my = tip.y - shoulder.y - s.tipAtOnset.y;
   const a = Math.hypot(mx, my), b = Math.hypot(ox, oy);
-  if (a < 0.05 || b < 0.5 * a) return false;
+  // Comparable: at least 70% as far (an arm swinging round in a windmill drags the other along a little).
+  if (a < 0.05 || b < 0.7 * a) return false;
   return (mx * ox + my * oy) / (a * b) > 0.8;
 }
 
