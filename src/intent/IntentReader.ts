@@ -404,7 +404,7 @@ export class IntentReader {
         : def.kind === 'arm' && this.kicking(t) ? 'not a punch'
         : goingDown ? 'going down'
         : def.kind === 'arm' && raisingGuard(body, name, s.anchorTip, tipPt.p, this.config.guard.radius, t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 400) ? 'raising guard'
-        : def.kind === 'arm' && bothHandsUp(body, name, s.peak, s.since - s.faceBeforeOnset > 600 && t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 250) ? 'both hands up'
+        : def.kind === 'arm' && bothHandsUp(body, name, s.peak, s.since - s.faceBeforeOnset > 600 && t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 250, s.otherAtOnset) ? 'both hands up'
         : def.kind === 'arm' && s.peakSpeed < OVERHEAD_PUNCH_SPEED && raisedOverHead(body, s.peakTip, s.peak, midPt.p, root.p) ? 'not a punch'
         : def.kind === 'arm' && otherHandAlong(body, def, s, tipPt.p, root.p) ? 'both hands moved'
         // A hand pulled in across the body with the elbow tucking in and staying down is the guard closing up (the
@@ -682,11 +682,14 @@ function windingUp(def: LimbDef, tip: Vec3) {
  * uppercuts are one hand at a time. `bothCameUp`: this hand came up from low (not from guard) right as the
  * other one rose too.
  */
-function bothHandsUp(body: Body, limb: LimbName, travel: Vec3, bothCameUp: boolean) {
+function bothHandsUp(body: Body, limb: LimbName, travel: Vec3, bothCameUp: boolean, otherAtOnset: Vec3) {
   if (travel.y < 0.15 || travel.y < 0.5 * len(travel)) return false;
   const other = body.points[limb === 'armL' ? LM.rWrist : LM.lWrist];
   const otherShoulder = body.points[limb === 'armL' ? LM.rShoulder : LM.lShoulder];
-  return bothCameUp || other.vf.y - otherShoulder.vf.y > 1.0;
+  // The other hand has to have really come up since this one started, not just be moving against its shoulder: in a
+  // big overhead swing the other shoulder dips, and a hand held still in guard seems to rise.
+  const otherRise = other.p.y - otherShoulder.p.y - otherAtOnset.y;
+  return bothCameUp || (other.vf.y - otherShoulder.vf.y > 1.0 && otherRise > 0.15);
 }
 
 /**
