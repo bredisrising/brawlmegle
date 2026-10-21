@@ -43,6 +43,10 @@ const EXT_DEADBAND = 0.1;
  */
 const FEET_SECONDS = 1.5;
 const FEET_IN_VIEW = 0.2;
+/** A hand faster than this (body units/s, against its shoulder) is swinging, and the head moves with it for a while. */
+const ARM_QUIET_SPEED = 2.6;
+const ARM_SWING_SPEED = 4.5;
+const ARM_QUIET_MS = 600;
 const LIMB_NAMES = Object.keys(LIMBS) as LimbName[];
 const PARTNER: Record<LimbName, LimbName> = { armL: 'armR', armR: 'armL', legL: 'legR', legR: 'legL' };
 
@@ -146,6 +150,9 @@ export class IntentReader {
   private pendingCore: Record<'jump' | 'duck' | 'dodge', number> = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
   /** Last time each arm was throwing a strike. Punching moves the head; that isn't a dodge or a duck. */
   private lastArmStrike: Record<'armL' | 'armR', number> = { armL: -Infinity, armR: -Infinity };
+  /** Last time either hand moved fast, read as a strike or not (see ARM_QUIET_SPEED). */
+  private lastArmBurst = -Infinity;
+  private lastArmSwing = -Infinity;
   private guardSince: number | null = null;
   private guardUp = false;
   private stance: Stance;
@@ -186,6 +193,8 @@ export class IntentReader {
     this.lastCore = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
     this.pendingCore = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
     this.lastArmStrike = { armL: -Infinity, armR: -Infinity };
+    this.lastArmBurst = -Infinity;
+    this.lastArmSwing = -Infinity;
     this.headRest = null;
     this.shoulderRest = null;
     this.feetRest = null;
@@ -502,6 +511,16 @@ export class IntentReader {
     for (const n of ['armL', 'armR'] as const) if (this.limbs[n].phase === 'onset') this.lastArmStrike[n] = t;
     const since = (n: 'armL' | 'armR') => t - this.lastArmStrike[n];
     const punching = Math.min(since('armL'), since('armR')) < 500;
+    // Any fast hand, even a swing the reader didn't take for a strike (windmills, haymakers, overhead swings), throws
+    // the head around. On real play every slip and duck the reader saw came within 600 ms of one (hands at 3–13 body
+    // units/s, median 6); real slips and ducks keep the hands in guard (under ~2.5).
+    const handSpeed = (w: number, s: number) => Math.hypot(body.points[w].v.x - body.points[s].v.x, body.points[w].v.y - body.points[s].v.y);
+    const hands = Math.max(handSpeed(LM.lWrist, LM.lShoulder), handSpeed(LM.rWrist, LM.rShoulder));
+    if (hands > ARM_QUIET_SPEED) this.lastArmBurst = t;
+    // Ducking moves the guard a bit more (hands drop or tuck as the body goes down), so only a real swing blocks it.
+    if (hands > ARM_SWING_SPEED) this.lastArmSwing = t;
+    const handsCalm = t - this.lastArmBurst > ARM_QUIET_MS;
+    const noSwing = t - this.lastArmSwing > ARM_QUIET_MS;
     /** A head move starts on a frame that passes `start` and counts if the next frame still passes `hold`. */
     const held = (kind: 'jump' | 'duck' | 'dodge', start: boolean, hold: boolean) => {
       if (t - this.pendingCore[kind] <= 150 && hold) return true;
@@ -514,7 +533,7 @@ export class IntentReader {
     const dropSpeed = -headV.y;
     const duckK = punching ? 1.6 : 1;
     const dropping = headDrop > cfg.duck.drop * duckK;
-    if (held('duck', dropping && dropSpeed > cfg.duck.speed, dropping && dropSpeed > -cfg.duck.speed) && t - this.lastCore.duck > cfg.coreCooldownMs) {
+    if (held('duck', noSwing && dropping && dropSpeed > cfg.duck.speed, noSwing && dropping && dropSpeed > -cfg.duck.speed) && t - this.lastCore.duck > cfg.coreCooldownMs) {
       this.lastCore.duck = t;
       out.push({ kind: 'duck', t });
     }
@@ -542,7 +561,7 @@ export class IntentReader {
     const leaningFast = leaning && Math.sign(headV.x) === Math.sign(lean) && Math.abs(headV.x) > cfg.dodge.speed;
     // Kicking leans the body away from the kick, for balance.
     const kicking = this.kicking(t);
-    if (held('dodge', leaningFast && !kicking, leaning && !kicking && headV.x * Math.sign(lean) > -cfg.dodge.speed) && t - this.lastCore.dodge > cfg.coreCooldownMs) {
+    if (held('dodge', handsCalm && leaningFast && !kicking, handsCalm && leaning && !kicking && headV.x * Math.sign(lean) > -cfg.dodge.speed) && t - this.lastCore.dodge > cfg.coreCooldownMs) {
       this.lastCore.dodge = t;
       out.push({ kind: 'dodge', t, dir: lean > 0 ? 'L' : 'R' });
     }
