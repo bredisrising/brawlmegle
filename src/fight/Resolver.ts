@@ -38,6 +38,11 @@ export class Resolver {
         return intent.up ? { kind: 'defend', player, t: intent.t, move: 'block' } : null;
       case 'strike':
         return this.strike(player, intent, engine);
+      case 'restyle': {
+        if (intent.limb !== 'armL' && intent.limb !== 'armR') return null;
+        const hand = intent.limb === 'armL' ? 'L' : 'R';
+        return { kind: 'restyle', player, t: intent.t, hand, move: this.punch(hand, intent.style, engine) };
+      }
       default:
         // jump: no aerial moves yet. cancel: the director handles it.
         return null;
@@ -50,18 +55,8 @@ export class Resolver {
     const arm = intent.limb === 'armL' || intent.limb === 'armR';
     const hand = intent.limb.endsWith('L') ? 'L' : 'R';
 
-    let move: AttackMove;
-    if (!arm) {
-      // Legs: a knee up close, a kick from range, whatever the leg actually did.
-      move = distance < 0.6 ? 'knee' : 'kick';
-    } else if (intent.style === 'hook') {
-      move = 'hook';
-    } else if (intent.style === 'upper') {
-      // An uppercut from too far out becomes a straight: nobody wants to uppercut air.
-      move = distance > MOVES.uppercut.range + MAX_LUNGE ? (hand === 'L' ? 'jab' : 'cross') : 'uppercut';
-    } else {
-      move = hand === 'L' ? 'jab' : 'cross';
-    }
+    // Legs: a knee up close, a kick from range, whatever the leg actually did.
+    let move: AttackMove = arm ? this.punch(hand, intent.style, engine) : distance < 0.6 ? 'knee' : 'kick';
 
     // Opponent ducking: the next punch comes in low as an uppercut if it can reach.
     if (arm && engine.evading(opponentOf(player)) === 'duck' && distance <= MOVES.uppercut.range + MAX_LUNGE) move = 'uppercut';
@@ -84,5 +79,13 @@ export class Resolver {
       // The fighter has been showing the wind-up since the motion started (the 'anticipate' tell).
       headStart: Math.max(0, ((intent.t - intent.onsetT) * 60) / 1000),
     };
+  }
+
+  /** The punch a style becomes from here. */
+  private punch(hand: 'L' | 'R', style: string, engine: FightEngine): AttackMove {
+    if (style === 'hook') return 'hook';
+    // An uppercut from too far out becomes a straight: nobody wants to uppercut air.
+    if (style === 'upper') return engine.distance() > MOVES.uppercut.range + MAX_LUNGE ? (hand === 'L' ? 'jab' : 'cross') : 'uppercut';
+    return hand === 'L' ? 'jab' : 'cross';
   }
 }

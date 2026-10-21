@@ -54,7 +54,9 @@ export type Command =
       autoLunge?: boolean; // instead: step in as far as needed when it actually starts (queued combo punches)
       headStart?: number; // frames the wind-up has already been on screen (the reader saw the motion start that long ago)
     }
-  | { kind: 'defend'; player: PlayerId; t: number; move: DefendMove; dir?: Hand };
+  | { kind: 'defend'; player: PlayerId; t: number; move: DefendMove; dir?: Hand }
+  /** The reader saw this hand's strike was another punch at its peak: still winding up (or queued), it becomes that. */
+  | { kind: 'restyle'; player: PlayerId; t: number; hand: Hand; move: AttackMove };
 
 /** Continuous, every frame. */
 export type Stance = {

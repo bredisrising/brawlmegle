@@ -56,6 +56,8 @@ const OVERHEAD_PUNCH_SPEED = 4;
 /** Overhands start with the hand this far above its shoulder (body units) and come down faster than OVERHAND_SPEED. */
 const OVERHAND_START = 0.05;
 const OVERHAND_SPEED = 4.5;
+/** A strike's style gets one more look at its peak, at most this long after it was confirmed (see 'restyle'). */
+const RESTYLE_MAX_MS = 200;
 /** An arm moving at under this share of its speed away from its anchor has turned: re-anchor there. */
 const ARC_REANCHOR = 0.3;
 const LIMB_NAMES = Object.keys(LIMBS) as LimbName[];
@@ -72,6 +74,10 @@ type LimbState = {
   overhand: boolean;
   /** When this limb last struck. */
   struckAt: number;
+  /** The current strike's onset, its style as last reported, and whether its peak has been checked for a restyle. */
+  onsetAt: number;
+  style: StrikeStyle;
+  restyleDone: boolean;
   /** Usual position (guard or relaxed); "back near rest" means ready to strike again. */
   rest: Pair | null;
   /** Where the limb last paused. Strikes are measured from here, so a cocked-back hook or a dropped
@@ -445,10 +451,7 @@ export class IntentReader {
       const speedRatio = s.peakSpeed / s.typicalSpeed;
       s.typicalSpeed += 0.2 * (s.peakSpeed - s.typicalSpeed);
       const features = def.kind === 'arm' ? strikeFeatures(def, s, root.p) : undefined;
-      const ruleStyle: StrikeStyle = s.overhand ? 'hook' : def.kind === 'arm' && Math.abs(s.peak.x) <= 0.45 && (s.peakExt > len(s.peak) || s.peakExt > 0.15 || len(s.peak) < 0.6 * s.peakMidTravel)
-        ? 'straight'
-        : classify(def.kind, dir, strikeOut, s.peakTip, s.peakMid, s.peakMidOut, s.peak, s.peakMidRise, s.peakExt, s.peakElbow, s.peakTipSeen);
-      const style = features && this.matcher ? this.matcher.decide(features, ruleStyle) : ruleStyle;
+      const style = this.styleOf(def, s, root.p);
       out.push({
         kind: 'strike',
         limb: name,
@@ -467,8 +470,11 @@ export class IntentReader {
         features,
       });
       s.phase = 'recover';
+      s.onsetAt = s.since;
       s.since = t;
       s.struckAt = t;
+      s.style = style;
+      s.restyleDone = def.kind !== 'arm';
       s.extended = clonePair(now);
       // The other leg was what this one stood on.
       const partner = this.limbs[PARTNER[name]];
@@ -477,6 +483,21 @@ export class IntentReader {
         out.push({ kind: 'cancel', limb: PARTNER[name], t, reason: 'support leg' });
       }
       return;
+    }
+
+    // The style was picked early (confirmMs in), often on the wind-up. Keep following the strike to its peak, and if it
+    // turned out to be something else (a hook that started straight, an overhand that started rising), say so: the
+    // engine can still change the move while it's in startup.
+    if (!s.restyleDone) {
+      if (disp > s.peakDisp) Object.assign(s, { grewAt: t, peakDisp: disp, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: body.elbow[side], peakTipSeen: tipPt.visibility > 0.3 });
+      if (t - s.grewAt >= 60 || t - s.since > RESTYLE_MAX_MS) {
+        s.restyleDone = true;
+        const style = this.styleOf(def, s, root.p);
+        if (style !== s.style) {
+          s.style = style;
+          out.push({ kind: 'restyle', limb: name, t, onsetT: s.onsetAt, style, height: heightOf(def.kind, s.peakTip, body) });
+        }
+      }
     }
 
     // Recover: ready again once the limb comes back near rest, or has clearly pulled back from its furthest
@@ -491,6 +512,15 @@ export class IntentReader {
       s.anchor = clonePair(now);
       if (!home) s.rearmedAt = t;
     }
+  }
+
+  /** Straight, hook or uppercut from the strike's shape so far (the player's own examples decide, if calibrated). */
+  private styleOf(def: LimbDef, s: LimbState, shoulder: Vec3): StrikeStyle {
+    const dir = normalize(s.peak);
+    const ruleStyle: StrikeStyle = s.overhand ? 'hook' : def.kind === 'arm' && Math.abs(s.peak.x) <= 0.45 && (s.peakExt > len(s.peak) || s.peakExt > 0.15 || len(s.peak) < 0.6 * s.peakMidTravel)
+      ? 'straight'
+      : classify(def.kind, dir, dir.x * def.side, s.peakTip, s.peakMid, s.peakMidOut, s.peak, s.peakMidRise, s.peakExt, s.peakElbow, s.peakTipSeen);
+    return def.kind === 'arm' && this.matcher ? this.matcher.decide(strikeFeatures(def, s, shoulder), ruleStyle) : ruleStyle;
   }
 
   /** A leg is kicking (its knee has come up for real) or just kicked: arm swings and leans now are balance. */
@@ -837,7 +867,7 @@ function windupOf(s: LimbState, dir: Vec3) {
 
 function newLimb(): LimbState {
   return {
-    phase: 'idle', overhand: false, struckAt: -Infinity, rest: null, anchor: null, since: 0, grewAt: 0, peakDisp: 0, peakSpeed: 0,
+    phase: 'idle', overhand: false, struckAt: -Infinity, onsetAt: 0, style: 'straight', restyleDone: true, rest: null, anchor: null, since: 0, grewAt: 0, peakDisp: 0, peakSpeed: 0,
     peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, peakMidTravel: 0, peakMidOut: 0, anchorTip: { x: 0, y: 0, z: 0 }, peakElbow: 0, peakTipSeen: false, history: [], typicalSpeed: 4, extended: null, lastRestDisp: 0, rearmedAt: -Infinity, nearFaceAt: -Infinity, faceBeforeOnset: -Infinity, risingAt: -Infinity, travel: { x: 0, y: 0, z: 0 }, tipAtOnset: { x: 0, y: 0, z: 0 }, otherAtOnset: { x: 0, y: 0, z: 0 }, disp: 0, out: 0, blocked: null,
   };
 }

@@ -152,6 +152,8 @@ export class FightEngine {
         f.queue.push({ command: c, frames: FIGHT.bufferFrames });
         if (f.queue.length > FIGHT.queueSize) f.queue.shift();
       }
+    } else if (c.kind === 'restyle') {
+      this.restyle(f, c);
     } else if (c.kind === 'defend' && (c.move === 'slip' || c.move === 'duck')) {
       if (f.phase === 'idle' || f.phase === 'recovery') f.evade = { kind: c.move, frames: FIGHT.evadeFrames, dir: c.dir };
     }
@@ -196,6 +198,26 @@ export class FightEngine {
     if (c.move === 'fireball') f.meter = 0;
     f.sinceAttack = 0;
     events.push({ t: this.now, type: 'startup', attacker: id, move: c.move });
+  }
+
+  /**
+   * A punch still in startup (or waiting in the queue) turns into the one the player really threw, keeping the startup
+   * frames it has already used: the reader picks the style early, from the wind-up, and sees the real one at the peak.
+   * Once it's active it's too late, and legs, fireballs and the other hand's attacks never change.
+   */
+  private restyle(f: Fighter, c: Extract<Command, { kind: 'restyle' }>) {
+    if (!PUNCHES.has(c.move)) return;
+    const queued = [...f.queue].reverse().find((q) => q.command.hand === c.hand && PUNCHES.has(q.command.move));
+    if (queued) {
+      queued.command = { ...queued.command, move: c.move };
+      return;
+    }
+    const a = f.attack;
+    if (f.phase !== 'startup' || !a || a.hand !== c.hand || a.move === c.move || !PUNCHES.has(a.move)) return;
+    const spec = MOVES[c.move];
+    a.startup = Math.max(f.frame + 1, a.startup + spec.startup - a.spec.startup);
+    a.move = c.move;
+    a.spec = spec;
   }
 
   private advance(id: PlayerId, events: FightEvent[]) {

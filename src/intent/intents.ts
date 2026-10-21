@@ -30,6 +30,8 @@ export type Intent =
       /** Shape of the motion, for matching against a player's calibration examples (arms only). */
       features?: number[];
     }
+  /** The last strike of this limb turned out to be another style at its peak (sent once, up to RESTYLE_MAX_MS after it). */
+  | { kind: 'restyle'; limb: LimbName; t: number; onsetT: number; style: StrikeStyle; height: 'high' | 'mid' | 'low' }
   | { kind: 'jump'; t: number; power: number }
   | { kind: 'duck'; t: number }
   | { kind: 'dodge'; t: number; dir: 'L' | 'R' } // the player's left or right

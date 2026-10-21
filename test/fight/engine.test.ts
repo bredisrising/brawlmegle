@@ -120,6 +120,31 @@ describe('resolver', () => {
   });
 });
 
+describe('restyle: the reader saw another punch at the peak', () => {
+  const restyle = (move: AttackMove, hand: 'L' | 'R' = 'R'): Command => ({ kind: 'restyle', player: 'p1', t: 0, hand, move });
+
+  test('a cross still in startup becomes a hook, keeping the frames it used', () => {
+    const e = engineAt(0.6);
+    const events = run(e, 60, { 0: [attack('p1', 'cross')], 3: [restyle('hook')] });
+    expect(events.find((ev) => ev.type === 'hit')?.move).toBe('hook');
+    expect(events.filter((ev) => ev.type === 'startup')).toHaveLength(1);
+  });
+
+  test('too late once the punch is active, and the other hand does nothing', () => {
+    const late = engineAt(0.6);
+    const cross = MOVES.cross.startup;
+    expect(run(late, 60, { 0: [attack('p1', 'cross')], [cross + 1]: [restyle('hook')] }).find((ev) => ev.type === 'hit')?.move).toBe('cross');
+    const other = engineAt(0.6);
+    expect(run(other, 60, { 0: [attack('p1', 'cross')], 3: [restyle('hook', 'L')] }).find((ev) => ev.type === 'hit')?.move).toBe('cross');
+  });
+
+  test('the resolver turns a restyle intent into the punch it now is', () => {
+    const e = engineAt(0.6);
+    const intent: Intent = { kind: 'restyle', limb: 'armR', t: 0, onsetT: 0, style: 'hook', height: 'high' };
+    expect(new Resolver().resolve('p1', [intent], e)).toEqual([{ kind: 'restyle', player: 'p1', t: 0, hand: 'R', move: 'hook' }]);
+  });
+});
+
 describe('combos: fast punches all come out', () => {
   const starts = (events: FightEvent[], player: PlayerId = 'p1') =>
     events.filter((ev) => ev.type === 'startup' && ev.attacker === player).map((ev) => ev.move);

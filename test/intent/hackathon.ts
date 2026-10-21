@@ -35,7 +35,8 @@ export function loadHackathon(dir: string): HackSide[] {
 }
 
 type Strike = Extract<Intent, { kind: 'strike' }>;
-export type Match = { label: HackLabel; read: Strike; armOk: boolean; styleOk: boolean; lenientOk: boolean; onset: number; confirm: number };
+/** styleOk/lenientOk judge the final style (after any restyle at the strike's peak); earlyOk the style at confirm. */
+export type Match = { label: HackLabel; read: Strike; style: string; armOk: boolean; styleOk: boolean; lenientOk: boolean; earlyOk: boolean; onset: number; confirm: number };
 export type SideScore = {
   id: string;
   minutes: number;
@@ -55,6 +56,8 @@ const LENIENT: Record<string, string> = { overhand: 'hook' };
 export function scoreSide(side: HackSide, intents: Intent[]): SideScore {
   const labels = side.labels.filter((l) => l.kind === 'strike');
   const reads = intents.filter((i): i is Strike => i.kind === 'strike');
+  const restyles = intents.filter((i): i is Extract<Intent, { kind: 'restyle' }> => i.kind === 'restyle');
+  const finalStyle = (s: Strike) => restyles.filter((r) => r.limb === s.limb && r.onsetT === s.onsetT).pop()?.style ?? s.style;
   const used = new Set<HackLabel>();
   const matched = new Set<Strike>();
   const matches: Match[] = [];
@@ -74,10 +77,12 @@ export function scoreSide(side: HackSide, intents: Intent[]): SideScore {
       used.add(l);
       matched.add(s);
       const armOk = l.limb === s.limb;
+      const style = finalStyle(s);
       matches.push({
-        label: l, read: s, armOk,
-        styleOk: armOk && l.style === s.style,
-        lenientOk: armOk && (LENIENT[l.style ?? ''] ?? l.style) === s.style,
+        label: l, read: s, style, armOk,
+        styleOk: armOk && l.style === style,
+        lenientOk: armOk && (LENIENT[l.style ?? ''] ?? l.style) === style,
+        earlyOk: armOk && l.style === s.style,
         onset: s.onsetT - l.start, confirm: s.t - l.start,
       });
     }
@@ -123,7 +128,7 @@ const median = (xs: number[]) => {
 };
 
 export type HackSummary = {
-  sides: number; strikes: number; recall: number; arm: number; style: number; lenient: number; precision: number;
+  sides: number; strikes: number; recall: number; arm: number; style: number; earlyStyle: number; lenient: number; precision: number;
   fakesPerMin: number; dodgesPerMin: number; ducks: number; blocks: string; onsetMs: number; confirmMs: number; cleanRecall: number;
 };
 
@@ -141,6 +146,7 @@ export function summarizeHackathon(scores: SideScore[]): HackSummary {
     recall: all.length / strikes,
     arm: sameArm.length / strikes,
     style: all.filter((m) => m.styleOk).length / strikes,
+    earlyStyle: all.filter((m) => m.earlyOk).length / strikes,
     lenient: all.filter((m) => m.lenientOk).length / strikes,
     precision: all.length / Math.max(1, sum((s) => s.reads)),
     fakesPerMin: sum((s) => s.fakes.length) / minutes,
@@ -155,7 +161,7 @@ export function summarizeHackathon(scores: SideScore[]): HackSummary {
 
 export function formatSummary(name: string, s: HackSummary) {
   const p = (x: number) => `${(100 * x).toFixed(1)}%`;
-  return `${name.padEnd(14)} recall ${p(s.recall)} arm ${p(s.arm)} style ${p(s.style)} (lenient ${p(s.lenient)}) precision ${p(s.precision)} ` +
+  return `${name.padEnd(14)} recall ${p(s.recall)} arm ${p(s.arm)} style ${p(s.style)} (at confirm ${p(s.earlyStyle)}, lenient ${p(s.lenient)}) precision ${p(s.precision)} ` +
     `fakes/min ${s.fakesPerMin.toFixed(1)} dodges/min ${s.dodgesPerMin.toFixed(1)} ducks ${s.ducks} blocks ${s.blocks} ` +
     `clean ${p(s.cleanRecall)} onset ${Math.round(s.onsetMs)} confirm ${Math.round(s.confirmMs)} ms (${s.sides} sides, ${s.strikes} strikes)`;
 }
