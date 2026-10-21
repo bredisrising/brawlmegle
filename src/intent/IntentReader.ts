@@ -59,6 +59,8 @@ const OVERHAND_SPEED = 4.5;
 /** A strike pulled back this much (windup, 0.8–1.3) from a hold that ended under HEAVY_HOLD_MS before it is a heavy. */
 const HEAVY_WINDUP = 1.2;
 const HEAVY_HOLD_MS = 250;
+/** A tuck into guard travels less than this (body units); farther, the sweep is a hook. */
+const TUCK_REACH = 0.5;
 /** A strike's style gets one more look at its peak, at most this long after it was confirmed (see 'restyle'). */
 const RESTYLE_MAX_MS = 200;
 /** An arm moving at under this share of its speed away from its anchor has turned: re-anchor there. */
@@ -442,9 +444,10 @@ export class IntentReader {
         : def.kind === 'arm' && bothHandsUp(body, name, s.peak, s.since - s.faceBeforeOnset > 600 && t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 250, s.otherAtOnset) ? 'both hands up'
         : def.kind === 'arm' && s.peakSpeed < OVERHEAD_PUNCH_SPEED && raisedOverHead(body, s.peakTip, s.peak, midPt.p, root.p) ? 'not a punch'
         : def.kind === 'arm' && otherHandAlong(body, def, s, tipPt.p, root.p) ? 'both hands moved'
-        // A hand pulled in across the body with the elbow tucking in and staying down is the guard closing up (the
-        // other hand's usual move while one hand punches), not a hook: a hook brings the elbow up.
-        : def.kind === 'arm' && s.peakMidRise < 0.08 && s.peakMidOut < -0.05 && sweepsIn(def, s.peak) ? 'not a punch'
+        // A hand pulled in a short way across the body with the elbow tucking in and staying down is the guard closing
+        // up (the other hand's usual move while one hand punches), not a hook: a hook brings the elbow up. A long sweep
+        // is a hook anyway, elbow or not (real play: casual hooks keep it low, 18 were cancelled here).
+        : def.kind === 'arm' && s.peakMidRise < 0.08 && s.peakMidOut < -0.05 && s.peakDisp < TUCK_REACH && sweepsIn(def, s.peak) ? 'not a punch'
         : null;
       if (reason) {
         s.phase = 'idle';
