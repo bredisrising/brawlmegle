@@ -257,21 +257,31 @@ today's read rates and at a "nearly every punch read" target. Changes:
   - Measured in Edge on the RTX 4070 against the CPU: the screen now changes 2–11 ms after the sound.
   - This one is also on `main` and the live site.
 
-### The learned move model (`src/intent/MoveModel.ts`)
+### The learned move model (`src/intent/MoveModel.ts`): on
 
-- **What it is:** a 31k-parameter causal TCN, 3-model int8 ensemble, 130 KB, about 0.6 ms a frame. It reads the
-  reader's preprocessed body and runs as a gate and rescue next to the rules (`IntentReader.secondOpinion`):
-  - rule strikes it doesn't believe are dropped;
-  - swings only it saw are added, with a wind-up tell;
-  - style stays the rules'.
-- **Real play, held-out players** (the subagent's nested leave-one-person-out, against the 57.5% rules): recall 72.7%,
-  precision 86.5%, confirm median 64 ms instead of 133.
-- **The blocker:** it fires on everyday motions it was never shown: hands coming back up, head scratches, waves.
-  Synthetic false positives go from 2.5 to 5.1 a minute, and the matrix precision floors fail.
-  - Pose-rule vetoes on its rescues didn't help.
-  - Rescues limited to rule wind-ups lose the gain.
-  - So it's being retrained with the synthetic negatives as "not a punch".
-- **Until then it's off:** `DEFAULT_INTENT.model.gate` is 0, and `?model=1` turns it on in the game.
+A 31k-parameter causal TCN in a 3-model int8 ensemble: 130 KB, under 1 ms a frame. It reads the reader's preprocessed
+body and runs as a gate and rescue next to the rules (`IntentReader.secondOpinion`):
+- rule strikes it doesn't believe are dropped;
+- swings only it saw are added, with a wind-up tell;
+- the style stays the rules';
+- it switches off when the hips aren't in the shot (seated players lost strikes to it).
+
+| | Rules alone (today) | Rules + model |
+|---|---|---|
+| Held-out real players: strikes read | 64.9% | **74.0%** (+9.1, 95% CI +4.1 to +15.3) |
+| Held-out real players: precision | 85.1% | 86.2% |
+| Held-out real players: confirm, median after the real onset | 139 ms | **74 ms** |
+| Synthetic suites: false positives a minute | 2.5 | 1.5 |
+| Synthetic suites: precision | 89% | 94% |
+
+- **Held out** means each person group was left out of training and threshold choice (nested leave-one-person-out).
+  Every group reads at least as many strikes as with the rules.
+- **The first version** fired on everyday motions it had never seen: hands coming back up, scratches, waves. Retrained
+  with the synthetic generator's negatives at a light weight, it doesn't.
+- **What it can't do yet:** replace the rules. Its own style is a majority guess, and it fails on seated players.
+- **`?model=0`** turns it off in the game, to compare.
+
+Full report: `~/dev/brawlegle-data/clever-2026-10-20/learned.md`.
 
 ### Preview
 
