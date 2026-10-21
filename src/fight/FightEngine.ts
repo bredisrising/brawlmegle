@@ -44,6 +44,8 @@ type Fighter = {
   guard: number;
   guardLock: number;
   sinceGuard: number;
+  /** Whether the guard was up before the current attack started (see guardFirst). */
+  guardWas: boolean;
 };
 
 const DT = 1 / 60;
@@ -75,6 +77,7 @@ export class FightEngine {
       this.hitstop--;
       return events;
     }
+    for (const id of PLAYER_IDS) this.guardFirst(id, stances[id]);
     for (const id of PLAYER_IDS) this.advance(id, events);
     for (const id of PLAYER_IDS) this.wearGuard(id, stances[id], events);
     // Both swings resolve against the same moment, so a same-tick exchange is a trade, not a P1 win.
@@ -364,6 +367,25 @@ export class FightEngine {
     if (g.hp <= 0) this.ko(defenderId, id, a.move, events);
   }
 
+  /**
+   * Hands going up into a guard look like a punch to the camera for a moment (real block moments: 64 of 101 read a
+   * strike first). So a guard that comes up while a punch is barely started wins: the punch is called off (its stamina
+   * back) and the fighter blocks. A punch thrown from a guard that was already up isn't affected.
+   */
+  private guardFirst(id: PlayerId, stance: Stance | undefined) {
+    const f = this.fighters[id];
+    const guard = Boolean(stance?.guard);
+    const a = f.attack;
+    if (guard && !f.guardWas && f.phase === 'startup' && a && PUNCHES.has(a.move) && f.frame <= FIGHT.guardCancelFrames && f.guardLock === 0) {
+      f.stamina = Math.min(FIGHT.maxStamina, f.stamina + a.spec.stamina);
+      f.attack = null;
+      f.queue = [];
+      this.idle(f);
+    }
+    // Remembered per attack: the guard only cancels a punch if it wasn't up when the punch started.
+    if (f.phase !== 'startup') f.guardWas = guard;
+  }
+
   /** The guard drains while it's up and refills once it's down (FIGHT.guard*); a crushed one counts down its lockout. */
   private wearGuard(id: PlayerId, stance: Stance | undefined, events: FightEvent[]) {
     const f = this.fighters[id];
@@ -511,7 +533,7 @@ function fresh(x: number): Fighter {
   return {
     x, hp: FIGHT.maxHp, stamina: FIGHT.maxStamina, phase: 'idle', frame: 0,
     attack: null, stun: 0, evade: null, queue: [], chain: 0, meter: 0, mash: 0, lastLanded: false, lastAttackAt: -1, sinceAttack: 10,
-    guard: FIGHT.guardMax, guardLock: 0, sinceGuard: 10,
+    guard: FIGHT.guardMax, guardLock: 0, sinceGuard: 10, guardWas: false,
   };
 }
 

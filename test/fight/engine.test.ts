@@ -400,15 +400,18 @@ describe('kick breaks guard', () => {
 });
 
 describe('the guard wears out', () => {
-  test('holding a block the whole time crushes it: a stagger, then no blocking until it refills', () => {
+  test('holding a guard costs nothing, but enough blocked punches crush it: a stagger, then no blocking until it refills', () => {
     const e = engineAt(0.7);
-    const held = run(e, Math.ceil((FIGHT.guardMax / FIGHT.guardDrain) * 60) + 5, {}, { p2: { guard: true } });
+    run(e, 600, {}, { p2: { guard: true } });
+    expect(e.state('p2').guard).toBe(FIGHT.guardMax);
+    const jabs: Record<number, Command[]> = {};
+    for (let i = 0; i < Math.ceil(FIGHT.guardMax / FIGHT.guardPerBlock) + 2; i++) jabs[i * 40] = [attack('p1', 'jab', { hand: 'L', autoLunge: true })];
+    const held = run(e, 40 * (Math.ceil(FIGHT.guardMax / FIGHT.guardPerBlock) + 2), jabs, { p2: { guard: true } });
     const crush = held.find((ev) => ev.type === 'guardCrush');
     expect(crush?.attacker).toBe('p1');
-    expect(e.state('p2').guard).toBeLessThan(5);
     expect(e.state('p2').guardLock).toBeGreaterThan(0);
     // Guard still held up, but it's crushed: the jab lands.
-    const jab = run(e, 40, { 25: [attack('p1', 'jab', { hand: 'L', autoLunge: true })] }, { p2: { guard: true } });
+    const jab = run(e, 40, { 0: [attack('p1', 'jab', { hand: 'L', autoLunge: true })] }, { p2: { guard: true } });
     expect(jab.some((ev) => ev.type === 'hit' || ev.type === 'counter')).toBe(true);
     expect(jab.some((ev) => ev.type === 'blocked')).toBe(false);
     // Once the lockout runs out it's back, full.
@@ -417,6 +420,18 @@ describe('the guard wears out', () => {
     expect(e.state('p2').guard).toBeGreaterThan(90);
     const later = run(e, 40, { 0: [attack('p1', 'jab', { hand: 'L', autoLunge: true })] }, { p2: { guard: true } });
     expect(later.some((ev) => ev.type === 'blocked')).toBe(true);
+  });
+
+  test('a guard raised just after a punch starts calls the punch off (it was the hands going up), one already up does not', () => {
+    const raised = engineAt(0.7);
+    const events: FightEvent[] = [];
+    for (let i = 0; i < 40; i++) events.push(...raised.step(i === 0 ? [attack('p1', 'cross')] : [], { p1: stance('p1', { guard: i >= 4 }), p2: stance('p2') }));
+    expect(events.some((ev) => ev.type === 'hit')).toBe(false);
+    expect(raised.state('p1').stamina).toBe(FIGHT.maxStamina);
+    const fromGuard = engineAt(0.7);
+    const out: FightEvent[] = [];
+    for (let i = 0; i < 40; i++) out.push(...fromGuard.step(i === 5 ? [attack('p1', 'cross')] : [], { p1: stance('p1', { guard: i < 8 }), p2: stance('p2') }));
+    expect(out.some((ev) => ev.type === 'hit')).toBe(true);
   });
 
   test('blocked punches chip the guard; dropping it lets it refill', () => {
