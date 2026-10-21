@@ -12,6 +12,7 @@ import { Cpu, type CpuLevel, type CpuOutput } from '../fight/Cpu';
 import { FightEngine } from '../fight/FightEngine';
 import { Resolver } from '../fight/Resolver';
 import { FairDelay } from './fairDelay';
+import { Drill } from './drill';
 import { IntentReader } from '../intent/IntentReader';
 import { readingConfig, type Intent } from '../intent/intents';
 import { InputHub, createLocalSource, preloadLocalInput, type InputSource } from '../input';
@@ -37,7 +38,7 @@ import { MatchRecorder, recordingEnabled } from './MatchRecorder';
 import { readPoses } from './readPoses';
 import { HighlightRecorder } from './HighlightRecorder';
 import { Commentary, TEMPLATES, fill, spoken, type Line } from './Commentary';
-import { NO_VOTES, localPlayerId, pushPopup, updatePlayer, useGameStore } from './store';
+import { NO_VOTES, localPlayerId, pushPopup, updatePlayer, useGameStore, type DrillView } from './store';
 
 /** Round length: shorter at a demo booth (`?demo=1`). */
 const ROUND = config.demo ? 45 : ROUND_SECONDS;
@@ -139,6 +140,9 @@ export class Game {
   /** Host: P2's moves as read on the client laptop (newer clients read their own camera), waiting for the tick. */
   private remoteIntents: Intent[] = [];
   private remoteStance: { stance: Stance; at: number } | null = null;
+  /** Training's punch drill, while it runs (and after, until closed), and the last view of it put in the store. */
+  private drill: Drill | null = null;
+  private drillShown = '';
   /** Hit-stop is on and its impact frame has been drawn: hold the picture until it ends. */
   private holdingImpact = false;
   /** P1's engine input waiting out the fairness delay (see equalize). */
@@ -822,6 +826,50 @@ export class Game {
     this.tryStart();
   }
 
+  /** Training: start the punch drill (game/drill.ts), or run it again. */
+  startDrill() {
+    if (!useGameStore.getState().training) return;
+    this.drill = new Drill(performance.now());
+    this.drillShown = '';
+    this.showDrill();
+  }
+
+  stopDrill() {
+    this.drill = null;
+    useGameStore.setState({ drill: null });
+  }
+
+  /** The finished drill's poses and the moves asked (points only, never video) to /samples, with the player's OK. */
+  async sendDrill() {
+    const drill = this.drill;
+    const view = useGameStore.getState().drill;
+    if (!drill || !view?.result || view.sent === 'sending' || view.sent === 'sent') return;
+    useGameStore.setState({ drill: { ...view, sent: 'sending' } });
+    let sent: 'sent' | 'failed' = 'failed';
+    try {
+      const body = drill.sample({ ua: navigator.userAgent, tracker: trackerInfoOf(this.input.source('p1')) });
+      const res = await fetch(`${config.forgeApi.replace(/\/+$/, '')}/samples`, { method: 'POST', headers: { 'content-type': 'text/plain' }, body });
+      if (res.ok) sent = 'sent';
+    } catch (err) {
+      console.warn('[drill] upload failed', err);
+    }
+    const now = useGameStore.getState().drill;
+    if (now) useGameStore.setState({ drill: { ...now, sent } });
+  }
+
+  /** The drill's prompt (or its score) into the store, only when it changes. */
+  private showDrill() {
+    const d = this.drill!;
+    const at = d.at(performance.now(), this.input.latest('p1')?.t ?? null);
+    const prev = useGameStore.getState().drill;
+    const view: DrillView = {
+      say: at.step?.say ?? null, hint: at.step?.hint ?? null, ready: at.ready, index: at.index, total: d.steps.length,
+      result: at.done ? prev?.result ?? d.result() : null, sent: prev?.sent ?? 'no',
+    };
+    const key = JSON.stringify([view.say, view.ready, view.index, !!view.result, view.sent]);
+    if (key !== this.drillShown) (this.drillShown = key), useGameStore.setState({ drill: view });
+  }
+
   /** Title screen: "Practice". Hosts as usual (a friend can still join), and P2 is a CPU once P1 is ready. */
   async practice(level: CpuLevel | 'dummy' = 'normal') {
     this.practiceLevel = level;
@@ -1313,6 +1361,7 @@ export class Game {
       for (const frame of frames) this.recorder.frame(id, frame);
       const remote = id === 'p2' ? this.takeRemoteRead() : null;
       const out = remote ?? readPoses(this.intent[id], frames, this.input.latest(id));
+      if (this.drill && id === 'p1') this.drill.feed(frames, out?.intents ?? []);
       if (out) {
         commands.push(...this.resolver.resolve(id, out.intents, this.fight));
         for (const i of out.intents) {
@@ -1329,6 +1378,7 @@ export class Game {
       stances[id] = out?.stance ?? { player: id, guard: true, advance: 0, lean: { x: 0, y: 0 }, tracked: false };
     }
     this.equalize(commands, stances, phase === 'fighting');
+    if (this.drill) this.showDrill();
     for (const c of commands) {
       if (c.kind !== 'anticipate') continue;
       this.views[c.player].anticipate(c.hand);
@@ -1417,6 +1467,7 @@ export class Game {
    */
   /** Back to the title screen (a fresh page). The client laptop tells the host first, so its slot opens up. */
   toTitle() {
+    this.stopDrill();
     this.client?.leave();
     // A moment for the message to go out before the page (and its connection) goes away.
     window.setTimeout(() => window.location.reload(), this.client ? 150 : 0);

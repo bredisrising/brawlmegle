@@ -16,6 +16,7 @@ import { ClientScreen } from './ui/screens/ClientScreen';
 import { PoseDebugOverlay } from './ui/PoseDebugOverlay';
 import { CameraPip } from './ui/CameraPip';
 import { MoveGuide } from './ui/MoveGuide';
+import { Drill } from './ui/Drill';
 import { Callout, ComboCounter } from './ui/ComboCounter';
 import { Walkout } from './ui/Walkout';
 import { GameMenu } from './ui/GameMenu';
@@ -62,6 +63,7 @@ export default function App() {
                 <KOOverlay />
                 <HUD />
                 {role !== 'spectator' && <MoveGuide />}
+                {role !== 'spectator' && <Drill />}
                 <GameMenu />
                 <Walkout />
                 <Captions />

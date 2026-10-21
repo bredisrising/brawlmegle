@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { DrillResult } from './drill';
 import { PLAYER_IDS, type ForgedFighter, type ForgePreview, type Phase, type PlayerId, type PlayerStatus, type Role } from '../types';
 import { MAX_HP, PLAYER_NAMES } from './constants';
 import type { LinkStats } from '../net/Peer';
@@ -78,6 +79,8 @@ export interface GameState {
   walkout: boolean;
   /** The K.O. replay is playing (the K.O. screen waits for it). */
   replay: boolean;
+  /** Training's punch drill (game/drill.ts): the move being called, the countdown, and the score once it's over. */
+  drill: DrillView | null;
   /** A big announcer callout ("FIRST ATTACK", "PERFECT"), `key` changes with each. */
   callout: { text: string; key: number } | null;
   /** The last move the camera read for this laptop's player (shown on the camera picture-in-picture). */
@@ -146,6 +149,17 @@ const initialPlayer = (id: PlayerId): PlayerState => ({
   forge: null,
 });
 
+export type DrillView = {
+  say: string | null;
+  hint: string | null;
+  ready: number | null;
+  index: number;
+  total: number;
+  result: DrillResult | null;
+  /** Sending the drill's poses to train the reader (only when the player says so). */
+  sent: 'no' | 'sending' | 'sent' | 'failed';
+};
+
 export const useGameStore = create<GameState>(() => ({
   screen: 'title',
   role: null,
@@ -163,6 +177,7 @@ export const useGameStore = create<GameState>(() => ({
   combo: null,
   callout: null,
   replay: false,
+  drill: null,
   walkout: false,
   recordingVideo: false,
   training: false,
