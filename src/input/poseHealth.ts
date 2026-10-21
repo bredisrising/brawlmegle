@@ -50,7 +50,7 @@ export class PoseHealth {
       // A camera that delivers few frames (it lengthens its exposure in a dim room) caps the poses: light helps there.
       this.warning = s.cameraFps < SLOW_POSES && s.detectFps >= s.cameraFps * 0.8
         ? { kind: 'camera', text: `Camera at ${Math.round(s.cameraFps)} fps: more light on you helps` }
-        : { kind: 'slow', text: `Tracking only ${Math.round(s.detectFps)} poses a second: close other tabs and apps` };
+        : { kind: 'slow', text: `Tracking only ${Math.round(s.detectFps)} poses a second: plug in, close other tabs and apps` };
     } else if (this.good >= CLEAR_AFTER) {
       this.warning = null;
     }

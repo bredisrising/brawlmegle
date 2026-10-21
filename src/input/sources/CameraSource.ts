@@ -110,7 +110,7 @@ export class CameraSource implements InputSource {
     return this.delivering ?? this.video;
   }
 
-  /** Diagnostics for the tuner: what the camera actually delivers and how long MediaPipe takes. */
+  /** What the camera actually delivers and how long MediaPipe takes: the tuner shows them, the game warns on them. */
   readonly stats = {
     width: 0, height: 0, fps: 0, detectMs: 0, timestamps: 'none' as 'capture' | 'callback' | 'none',
     /** Where the model runs: 'worker' or 'page', and on what. */
