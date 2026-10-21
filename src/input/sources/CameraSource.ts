@@ -2,9 +2,10 @@ import type { PoseLandmarker } from '@mediapipe/tasks-vision';
 import type { Landmark, PoseFrame } from '../../types';
 import type { InputSource } from '../InputSource';
 import {
-  WASM_ROOT, landmarkerOptions, modelUrl, selectCenteredPose, toLandmark,
+  WASM_ROOT, landmarkerOptions, modelUrl, toLandmark,
   type PoseDelegate, type PoseVariant, type PoseWorkerReply, type PoseWorkerRequest,
 } from './poseModel';
+import { PersonPicker } from './personPicker';
 
 const PARAMS = new URLSearchParams(window.location.search);
 /** `full` is more accurate at a modest cost; phones get `lite` to keep the frame rate up. `?pose=lite|full` overrides. */
@@ -62,8 +63,9 @@ export class CameraSource implements InputSource {
   readonly video = document.createElement('video');
   private readonly listeners = new Set<(frame: PoseFrame) => void>();
   private stream: MediaStream | null = null;
-  /** In-page model (no worker). */
+  /** In-page model (no worker), and which of the people it finds is the player (the worker has its own). */
   private landmarker: PoseLandmarker | null = null;
+  private readonly picker = new PersonPicker();
   /** For swapping to the lite model when this machine is too slow for full (see SLOW_DETECT_MS). */
   private files: unknown = null;
   private delegate: PoseDelegate = DELEGATE;
@@ -205,6 +207,7 @@ export class CameraSource implements InputSource {
     this.kept.clear();
     this.landmarker?.close();
     this.landmarker = null;
+    this.picker.reset();
     this.stream?.getTracks().forEach((track) => track.stop());
     this.stream = null;
     this.video.pause();
@@ -364,7 +367,7 @@ export class CameraSource implements InputSource {
     const started = performance.now();
     const result = this.landmarker!.detectForVideo(this.video, now);
     this.timeDetection(performance.now() - started);
-    const selected = selectCenteredPose(result.landmarks);
+    const selected = this.picker.pick(result.landmarks, now, this.video.videoWidth / this.video.videoHeight || 4 / 3);
     const image = selected < 0 ? undefined : result.landmarks[selected];
     const world = selected < 0 ? undefined : result.worldLandmarks[selected];
     this.deliver(now, image?.map(toLandmark) ?? null, world?.map(toLandmark) ?? null, null);

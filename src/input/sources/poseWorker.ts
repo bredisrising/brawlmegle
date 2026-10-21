@@ -1,9 +1,10 @@
 /// <reference lib="webworker" />
-import { FilesetResolver, PoseLandmarker, type NormalizedLandmark } from '@mediapipe/tasks-vision';
+import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import {
-  WASM_ROOT, landmarkerOptions, selectCenteredPose, toLandmark,
+  WASM_ROOT, landmarkerOptions, toLandmark,
   type PoseDelegate, type PoseVariant, type PoseWorkerReply, type PoseWorkerRequest,
 } from './poseModel';
+import { PersonPicker } from './personPicker';
 
 /**
  * MediaPipe pose detection off the main thread. detectForVideo is synchronous (with the GPU delegate it waits on
@@ -13,10 +14,10 @@ import {
  * One-pose mode (asked for by the quality governor as its last step, when even the lightest render leaves the
  * tracker short of the camera's rate): a second landmarker with numPoses 1, which follows the player from frame to
  * frame instead of re-running the person detector on every frame (31 instead of ~23 poses/s on a Radeon 780M). It
- * brings MediaPipe's own smoothing with it, which two-pose mode avoids on purpose, hence last. It also can't see who
- * else is in frame, so it keeps to the player the two-pose mode picked (the person nearest the center): a pose that
- * isn't where the player was, or is much smaller (someone walking past behind), is dropped, and a few of those in a
- * row, or a second without the player, hand back to two-pose mode until the player has been followed again.
+ * brings MediaPipe's own smoothing with it, which two-pose mode avoids on purpose, hence last. Both modes keep to the
+ * player the same way (personPicker.ts): a pose that isn't where the player was, or is much smaller or bigger, is
+ * dropped. One-pose mode can't see who else is in frame, so a few of those in a row, or a second without the player,
+ * hand back to two-pose mode until the player has been followed again.
  */
 const scope = self as unknown as DedicatedWorkerGlobalScope;
 let landmarker: PoseLandmarker | null = null;
@@ -30,8 +31,8 @@ const models = new Map<PoseVariant, Uint8Array>();
 let single: PoseLandmarker | null = null;
 let singleWanted = false;
 let singleLoading = false;
-/** Where the player is: hip center x and torso length (image units), from the poses accepted as theirs. */
-const anchor = { x: 0.5, torso: 0, seenAt: -Infinity };
+/** Which pose is the player's, in either mode. */
+const picker = new PersonPicker();
 /** One-pose mode: poses in a row that weren't the player; frames of two-pose mode left before trying one-pose again. */
 let rejected = 0;
 let reacquire = 0;
@@ -73,32 +74,15 @@ async function ensureSingle() {
   void ensureSingle(); // the variant changed meanwhile
 }
 
-const hipX = (p: NormalizedLandmark[]) => (p[23].x + p[24].x) / 2;
-const torso = (p: NormalizedLandmark[]) =>
-  Math.hypot((p[11].x + p[12].x - p[23].x - p[24].x) / 2, (p[11].y + p[12].y - p[23].y - p[24].y) / 2);
-
-function isPlayer(p: NormalizedLandmark[]) {
-  if (!p[23] || !p[24] || !p[11] || !p[12]) return false;
-  if (!anchor.torso) return true;
-  const t = torso(p);
-  return Math.abs(hipX(p) - anchor.x) < 0.25 && t > anchor.torso * 0.55 && t < anchor.torso * 1.8;
-}
-
-function follow(p: NormalizedLandmark[], t: number) {
-  if (!p[23] || !p[24] || !p[11] || !p[12]) return;
-  anchor.x += (hipX(p) - anchor.x) * (anchor.torso ? 0.3 : 1);
-  anchor.torso = anchor.torso ? anchor.torso + (torso(p) - anchor.torso) * 0.1 : torso(p);
-  anchor.seenAt = t;
-}
-
 /** One frame: which landmarker runs it, and which pose (if any) is the player's. */
 function detect(image: VideoFrame, t: number) {
   const oneMode = !!single && singleWanted && reacquire === 0;
   const result = (oneMode ? single! : landmarker!).detectForVideo(image, t);
+  const aspect = image.displayWidth / image.displayHeight || 4 / 3;
   let pose = -1;
   if (oneMode) {
     const p = result.landmarks[0];
-    if (p && isPlayer(p)) {
+    if (p && picker.pick([p], t, aspect) === 0) {
       pose = 0;
       rejected = 0;
     } else if (p && ++rejected >= REJECTS_TO_REACQUIRE) {
@@ -106,13 +90,12 @@ function detect(image: VideoFrame, t: number) {
       rejected = 0;
       console.info('[pose] one-pose mode lost the player to someone else in frame: finding them again with two');
     }
-    if (pose < 0 && t - anchor.seenAt > LOST_MS && reacquire === 0) reacquire = REACQUIRE_FRAMES;
+    if (pose < 0 && t - picker.seenAt > LOST_MS && reacquire === 0) reacquire = REACQUIRE_FRAMES;
   } else {
-    pose = selectCenteredPose(result.landmarks);
+    pose = picker.pick(result.landmarks, t, aspect);
     // Back to one-pose mode once the player has been followed for a while.
     if (pose >= 0 && reacquire > 0) reacquire--;
   }
-  if (pose >= 0) follow(result.landmarks[pose], t);
   return { result, pose };
 }
 
