@@ -53,9 +53,12 @@ const ARM_QUIET_MS = 600;
  * cancelled as "not a punch" before).
  */
 const OVERHEAD_PUNCH_SPEED = 4;
-/** Overhands start with the hand this far above its shoulder (body units) and come down faster than OVERHAND_SPEED. */
-const OVERHAND_START = 0.05;
-const OVERHAND_SPEED = 4.5;
+/**
+ * Overhands start with the hand at least this high against its shoulder (body units: about shoulder height) and come
+ * down faster than OVERHAND_SPEED.
+ */
+const OVERHAND_START = -0.1;
+const OVERHAND_SPEED = 3.5;
 /** A strike pulled back this much (windup, 0.8–1.3) from a hold that ended under HEAVY_HOLD_MS before it is a heavy. */
 const HEAVY_WINDUP = 1.2;
 const HEAVY_HOLD_MS = 250;
@@ -383,8 +386,8 @@ export class IntentReader {
         // starts from where it turned (real play: most missed swings never "went outward" from a stale anchor).
         s.anchor = clonePair(now);
       }
-      // An overhand: the hand starts up above the shoulder and chops down fast, over the top and in or toward the
-      // camera. A third of real players' swings are these (hackathon rounds), so the two rules below spare them.
+      // An overhand: the hand starts up around shoulder height or higher and chops down fast, over the top and in or
+      // toward the camera. A third of real players' swings are these (hackathon rounds), so the two rules below spare them.
       // (Not right after this arm's own strike: that's the arm coming back down from a sky punch or an uppercut.)
       const overhand = def.kind === 'arm' && t - s.struckAt > 500 && s.anchor.tip.y > OVERHAND_START && vel.tip.y < -OVERHAND_SPEED && choppingIn(def, tTip, disp);
       // A hand dropping fast (back to the lap, or lowering the guard) can't be starting a punch.
