@@ -288,6 +288,24 @@ Full report: `~/dev/brawlegle-data/clever-2026-10-20/learned.md`.
 The branch is built at **https://brawlmegle.com/next/**: `vite build --base /next/`, copied to
 `/var/www/brawlegle/next/`, sharing the live forge and matchmaker. The live site stays on `main`.
 
+**Real motion vs the CPU** (`test/scratch/realcpu.diag.test.ts`, local). The 52 worker-era host recordings from the
+hackathon, each fed through the reader against a normal CPU twice. The players weren't reacting to this CPU, so this
+shows what the mechanics do with natural motion, not skill:
+
+| | Old (`main`) | New (`skill`) |
+|---|---|---|
+| Player punches read | 1,143 | 1,602 |
+| Player punches landed | 636 | 608 (more swings miss now: 21% whiff) |
+| Player blocked the CPU | 78 | 146 |
+| Player's guard up | 18% | 64% |
+| CPU heavies parried by players who weren't looking | – | 1 of 31 (3%) |
+| Player heavies (players didn't know the move) | – | 40 of 1,602 |
+| Rounds that reached a K.O. inside the clip, median time | 33/104, 9.9 s | 18/104, 11.8 s |
+
+- Accidental parries are rare, so a parry is a read, not luck. An extra "deliberate raise" rule made no difference and
+  was dropped.
+- Guard priority calls off about 3% of the player's own punches.
+
 Still needs playtests:
 - **Round length:** rounds are about 7–11 s.
 - **How often people parry by accident.**
