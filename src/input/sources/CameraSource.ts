@@ -540,7 +540,7 @@ export class CameraSource implements InputSource {
 }
 
 /** getUserMedia failures in words a player can act on. */
-function cameraErrorText(err: unknown): string {
+export function cameraErrorText(err: unknown): string {
   const name = err instanceof DOMException ? err.name : '';
   switch (name) {
     case 'NotAllowedError':
