@@ -250,6 +250,34 @@ today's read rates and at a "nearly every punch read" target. Changes:
 - **Getting hit no longer eats the punch you just threw.** One queued punch survives hitstun.
 - **Ducks work.** The resolver no longer turns any punch at a ducking opponent into an uppercut.
 
+- **Hits show when you hear them.** A player reported sounds coming before the moves. On every hit the engine's
+  hit-stop started and the game stopped drawing, so the freeze held the frame *before* the punch landed. The hit
+  sound played 52–200 ms before the screen showed the impact, and the whoosh came after the hit sound.
+  - Fix: the impact frame is drawn, then held. The same change went into the client mirror and the K.O. replay.
+  - Measured in Edge on the RTX 4070 against the CPU: the screen now changes 2–11 ms after the sound.
+  - This one is also on `main` and the live site.
+
+### The learned move model (`src/intent/MoveModel.ts`)
+
+- **What it is:** a 31k-parameter causal TCN, 3-model int8 ensemble, 130 KB, about 0.6 ms a frame. It reads the
+  reader's preprocessed body and runs as a gate and rescue next to the rules (`IntentReader.secondOpinion`):
+  - rule strikes it doesn't believe are dropped;
+  - swings only it saw are added, with a wind-up tell;
+  - style stays the rules'.
+- **Real play, held-out players** (the subagent's nested leave-one-person-out, against the 57.5% rules): recall 72.7%,
+  precision 86.5%, confirm median 64 ms instead of 133.
+- **The blocker:** it fires on everyday motions it was never shown: hands coming back up, head scratches, waves.
+  Synthetic false positives go from 2.5 to 5.1 a minute, and the matrix precision floors fail.
+  - Pose-rule vetoes on its rescues didn't help.
+  - Rescues limited to rule wind-ups lose the gain.
+  - So it's being retrained with the synthetic negatives as "not a punch".
+- **Until then it's off:** `DEFAULT_INTENT.model.gate` is 0, and `?model=1` turns it on in the game.
+
+### Preview
+
+The branch is built at **https://brawlmegle.com/next/**: `vite build --base /next/`, copied to
+`/var/www/brawlegle/next/`, sharing the live forge and matchmaker. The live site stays on `main`.
+
 Still needs playtests:
 - **Round length:** rounds are about 7–11 s.
 - **How often people parry by accident.**
