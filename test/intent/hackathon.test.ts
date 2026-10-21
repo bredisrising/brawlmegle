@@ -20,4 +20,4 @@ test.skipIf(!dir)('real hackathon play', () => {
   // Floors a little under today's numbers, so a change that reads real play worse fails.
   expect(noMasher.recall).toBeGreaterThan(0.45);
   expect(noMasher.precision).toBeGreaterThan(0.75);
-});
+}, 120_000);

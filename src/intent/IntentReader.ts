@@ -3,6 +3,8 @@ import { LM, PosePreprocessor, type Body, type BodyPoint, type Vec3 } from './pr
 import { DEFAULT_INTENT, type Intent, type IntentConfig, type LimbConfig, type LimbName, type StrikeStyle } from './intents';
 import { StyleMatcher, type Template } from './StyleMatcher';
 import styleModel from './styleModel.json';
+import { GATE_RESCUE as GATE_DEFAULTS, GateRescue, MoveModel, type MoveModelWeights } from './MoveModel';
+import moveWeights from './moveModel.weights.json';
 
 /** The shared style model, trained from everyone's guided-test sessions (test/intent/train.test.ts). */
 const SHARED_MODEL = (styleModel as Template[]).length ? StyleMatcher.fromJSON(styleModel as Template[]) : null;
@@ -168,6 +170,11 @@ export class IntentReader {
   private debug: IntentDebug | null = null;
   /** The player's calibration examples, if any. Decides straight/hook/upper instead of the built-in rules. */
   private matcher: StyleMatcher | null = SHARED_MODEL;
+  /** The learned move model and its gate (config.model): a second opinion on every rule strike, and a catch for misses. */
+  private moveModel: MoveModel | null = null;
+  private gate: GateRescue | null = null;
+  /** When the rules last saw each arm start a strike (config.model.rescue 1 only rescues those). */
+  private ruleOnsetAt: Record<'armL' | 'armR', number> = { armL: -Infinity, armR: -Infinity };
 
   constructor(player: PlayerId, config: IntentConfig = DEFAULT_INTENT) {
     this.player = player;
@@ -198,6 +205,8 @@ export class IntentReader {
 
   private resetLimbs() {
     for (const n of LIMB_NAMES) this.limbs[n] = newLimb();
+    this.moveModel?.reset();
+    this.gate = null;
     // Cooldowns are on the frame clock, which restarts when a peer reloads: stale ones would block for minutes.
     this.lastCore = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
     this.pendingCore = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
@@ -241,6 +250,7 @@ export class IntentReader {
     for (const name of LIMB_NAMES) this.updateLimb(name, body, intents);
     this.bothArmsTogether(body.t, intents);
     this.updateCore(body, intents);
+    if (this.config.model.gate) this.secondOpinion(body, intents);
     return { commands: toCommands(this.player, intents), stance: this.stance, intents, body, debug: this.debug };
   }
 
@@ -508,6 +518,67 @@ export class IntentReader {
       if (!home) s.rearmedAt = t;
       else s.homeAt = t;
     }
+  }
+
+  /**
+   * The learned move model's say on this frame's arm strikes (MoveModel.ts, trained on the hackathon rounds): a rule
+   * strike it doesn't believe is dropped (most of those were hands going up into a guard), a swing the rules missed but
+   * it saw is added, and a swing both caught counts once, at whichever confirmed first. Style stays the rules'.
+   * Held-out players: 57.5% -> 72.7% of real strikes read, precision 84.9% -> 86.5%, confirm 133 -> 64 ms median.
+   */
+  private secondOpinion(body: Body, out: Intent[]) {
+    const m = this.config.model;
+    // Trained on standing players with their hips in the shot: seated and chest-up framings fool it, so the rules
+    // read those alone.
+    if (m.needHips && body.fullBodyFor < 500) {
+      if (this.gate) (this.moveModel?.reset(), (this.gate = null));
+      return;
+    }
+    this.moveModel ??= new MoveModel(moveWeights as unknown as MoveModelWeights);
+    this.gate ??= new GateRescue({ ...GATE_DEFAULTS, keep: m.keep, on: m.on, confirm: m.confirm, off: m.off });
+    const scores = this.moveModel.update(body);
+    const added: Intent[] = [];
+    for (const n of ['armL', 'armR'] as const) for (const x of out) if (x.kind === 'anticipate' && x.limb === n) this.ruleOnsetAt[n] = x.t;
+    for (const d of this.gate.scores(scores)) {
+      if (d.kind !== 'emit') continue;
+      if (m.rescue === 0 || (m.rescue === 1 && d.t - this.ruleOnsetAt[d.limb] > 400)) continue;
+      // The rules may be mid-swing on this arm too: once they confirm it, the gate folds theirs into this one.
+      added.push(this.modelStrike(d.limb, d.t, d.onsetT, d.style as StrikeStyle, body));
+    }
+    for (let i = 0; i < out.length; i++) {
+      const x = out[i];
+      if (x.kind === 'strike' && (x.limb === 'armL' || x.limb === 'armR')) {
+        const d = this.gate.rule({ limb: x.limb, t: x.t, onsetT: x.onsetT, style: x.style });
+        if (d.kind === 'drop') out[i] = { kind: 'cancel', limb: x.limb, t: x.t, reason: 'not a punch' };
+        else if (d.kind === 'restyle') out[i] = { kind: 'restyle', limb: x.limb, t: x.t, onsetT: d.onsetT, style: x.style, height: x.height };
+      } else if (x.kind === 'restyle' && (x.limb === 'armL' || x.limb === 'armR')) {
+        const d = this.gate.ruleRestyle({ limb: x.limb, t: x.t, onsetT: x.onsetT, style: x.style });
+        if (d?.kind === 'restyle') out[i] = { ...x, onsetT: d.onsetT };
+        else out.splice(i--, 1);
+      }
+    }
+    out.push(...added);
+  }
+
+  /** A strike only the model saw: its shape from where the arm is now (the rules never measured this swing). */
+  private modelStrike(limb: 'armL' | 'armR', t: number, onsetT: number, style: StrikeStyle, body: Body): Intent {
+    const def = LIMBS[limb];
+    const s = this.limbs[limb];
+    const tip = body.points[def.tip], root = body.points[def.root];
+    const travel = len(s.travel) > 1e-3 ? s.travel : { x: tip.p.x - root.p.x, y: tip.p.y - root.p.y, z: 0 };
+    const dir = normalize(travel);
+    const speed = Math.hypot(tip.vf.x - root.vf.x, tip.vf.y - root.vf.y);
+    const otherGuard = this.otherInGuard(def, body);
+    return {
+      kind: 'strike', limb, t, onsetT, style,
+      height: heightOf('arm', tip.p, body),
+      dir: { out: dir.x * def.side, up: dir.y, fwd: dir.z },
+      speed: clamp((0.85 + 0.05 * (speed - 3)) * (otherGuard ? 1.08 : 0.94), 0.8, 1.3),
+      windup: 1,
+      reach: Math.max(s.disp, this.config.arm.strikeDist),
+      rawSpeed: speed,
+      otherGuard,
+    };
   }
 
   /** The other hand is up by the face or in front of the chest (its half of the guard zone). */

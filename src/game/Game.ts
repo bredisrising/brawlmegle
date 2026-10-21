@@ -13,7 +13,7 @@ import { FightEngine } from '../fight/FightEngine';
 import { Resolver } from '../fight/Resolver';
 import { FairDelay } from './fairDelay';
 import { IntentReader } from '../intent/IntentReader';
-import type { Intent } from '../intent/intents';
+import { readingConfig, type Intent } from '../intent/intents';
 import { InputHub, createLocalSource, preloadLocalInput, type InputSource } from '../input';
 import { MockSource } from '../input/sources/MockSource';
 import { trackerInfoOf } from '../input/poseHealth';
@@ -246,7 +246,7 @@ export class Game {
     this.effects = new Effects(this.renderer.scene, this.renderer.camera);
     this.fireballs = new Fireballs(this.renderer.scene);
     this.views = { p1: new FighterView('p1'), p2: new FighterView('p2') };
-    this.intent = { p1: new IntentReader('p1'), p2: new IntentReader('p2') };
+    this.intent = { p1: new IntentReader('p1', readingConfig(config.moveModel)), p2: new IntentReader('p2', readingConfig(config.moveModel)) };
     for (const v of Object.values(this.views)) this.renderer.scene.add(v.root);
 
     this.walkout = new Walkout(this.renderer, this.effects, this.views, this.announcer, this.sfx, () => this.skipWalkout(), () => !this.liveMatch());

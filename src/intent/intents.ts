@@ -103,6 +103,16 @@ export type IntentConfig = {
   heavy: { windup: number; holdMs: number };
   /** A strike's style gets one more look at its peak, at most this long after it was confirmed (see 'restyle'). */
   restyleMs: number;
+  /**
+   * The learned move model as a gate and rescue on arm strikes (IntentReader.secondOpinion), on with `gate` 1 (in the
+   * game: `?model=1`). A rule strike needs the model's p(rise) to reach `keep`; the model adds its own strike at p(rise)
+   * `on` -> `confirm`, and re-arms below `off`. `rescue` 0: no strikes of its own, 1: only where the rules saw a wind-up
+   * start, 2: any. `needHips` 1: off unless the hips are in the shot (it learned from standing players). Off by
+   * default for now: on real play it reads far more (held-out players: 57.5% -> 72.7%, precision 84.9 -> 86.5%), but
+   * it fires on everyday motions it never saw in training (hands coming back up, scratches, waves: synthetic false
+   * positives 2.5 -> 5.1 a minute).
+   */
+  model: { gate: number; keep: number; on: number; confirm: number; off: number; rescue: number; needHips: number };
   /** No new frames for this long (host clock) = player lost. */
   staleMs: number;
 };
@@ -126,5 +136,11 @@ export const DEFAULT_INTENT: IntentConfig = {
   tuckReach: 0.5,
   heavy: { windup: 1.2, holdMs: 250 },
   restyleMs: 200,
+  model: { gate: 0, keep: 0.2, on: 0.6, confirm: 0.75, off: 0.2, rescue: 2, needHips: 0 },
   staleMs: 300,
 };
+
+/** The reader's config for the game: the defaults, with the learned move model on if asked (`?model=1`). */
+export function readingConfig(moveModel: boolean): IntentConfig {
+  return moveModel ? { ...DEFAULT_INTENT, model: { ...DEFAULT_INTENT.model, gate: 1 } } : DEFAULT_INTENT;
+}

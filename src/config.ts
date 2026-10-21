@@ -58,6 +58,8 @@ export const config = {
    * each) instead of the optimized copy, to compare quality. Falls back to the optimized one when there's no original.
    */
   fullModels: params.get('models') === 'full',
+  /** `?model=1`: the learned move model reads alongside the rules (DEFAULT_INTENT.model; off by default for now). */
+  moveModel: params.get('model') === '1',
   /**
    * Online, the client's moves reach the host's engine half a round trip late. The host holds its own player's commands
    * back by the same (up to this many ms) so neither side wins trades by being the host. `?fair=0` turns it off.

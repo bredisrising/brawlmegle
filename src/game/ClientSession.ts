@@ -9,7 +9,7 @@ import { PROTOCOL_VERSION, type ClientMessage, type HostMessage, type MatchPlaye
 import { config } from '../config';
 import type { ForgedFighter, ForgePreview, PlayerId, PoseFrame } from '../types';
 import { IntentReader } from '../intent/IntentReader';
-import type { Intent } from '../intent/intents';
+import { readingConfig, type Intent } from '../intent/intents';
 import type { FighterChoice } from './Game';
 import { VideoClip } from './MatchRecorder';
 import { localPlayerId, updatePlayer, useGameStore } from './store';
@@ -70,7 +70,7 @@ export class ClientSession {
    * (the poses still stream for the host's live layer and recordings). Reading streamed poses on the host suffered
    * every dropped or late packet: real 1v1 rounds delivered P2 at 2.5–7 fps.
    */
-  private readonly reader = new IntentReader(PLAYER);
+  private readonly reader = new IntentReader(PLAYER, readingConfig(config.moveModel));
   /** `?video=1`: this laptop's camera during each round, saved locally (see MatchRecorder). */
   private readonly clip = new VideoClip();
   /** This laptop's latest camera frame (P2's own pose, blended into its fighter on this screen). */
