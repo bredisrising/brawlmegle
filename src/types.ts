@@ -31,6 +31,26 @@ export type PoseFrame = {
   aspect?: number; // video width / height. Image x and y are normalized separately, so distances need it.
 };
 
+/** What a laptop tracked its player with (match recordings keep it, so the data says what each laptop ran). */
+export type TrackerInfo = {
+  model: 'lite' | 'full';
+  delegate: 'GPU' | 'CPU';
+  runner: 'worker' | 'page';
+  onePose: boolean;
+  /** MediaPipe's ms per detection, and detections and camera frames per second (the last 2 s). */
+  detectMs: number;
+  posesPerSec: number;
+  cameraFps: number;
+  /** The camera's picture, and the frame rate it's set to. */
+  width: number;
+  height: number;
+  frameRate: number;
+  /** Short exposure: what it's doing ('off', 'hold', 'auto', ...) and the time (100 µs units) while it's set. */
+  exposure: string;
+  exposureTime: number | null;
+  userAgent: string;
+};
+
 // ---------------------------------------------------------------------------
 // Intent -> Fight engine
 // ---------------------------------------------------------------------------

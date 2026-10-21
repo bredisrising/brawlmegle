@@ -79,7 +79,10 @@ export class PersonPicker {
       } else {
         cost = Math.abs(m.x - aspect / 2) - SIZE_WEIGHT * m.size;
       }
-      if (cost < lowest) (lowest = cost), (best = i);
+      if (cost < lowest) {
+        lowest = cost;
+        best = i;
+      }
     });
     if (a) {
       const followed = best >= 0 ? found[best]!.size : a.size;

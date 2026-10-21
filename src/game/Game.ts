@@ -15,6 +15,7 @@ import { IntentReader } from '../intent/IntentReader';
 import type { Intent } from '../intent/intents';
 import { InputHub, createLocalSource, preloadLocalInput, type InputSource } from '../input';
 import { MockSource } from '../input/sources/MockSource';
+import { trackerInfoOf } from '../input/poseHealth';
 import { captureScan, forgeBusy, forgeFighter, type ForgeOwner, type ScanFrames } from '../forge/forge';
 import { forgePreview, forgeStatus, onChange, samePreview, scanStatus } from '../forge/status';
 import { fetchServerFighters, maskedFighter, saveFighter, saveOwner } from '../forge/roster';
@@ -378,6 +379,7 @@ export class Game {
       heard: () => mine() && (this.lastPeerAt = performance.now()),
       quickJoin: (code) => mine() && void this.joinQuick(code),
       cam: (hidden) => mine() && this.cam.remoteHidden(hidden),
+      tracker: (info) => mine() && this.recorder.tracker('p2', info),
       read: (intents, stance) => {
         this.remoteIntents.push(...intents);
         this.remoteStance = { stance: { ...stance, player: 'p2' }, at: performance.now() };
@@ -1368,6 +1370,7 @@ export class Game {
       { p1: { name: players.p1.name, cpu: !!this.cpu.p1 }, p2: { name: players.p2.name, cpu: !!this.cpu.p2 } },
       (cam?.video?.srcObject as MediaStream | null) ?? null,
     );
+    this.recorder.tracker('p1', trackerInfoOf(this.input.source('p1'))); // P2's comes from the client laptop
   }
 
   /** Hand this laptop's camera (whichever source tracks the player now) to the camera share. Cheap; every frame. */

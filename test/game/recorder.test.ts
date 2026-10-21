@@ -23,6 +23,11 @@ test('records frames, intents and events for real players and uploads one file e
   const { MatchRecorder } = await import('../../src/game/MatchRecorder');
   const r = new MatchRecorder();
   r.start({ p1: { name: 'ankit', cpu: false }, p2: { name: 'rico', cpu: true } }, null);
+  const tracker = {
+    model: 'full', delegate: 'GPU', runner: 'worker', onePose: false, detectMs: 29.5, posesPerSec: 29.9, cameraFps: 30,
+    width: 640, height: 480, frameRate: 30, exposure: 'hold', exposureTime: 62, userAgent: 'Edg/141',
+  } as const;
+  r.tracker('p1', tracker);
   for (let i = 0; i < 60; i++) {
     const f = frame(1000 + i * 33);
     r.frame('p1', f);
@@ -36,6 +41,8 @@ test('records frames, intents and events for real players and uploads one file e
   expect(bodies).toHaveLength(1);
   const lines = bodies[0].trim().split('\n').map((l) => JSON.parse(l));
   expect(lines[0]).toMatchObject({ clip: 'match', player: 'p1', name: 'ankit', opponent: 'rico', frames: 60, labels: [] });
+  // What the laptop ran, and how long the poses cover (frames / seconds = poses a second).
+  expect(lines[0]).toMatchObject({ tracker, seconds: 1.947 });
   expect(lines.filter((l) => l.image)).toHaveLength(60);
   expect(lines.some((l) => l.intent?.kind === 'guard')).toBe(true);
   expect(lines.some((l) => l.event?.type === 'hit' && l.t > 0)).toBe(true);

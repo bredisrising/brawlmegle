@@ -5,7 +5,7 @@ import { Peer } from '../net/Peer';
 import { Signaling } from '../net/Signaling';
 import { PROTOCOL_VERSION, type ClientMessage, type HostMessage } from '../net/protocol';
 import { config } from '../config';
-import type { ForgedFighter, Stance } from '../types';
+import type { ForgedFighter, Stance, TrackerInfo } from '../types';
 import type { Intent } from '../intent/intents';
 import { PLAYER_NAMES } from './constants';
 import type { FighterChoice } from './Game';
@@ -40,6 +40,8 @@ export type HostHooks = {
   back?: () => void;
   /** Whether the client player's tab is visible. */
   presence?: (visible: boolean) => void;
+  /** What the client's camera tracks P2 with (sent as each round starts). */
+  tracker?: (info: TrackerInfo) => void;
   /** Any message at all from the client (the host's watchdog for a client gone quiet). */
   heard?: () => void;
 };
@@ -236,6 +238,9 @@ export class HostSession {
         break;
       case 'stance':
         this.hooks.read?.([], msg.stance);
+        break;
+      case 'tracker':
+        this.hooks.tracker?.(msg.info);
         break;
       // 'pose' goes to the RemoteSource.
     }

@@ -1,6 +1,7 @@
 import type { PoseLandmarker } from '@mediapipe/tasks-vision';
-import type { Landmark, PoseFrame } from '../../types';
+import type { Landmark, PoseFrame, TrackerInfo } from '../../types';
 import type { InputSource } from '../InputSource';
+import { PoseHealth, type PoseWarning } from '../poseHealth';
 import {
   WASM_ROOT, landmarkerOptions, modelUrl, toLandmark,
   type PoseDelegate, type PoseVariant, type PoseWorkerReply, type PoseWorkerRequest,
@@ -120,7 +121,10 @@ export class CameraSource implements InputSource {
     rated: false,
     /** One-pose mode is on (see setSinglePose). */
     singlePose: false,
+    /** Tracking slow enough to tell the player (on screen next to their camera), or null. */
+    warning: null as PoseWarning | null,
   };
+  private health = new PoseHealth();
   private rateStart = 0;
   private cameraFrames = 0;
   private detections = 0;
@@ -128,6 +132,20 @@ export class CameraSource implements InputSource {
   /** The camera's real settings (it may not grant the 60 fps we ask for). */
   get settings(): MediaTrackSettings | null {
     return this.stream?.getVideoTracks()[0]?.getSettings() ?? null;
+  }
+
+  /** What this camera tracks with right now, for the match recording. */
+  info(): TrackerInfo {
+    const s = this.stats;
+    const round = (v: number) => Math.round(v * 10) / 10;
+    return {
+      model: this.variant, delegate: this.delegate, runner: s.runner, onePose: s.singlePose,
+      detectMs: round(s.detectMs), posesPerSec: round(s.detectFps), cameraFps: round(s.cameraFps),
+      width: this.video.videoWidth, height: this.video.videoHeight, frameRate: round(this.settings?.frameRate ?? 0),
+      exposure: this.exposure?.state ?? (this.exposureWanted && this.stream ? 'unsupported' : 'off'),
+      exposureTime: this.exposure?.time ?? null,
+      userAgent: navigator.userAgent,
+    };
   }
 
   /**
@@ -236,6 +254,8 @@ export class CameraSource implements InputSource {
     this.stats.detectFps = this.stats.cameraFps = 0;
     this.stats.rated = false;
     this.stats.singlePose = false;
+    this.stats.warning = null;
+    this.health = new PoseHealth();
     this.rateStart = 0;
     if (this.frameRequest && 'cancelVideoFrameCallback' in this.video) this.video.cancelVideoFrameCallback(this.frameRequest);
     else cancelAnimationFrame(this.frameRequest);
@@ -437,6 +457,7 @@ export class CameraSource implements InputSource {
     this.stats.rated = this.timedFrames > 0;
     this.rateStart = now;
     this.cameraFrames = this.detections = 0;
+    this.stats.warning = this.health.update(this.stats);
     // The CPU can't run the full model at the camera's rate: lite, since a punch is only a few frames long and frames
     // matter more than full's extra accuracy. Decided by poses a second, not ms each (detections overlap frames).
     const { rated, detectFps, cameraFps } = this.stats;
