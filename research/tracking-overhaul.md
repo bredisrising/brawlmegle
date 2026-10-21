@@ -225,6 +225,13 @@ What changed in `IntentReader` (each change was measured on its own; anything th
 - **A `restyle` at the strike's peak** fixes the style picked on the wind-up, and the engine swaps the move while it's
   still in startup.
 
+- **Punch type, measured where players feel it:** of the caught punches with a clear type, the game plays the right move
+  for 78% (it was 70%). Straights are right 41 of 49, hooks 74 of 85, uppercuts 13 of 20, and overhands come out as
+  hooks 62 of 89 (was 43). The rules called a third of real overhands uppercuts. Now an uppercut needs the elbow to
+  stay a quarter torso under the shoulder; an elbow swung up is an overhand coming over the top.
+  - Tuning the other type thresholds on real play, with each player held out, didn't beat the current ones.
+  - Style examples didn't help either: a shared set from the other players, or each player's own first punches.
+
 Tried and dropped:
 - **A shorter confirm wait** (20 ms): 32 ms faster, but one more fake a minute.
 - **The cheap pixel check:** frame differencing in the forearm box at 320×240 removes only about 20% of fakes when 95%
