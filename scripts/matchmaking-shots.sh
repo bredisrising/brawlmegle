@@ -25,7 +25,7 @@ kill_edges() {
 }
 for who in a b; do
   port=$([ $who = a ] && echo 9351 || echo 9352)
-  "$EDGE" --user-data-dir="$WINTMP\\brawlmm-$who" --remote-debugging-port=$port --headless=new \
+  "$EDGE" --user-data-dir="$WINTMP\\brawlmm-$who" --remote-debugging-port=$port --headless=new --mute-audio \
     --no-first-run --no-default-browser-check --disable-features=msEdgeSignin,EdgeCollections \
     --autoplay-policy=no-user-gesture-required --disable-renderer-backgrounding --disable-background-timer-throttling \
     --disable-backgrounding-occluded-windows --use-fake-ui-for-media-stream --use-fake-device-for-media-stream \

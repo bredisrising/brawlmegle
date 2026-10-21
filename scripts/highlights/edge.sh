@@ -13,7 +13,7 @@ if [ "$CMD" = stop ]; then
   exit 0
 fi
 # --disable-web-security: a dev server on a port the shared forge doesn't list can still load its fighters.
-"$EDGE" --user-data-dir="$WINTMP\\profile-brawlhl" --remote-debugging-port="$PORT" --headless=new \
+"$EDGE" --user-data-dir="$WINTMP\\profile-brawlhl" --remote-debugging-port="$PORT" --headless=new --mute-audio \
   --no-first-run --no-default-browser-check --disable-features=msEdgeSignin,EdgeCollections \
   --autoplay-policy=no-user-gesture-required --disable-renderer-backgrounding --disable-background-timer-throttling \
   --disable-backgrounding-occluded-windows --disable-web-security about:blank >/dev/null 2>&1 &

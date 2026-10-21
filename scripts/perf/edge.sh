@@ -20,7 +20,7 @@ CLIPNAME=${CLIPNAME:-clip.y4m}
 ADAPTER=()
 # The registry makes Edge use the RTX 4070; this LUID is the Radeon 780M iGPU (an average laptop's GPU).
 [ "$GPU" = amd ] && ADAPTER=(--use-adapter-luid=0,81299)
-"$EDGE" --user-data-dir="$WINTMP\\profile-$GPU" --remote-debugging-port=$PORT --headless=new \
+"$EDGE" --user-data-dir="$WINTMP\\profile-$GPU" --remote-debugging-port=$PORT --headless=new --mute-audio \
   --no-first-run --no-default-browser-check --disable-features=msEdgeSignin,EdgeCollections \
   --autoplay-policy=no-user-gesture-required --disable-renderer-backgrounding --disable-background-timer-throttling \
   --disable-backgrounding-occluded-windows --use-fake-ui-for-media-stream --use-fake-device-for-media-stream \

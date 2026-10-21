@@ -29,6 +29,8 @@ const browser = await chromium.launch({
   args: [
     "--disable-features=WebRtcHideLocalIpsWithMdns", "--use-angle=swiftshader", "--enable-unsafe-swiftshader",
     "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows",
+    // Muted: the Games' sounds would otherwise play through this machine's speakers.
+    "--mute-audio",
   ],
 });
 

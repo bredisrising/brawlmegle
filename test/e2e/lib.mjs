@@ -43,7 +43,8 @@ function chromePath() {
  * 'denied' = a camera exists but the permission prompt is refused.
  */
 export async function launch({ camera = "fake", video = PERSON_VIDEO, args = [] } = {}) {
-  const flags = ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist", "--autoplay-policy=no-user-gesture-required"];
+  // Muted: a test browser on this machine would play the game through the speakers.
+  const flags = ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist", "--autoplay-policy=no-user-gesture-required", "--mute-audio"];
   if (camera === "fake" || camera === "person") flags.push("--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream");
   if (camera === "person") {
     if (!video) throw new Error("camera 'person' needs E2E_VIDEO (a .y4m)");
