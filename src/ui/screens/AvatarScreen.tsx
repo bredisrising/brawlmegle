@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { findProfile, normalizeUsername } from '../../forge/forge';
+import { findProfile, normalizeUsername, wakeForge } from '../../forge/forge';
 import { listFighters, ownedFighters } from '../../forge/roster';
 import { DeleteWithCode, MyFighters } from '../DeleteFighter';
 import { preloadModel } from '../../forge/models';
@@ -34,6 +34,13 @@ export function AvatarScreen() {
     const t = setTimeout(() => setArmed(true), 400);
     return () => clearTimeout(t);
   }, []);
+
+  // A browser that has never scanned (no owner key) is almost certainly about to: wake the 3D forge now, so it boots
+  // while they type and scan. Returning players who rescan wake it when the scan starts, and may wait a little.
+  const enter = () => {
+    if (!ownedFighters().length) wakeForge();
+    setStep('name');
+  };
 
   return (
     <div className={`tex-hatch absolute inset-0 flex flex-col overflow-hidden bg-ink ${armed ? 'pointer-events-auto' : 'pointer-events-none'}`}>
@@ -82,7 +89,7 @@ export function AvatarScreen() {
       )}
 
       <main key={step} className="relative flex min-h-0 flex-1 flex-col px-5 pb-8 sm:px-10 sm:pb-12">
-        {step === 'choose' && <ChooseStep player={player} onScan={() => setStep('name')} onExisting={() => setStep('roster')} />}
+        {step === 'choose' && <ChooseStep player={player} onScan={enter} onExisting={() => setStep('roster')} />}
         {step === 'name' && <NameStep player={player} />}
         {step === 'roster' && <RosterStep player={player} />}
       </main>

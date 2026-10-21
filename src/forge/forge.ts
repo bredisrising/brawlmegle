@@ -84,6 +84,15 @@ export async function forgeBusy(api = config.forgeApi): Promise<string | null> {
 }
 
 /**
+ * Gets the forge's GPU box up ahead of a likely scan: it powers off after 15 idle minutes and takes about a minute to
+ * boot, so asking early hides that behind the username, the scan and the 2D art. Fire and forget.
+ */
+export function wakeForge(api = config.forgeApi) {
+  if (!api) return;
+  fetch(`${trimSlash(api)}/api/capacity`, { signal: AbortSignal.timeout(4000) }).catch(() => {});
+}
+
+/**
  * "Delete my fighter" (forge/owner.js): the forge hands these out once, when it starts. The browser that scanned keeps
  * the key (roster.ts saveOwner); the code is shown once the forge is done, to screenshot.
  */
