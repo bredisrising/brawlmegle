@@ -70,6 +70,8 @@ type LimbState = {
   phase: 'idle' | 'onset' | 'recover';
   /** This strike started as an overhand (chopping down from above the shoulder). */
   overhand: boolean;
+  /** When this limb last struck. */
+  struckAt: number;
   /** Usual position (guard or relaxed); "back near rest" means ready to strike again. */
   rest: Pair | null;
   /** Where the limb last paused. Strikes are measured from here, so a cocked-back hook or a dropped
@@ -370,7 +372,8 @@ export class IntentReader {
       }
       // An overhand: the hand starts up above the shoulder and chops down fast, over the top and in or toward the
       // camera. A third of real players' swings are these (hackathon rounds), so the two rules below spare them.
-      const overhand = def.kind === 'arm' && s.anchor.tip.y > OVERHAND_START && vel.tip.y < -OVERHAND_SPEED && choppingIn(def, tTip, disp);
+      // (Not right after this arm's own strike: that's the arm coming back down from a sky punch or an uppercut.)
+      const overhand = def.kind === 'arm' && t - s.struckAt > 500 && s.anchor.tip.y > OVERHAND_START && vel.tip.y < -OVERHAND_SPEED && choppingIn(def, tTip, disp);
       // A hand dropping fast (back to the lap, or lowering the guard) can't be starting a punch.
       const dropping = def.kind === 'arm' && vel.tip.y < -1.2 && !overhand;
       // An arm already up in the air (elbow at shoulder height, hand above it: waving, a hand on the head) isn't
@@ -465,6 +468,7 @@ export class IntentReader {
       });
       s.phase = 'recover';
       s.since = t;
+      s.struckAt = t;
       s.extended = clonePair(now);
       // The other leg was what this one stood on.
       const partner = this.limbs[PARTNER[name]];
@@ -833,7 +837,7 @@ function windupOf(s: LimbState, dir: Vec3) {
 
 function newLimb(): LimbState {
   return {
-    phase: 'idle', overhand: false, rest: null, anchor: null, since: 0, grewAt: 0, peakDisp: 0, peakSpeed: 0,
+    phase: 'idle', overhand: false, struckAt: -Infinity, rest: null, anchor: null, since: 0, grewAt: 0, peakDisp: 0, peakSpeed: 0,
     peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, peakMidTravel: 0, peakMidOut: 0, anchorTip: { x: 0, y: 0, z: 0 }, peakElbow: 0, peakTipSeen: false, history: [], typicalSpeed: 4, extended: null, lastRestDisp: 0, rearmedAt: -Infinity, nearFaceAt: -Infinity, faceBeforeOnset: -Infinity, risingAt: -Infinity, travel: { x: 0, y: 0, z: 0 }, tipAtOnset: { x: 0, y: 0, z: 0 }, otherAtOnset: { x: 0, y: 0, z: 0 }, disp: 0, out: 0, blocked: null,
   };
 }
