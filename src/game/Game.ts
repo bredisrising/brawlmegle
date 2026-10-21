@@ -32,6 +32,7 @@ import { SpectatorSession } from './SpectatorSession';
 import type { HostMessage, MatchPlayer, MirrorEvent, MirrorFrame } from '../net/protocol';
 import { HostSession } from './HostSession';
 import { MatchRecorder, recordingEnabled } from './MatchRecorder';
+import { readPoses } from './readPoses';
 import { HighlightRecorder } from './HighlightRecorder';
 import { Commentary, TEMPLATES, fill, spoken, type Line } from './Commentary';
 import { NO_VOTES, localPlayerId, pushPopup, updatePlayer, useGameStore } from './store';
@@ -1295,10 +1296,12 @@ export class Game {
         continue;
       }
       // P2 on a client laptop that reads its own moves: use what it sent (a full-rate local read, no network
-      // jitter on the poses). Otherwise read the streamed poses here.
+      // jitter on the poses). Otherwise read the poses here: every one since the last tick (after a render hitch,
+      // several), so none skip the reader.
+      const frames = this.input.take(id);
+      for (const frame of frames) this.recorder.frame(id, frame);
       const remote = id === 'p2' ? this.takeRemoteRead() : null;
-      const frame = remote ? null : this.input.latest(id);
-      const out = remote ?? (frame ? this.intent[id].update(frame) : null);
+      const out = remote ?? readPoses(this.intent[id], frames, this.input.latest(id));
       if (out) {
         commands.push(...this.resolver.resolve(id, out.intents, this.fight));
         for (const i of out.intents) {
@@ -1332,7 +1335,6 @@ export class Game {
     // Hit-stop: the picture holds on the impact while the engine does (effects and camera shake keep going).
     // (Only mid-round: the K.O. hit's hit-stop never runs out, since the engine stops stepping.)
     const frozen = useGameStore.getState().phase === 'fighting' && this.fight.frozen;
-    for (const id of PLAYER_IDS) this.recorder.frame(id, this.cpu[id] ? null : this.input.latest(id));
     this.fireballs.sync(this.fight.projectiles());
     this.showMeters({ p1: this.fight.state('p1'), p2: this.fight.state('p2') });
     this.sendFrame(stances, frozen);
