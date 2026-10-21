@@ -47,6 +47,12 @@ const FEET_IN_VIEW = 0.2;
 const ARM_QUIET_SPEED = 2.6;
 const ARM_SWING_SPEED = 4.5;
 const ARM_QUIET_MS = 600;
+/**
+ * A hand going up over the head only counts as fixing hair or waving when it goes slowly (those run under ~2 body units/s).
+ * Fast, it's an overhead swing or a sky punch: real players throw lots of them (hackathon rounds: every one was
+ * cancelled as "not a punch" before).
+ */
+const OVERHEAD_PUNCH_SPEED = 4;
 const LIMB_NAMES = Object.keys(LIMBS) as LimbName[];
 const PARTNER: Record<LimbName, LimbName> = { armL: 'armR', armR: 'armL', legL: 'legR', legR: 'legL' };
 
@@ -399,7 +405,7 @@ export class IntentReader {
         : goingDown ? 'going down'
         : def.kind === 'arm' && raisingGuard(body, name, s.anchorTip, tipPt.p, this.config.guard.radius, t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 400) ? 'raising guard'
         : def.kind === 'arm' && bothHandsUp(body, name, s.peak, s.since - s.faceBeforeOnset > 600 && t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 250) ? 'both hands up'
-        : def.kind === 'arm' && raisedOverHead(body, s.peakTip, s.peak, midPt.p, root.p) ? 'not a punch'
+        : def.kind === 'arm' && s.peakSpeed < OVERHEAD_PUNCH_SPEED && raisedOverHead(body, s.peakTip, s.peak, midPt.p, root.p) ? 'not a punch'
         : def.kind === 'arm' && otherHandAlong(body, def, s, tipPt.p, root.p) ? 'both hands moved'
         // A hand pulled in across the body with the elbow tucking in and staying down is the guard closing up (the
         // other hand's usual move while one hand punches), not a hook: a hook brings the elbow up.
