@@ -78,6 +78,10 @@ export const FIGHT = {
   guardRegenDelay: 0.5,
   guardLockout: 2.5,
   guardCrushStun: 20,
+  /** A punch loaded up at least this much (Command.windup) is a heavy: heavyStartup frames slower, heavyDamage x windup. */
+  heavyWindup: 1.15,
+  heavyStartup: 4,
+  heavyDamage: 1.15,
   /** A guard raised within this many frames of a punch starting calls the punch off (FightEngine.guardFirst). */
   guardCancelFrames: 9,
   /** Slip and duck stay effective this many frames. */

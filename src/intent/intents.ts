@@ -22,11 +22,15 @@ export type Intent =
       height: 'high' | 'mid' | 'low';
       /** Unit direction of the strike in body space: x = outward from this limb's side, y = up, z = toward camera. */
       dir: { out: number; up: number; fwd: number };
-      speed: number; // 0.8–1.3, relative to this player's own typical speed
-      windup: number; // 0.8–1.3, how far they loaded up first
+      speed: number; // 0.8–1.3: how fast (the same scale for everyone), a bit more with the other hand up in guard
+      windup: number; // 0.8–1.3, how far they loaded up first (a big one is a heavy: slower, harder)
       reach: number; // peak displacement from rest, body units
       /** Peak outward speed in body units per second (raw, not relative). */
       rawSpeed: number;
+      /** Thrown straight off this arm's last strike without getting back to guard first (a windmill, a flurry). */
+      chained?: boolean;
+      /** The other hand stayed up in guard as this one struck (form). */
+      otherGuard?: boolean;
       /** Shape of the motion, for matching against a player's calibration examples (arms only). */
       features?: number[];
     }

@@ -179,15 +179,18 @@ export class FightEngine {
     // A NaN here would stick: HP that never reaches 0, a position that's always "in range".
     const speed = finiteOr(c.speed, 1);
     const windup = finiteOr(c.windup, 1);
+    // A big load-up is a heavy: it hits harder but comes out slower, so the other player can see it coming and block.
+    // A small one adds nothing (it used to scale every punch's damage, a hidden coin flip of up to 1.6x).
+    const heavy = PUNCHES.has(c.move) && windup >= FIGHT.heavyWindup;
     f.attack = {
       move: c.move,
       hand: c.hand,
       spec,
       startup: Math.max(
         Math.min(FIGHT.minStartup, spec.startup),
-        spec.startup + (gassed ? FIGHT.gassedStartup : 0) + mash * FIGHT.mashStartup - clamp(finiteOr(c.headStart ?? 0, 0), 0, FIGHT.maxHeadStart),
+        spec.startup + (gassed ? FIGHT.gassedStartup : 0) + mash * FIGHT.mashStartup + (heavy ? FIGHT.heavyStartup : 0) - clamp(finiteOr(c.headStart ?? 0, 0), 0, FIGHT.maxHeadStart),
       ),
-      scale: speed * windup * (gassed ? FIGHT.gassedDamage : 1) * (1 - mash * FIGHT.mashDamage),
+      scale: speed * (heavy ? windup * FIGHT.heavyDamage : 1) * (gassed ? FIGHT.gassedDamage : 1) * (1 - mash * FIGHT.mashDamage),
       height: c.height,
       lunge: this.lungeFor(c, spec),
       done: false,

@@ -48,8 +48,8 @@ export type Command =
       move: AttackMove;
       hand: Hand;
       height: 'head' | 'body';
-      speed: number; // 0.8–1.3, relative to this player's calibrated max
-      windup: number; // 0.8–1.3
+      speed: number; // 0.8–1.3: how fast and how clean (see IntentReader)
+      windup: number; // 0.8–1.3: how far the player loaded up (FIGHT.heavyWindup and over: a heavy)
       lunge?: number; // meters to step in during startup (the resolver adds it when the strike starts out of range)
       autoLunge?: boolean; // instead: step in as far as needed when it actually starts (queued combo punches)
       headStart?: number; // frames the wind-up has already been on screen (the reader saw the motion start that long ago)

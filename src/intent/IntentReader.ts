@@ -72,8 +72,9 @@ type LimbState = {
   phase: 'idle' | 'onset' | 'recover';
   /** This strike started as an overhand (chopping down from above the shoulder). */
   overhand: boolean;
-  /** When this limb last struck. */
+  /** When this limb last struck, and when it last got back to its usual position after one. */
   struckAt: number;
+  homeAt: number;
   /** The current strike's onset, its style as last reported, and whether its peak has been checked for a restyle. */
   onsetAt: number;
   style: StrikeStyle;
@@ -108,7 +109,6 @@ type LimbState = {
   /** Whether the tip was in view at the peak (feet often aren't). */
   peakTipSeen: boolean;
   history: { t: number; d: Vec3 }[];
-  typicalSpeed: number;
   /** Where the limb was at its furthest after the last strike (recover phase), to see it retract. */
   extended: Pair | null;
   /** Distance from rest last frame: falling = the limb is coming back. */
@@ -448,8 +448,7 @@ export class IntentReader {
       }
       const dir = normalize(s.peak);
       const strikeOut = dir.x * def.side;
-      const speedRatio = s.peakSpeed / s.typicalSpeed;
-      s.typicalSpeed += 0.2 * (s.peakSpeed - s.typicalSpeed);
+      const otherGuard = this.otherInGuard(def, body);
       const features = def.kind === 'arm' ? strikeFeatures(def, s, root.p) : undefined;
       const style = this.styleOf(def, s, root.p);
       out.push({
@@ -463,10 +462,14 @@ export class IntentReader {
         style,
         height: heightOf(def.kind, s.peakTip, body),
         dir: { out: strikeOut, up: dir.y, fwd: dir.z },
-        speed: clamp(0.8 + 0.5 * (speedRatio - 0.6), 0.8, 1.3),
+        // Faster hits harder, the same scale for everyone (2.9–9.1 body units/s covers most real punches), and punching
+        // with the other hand kept up in guard counts more (real clean punches: 87% had it up, flails 66%).
+        speed: clamp((0.85 + 0.05 * (s.peakSpeed - 3)) * (otherGuard ? 1.08 : 0.94), 0.8, 1.3),
         windup: windupOf(s, dir),
         reach: s.peakDisp,
         rawSpeed: s.peakSpeed,
+        chained: t - s.rearmedAt < 600 && s.rearmedAt > s.homeAt,
+        otherGuard,
         features,
       });
       s.phase = 'recover';
@@ -511,7 +514,18 @@ export class IntentReader {
       s.phase = 'idle';
       s.anchor = clonePair(now);
       if (!home) s.rearmedAt = t;
+      else s.homeAt = t;
     }
+  }
+
+  /** The other hand is up by the face or in front of the chest (its half of the guard zone). */
+  private otherInGuard(def: LimbDef, body: Body) {
+    if (def.kind !== 'arm') return false;
+    const g = this.config.guard;
+    const w = body.points[def.side === 1 ? LM.rWrist : LM.lWrist].p;
+    const nose = body.points[LM.nose].p;
+    const ls = body.points[LM.lShoulder].p, rs = body.points[LM.rShoulder].p;
+    return Math.hypot(w.x - nose.x, w.y - nose.y) < g.radius || (w.y > (ls.y + rs.y) / 2 - g.chestDrop && Math.abs(w.x - (ls.x + rs.x) / 2) < g.chestWidth);
   }
 
   /** Straight, hook or uppercut from the strike's shape so far (the player's own examples decide, if calibrated). */
@@ -873,8 +887,8 @@ function windupOf(s: LimbState, dir: Vec3) {
 
 function newLimb(): LimbState {
   return {
-    phase: 'idle', overhand: false, struckAt: -Infinity, onsetAt: 0, style: 'straight', restyleDone: true, rest: null, anchor: null, since: 0, grewAt: 0, peakDisp: 0, peakSpeed: 0,
-    peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, peakMidTravel: 0, peakMidOut: 0, anchorTip: { x: 0, y: 0, z: 0 }, peakElbow: 0, peakTipSeen: false, history: [], typicalSpeed: 4, extended: null, lastRestDisp: 0, rearmedAt: -Infinity, nearFaceAt: -Infinity, faceBeforeOnset: -Infinity, risingAt: -Infinity, travel: { x: 0, y: 0, z: 0 }, tipAtOnset: { x: 0, y: 0, z: 0 }, otherAtOnset: { x: 0, y: 0, z: 0 }, disp: 0, out: 0, blocked: null,
+    phase: 'idle', overhand: false, struckAt: -Infinity, homeAt: -Infinity, onsetAt: 0, style: 'straight', restyleDone: true, rest: null, anchor: null, since: 0, grewAt: 0, peakDisp: 0, peakSpeed: 0,
+    peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, peakMidTravel: 0, peakMidOut: 0, anchorTip: { x: 0, y: 0, z: 0 }, peakElbow: 0, peakTipSeen: false, history: [], extended: null, lastRestDisp: 0, rearmedAt: -Infinity, nearFaceAt: -Infinity, faceBeforeOnset: -Infinity, risingAt: -Infinity, travel: { x: 0, y: 0, z: 0 }, tipAtOnset: { x: 0, y: 0, z: 0 }, otherAtOnset: { x: 0, y: 0, z: 0 }, disp: 0, out: 0, blocked: null,
   };
 }
 
