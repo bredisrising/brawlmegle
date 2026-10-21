@@ -88,6 +88,21 @@ export type IntentConfig = {
   advance: { in: number; out: number };
   /** Ignore the same core move (jump, duck, dodge) again within this long. */
   coreCooldownMs: number;
+  /**
+   * A hand faster than `quiet` (body units/s, against its shoulder) blocks slips for `ms`, one faster than `swing` blocks
+   * ducks too: swinging moves the head (real play: every fake dodge came within 600 ms of a fast hand).
+   */
+  handsCalm: { quiet: number; swing: number; ms: number };
+  /** Overhand chops: from at least `start` against the shoulder (body units), coming down faster than `speed`. */
+  overhand: { start: number; speed: number };
+  /** A hand going over the head faster than this is a punch (a sky punch), slower it's fixing hair or waving. */
+  overheadSpeed: number;
+  /** A tuck into guard (the hand pulled in across the body, elbow low) travels less than this; farther, it's a hook. */
+  tuckReach: number;
+  /** A heavy: pulled back at least `windup` (0.8–1.3) from a hold that ended under `holdMs` before the swing. */
+  heavy: { windup: number; holdMs: number };
+  /** A strike's style gets one more look at its peak, at most this long after it was confirmed (see 'restyle'). */
+  restyleMs: number;
   /** No new frames for this long (host clock) = player lost. */
   staleMs: number;
 };
@@ -105,5 +120,11 @@ export const DEFAULT_INTENT: IntentConfig = {
   guard: { radius: 0.5, holdMs: 120, chestDrop: 0.6, chestWidth: 0.5, maxElbow: 150 },
   advance: { in: 0.08, out: 0.07 },
   coreCooldownMs: 450,
+  handsCalm: { quiet: 2.6, swing: 4.5, ms: 600 },
+  overhand: { start: -0.1, speed: 3.5 },
+  overheadSpeed: 4,
+  tuckReach: 0.5,
+  heavy: { windup: 1.2, holdMs: 250 },
+  restyleMs: 200,
   staleMs: 300,
 };

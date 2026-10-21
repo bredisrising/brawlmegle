@@ -43,29 +43,6 @@ const EXT_DEADBAND = 0.1;
  */
 const FEET_SECONDS = 1.5;
 const FEET_IN_VIEW = 0.2;
-/** A hand faster than this (body units/s, against its shoulder) is swinging, and the head moves with it for a while. */
-const ARM_QUIET_SPEED = 2.6;
-const ARM_SWING_SPEED = 4.5;
-const ARM_QUIET_MS = 600;
-/**
- * A hand going up over the head only counts as fixing hair or waving when it goes slowly (those run under ~2 body units/s).
- * Fast, it's an overhead swing or a sky punch: real players throw lots of them (hackathon rounds: every one was
- * cancelled as "not a punch" before).
- */
-const OVERHEAD_PUNCH_SPEED = 4;
-/**
- * Overhands start with the hand at least this high against its shoulder (body units: about shoulder height) and come
- * down faster than OVERHAND_SPEED.
- */
-const OVERHAND_START = -0.1;
-const OVERHAND_SPEED = 3.5;
-/** A strike pulled back this much (windup, 0.8–1.3) from a hold that ended under HEAVY_HOLD_MS before it is a heavy. */
-const HEAVY_WINDUP = 1.2;
-const HEAVY_HOLD_MS = 250;
-/** A tuck into guard travels less than this (body units); farther, the sweep is a hook. */
-const TUCK_REACH = 0.5;
-/** A strike's style gets one more look at its peak, at most this long after it was confirmed (see 'restyle'). */
-const RESTYLE_MAX_MS = 200;
 /** An arm moving at under this share of its speed away from its anchor has turned: re-anchor there. */
 const ARC_REANCHOR = 0.3;
 const LIMB_NAMES = Object.keys(LIMBS) as LimbName[];
@@ -182,7 +159,7 @@ export class IntentReader {
   private pendingCore: Record<'jump' | 'duck' | 'dodge', number> = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
   /** Last time each arm was throwing a strike. Punching moves the head; that isn't a dodge or a duck. */
   private lastArmStrike: Record<'armL' | 'armR', number> = { armL: -Infinity, armR: -Infinity };
-  /** Last time either hand moved fast, read as a strike or not (see ARM_QUIET_SPEED). */
+  /** Last time either hand moved fast, read as a strike or not, and last time one really swung (config.handsCalm). */
   private lastArmBurst = -Infinity;
   private lastArmSwing = -Infinity;
   private guardSince: number | null = null;
@@ -389,7 +366,7 @@ export class IntentReader {
       // An overhand: the hand starts up around shoulder height or higher and chops down fast, over the top and in or
       // toward the camera. A third of real players' swings are these (hackathon rounds), so the two rules below spare them.
       // (Not right after this arm's own strike: that's the arm coming back down from a sky punch or an uppercut.)
-      const overhand = def.kind === 'arm' && t - s.struckAt > 500 && s.anchor.tip.y > OVERHAND_START && vel.tip.y < -OVERHAND_SPEED && choppingIn(def, tTip, disp);
+      const overhand = def.kind === 'arm' && t - s.struckAt > 500 && s.anchor.tip.y > this.config.overhand.start && vel.tip.y < -this.config.overhand.speed && choppingIn(def, tTip, disp);
       // A hand dropping fast (back to the lap, or lowering the guard) can't be starting a punch.
       const dropping = def.kind === 'arm' && vel.tip.y < -1.2 && !overhand;
       // An arm already up in the air (elbow at shoulder height, hand above it: waving, a hand on the head) isn't
@@ -445,12 +422,12 @@ export class IntentReader {
         : goingDown ? 'going down'
         : def.kind === 'arm' && raisingGuard(body, name, s.anchorTip, tipPt.p, this.config.guard.radius, t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 400) ? 'raising guard'
         : def.kind === 'arm' && bothHandsUp(body, name, s.peak, s.since - s.faceBeforeOnset > 600 && t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 250, s.otherAtOnset) ? 'both hands up'
-        : def.kind === 'arm' && s.peakSpeed < OVERHEAD_PUNCH_SPEED && raisedOverHead(body, s.peakTip, s.peak, midPt.p, root.p) ? 'not a punch'
+        : def.kind === 'arm' && s.peakSpeed < this.config.overheadSpeed && raisedOverHead(body, s.peakTip, s.peak, midPt.p, root.p) ? 'not a punch'
         : def.kind === 'arm' && otherHandAlong(body, def, s, tipPt.p, root.p) ? 'both hands moved'
         // A hand pulled in a short way across the body with the elbow tucking in and staying down is the guard closing
         // up (the other hand's usual move while one hand punches), not a hook: a hook brings the elbow up. A long sweep
         // is a hook anyway, elbow or not (real play: casual hooks keep it low, 18 were cancelled here).
-        : def.kind === 'arm' && s.peakMidRise < 0.08 && s.peakMidOut < -0.05 && s.peakDisp < TUCK_REACH && sweepsIn(def, s.peak) ? 'not a punch'
+        : def.kind === 'arm' && s.peakMidRise < 0.08 && s.peakMidOut < -0.05 && s.peakDisp < this.config.tuckReach && sweepsIn(def, s.peak) ? 'not a punch'
         : null;
       if (reason) {
         s.phase = 'idle';
@@ -480,7 +457,7 @@ export class IntentReader {
         windup,
         // Loaded: pulled back, held there a moment, then thrown. A heavy: slower and harder, and it can be parried.
         // Windmills and flurries never pause, and a punch from guard has no pull-back.
-        heavy: def.kind === 'arm' && windup >= HEAVY_WINDUP && s.since - s.quietAt < HEAVY_HOLD_MS,
+        heavy: def.kind === 'arm' && windup >= this.config.heavy.windup && s.since - s.quietAt < this.config.heavy.holdMs,
         reach: s.peakDisp,
         rawSpeed: s.peakSpeed,
         chained: t - s.rearmedAt < 600 && s.rearmedAt > s.homeAt,
@@ -508,7 +485,7 @@ export class IntentReader {
     // engine can still change the move while it's in startup.
     if (!s.restyleDone) {
       if (disp > s.peakDisp) Object.assign(s, { grewAt: t, peakDisp: disp, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: body.elbow[side], peakTipSeen: tipPt.visibility > 0.3 });
-      if (t - s.grewAt >= 60 || t - s.since > RESTYLE_MAX_MS) {
+      if (t - s.grewAt >= 60 || t - s.since > this.config.restyleMs) {
         s.restyleDone = true;
         const style = this.styleOf(def, s, root.p);
         if (style !== s.style) {
@@ -606,11 +583,11 @@ export class IntentReader {
     // units/s, median 6); real slips and ducks keep the hands in guard (under ~2.5).
     const handSpeed = (w: number, s: number) => Math.hypot(body.points[w].v.x - body.points[s].v.x, body.points[w].v.y - body.points[s].v.y);
     const hands = Math.max(handSpeed(LM.lWrist, LM.lShoulder), handSpeed(LM.rWrist, LM.rShoulder));
-    if (hands > ARM_QUIET_SPEED) this.lastArmBurst = t;
+    if (hands > cfg.handsCalm.quiet) this.lastArmBurst = t;
     // Ducking moves the guard a bit more (hands drop or tuck as the body goes down), so only a real swing blocks it.
-    if (hands > ARM_SWING_SPEED) this.lastArmSwing = t;
-    const handsCalm = t - this.lastArmBurst > ARM_QUIET_MS;
-    const noSwing = t - this.lastArmSwing > ARM_QUIET_MS;
+    if (hands > cfg.handsCalm.swing) this.lastArmSwing = t;
+    const handsCalm = t - this.lastArmBurst > cfg.handsCalm.ms;
+    const noSwing = t - this.lastArmSwing > cfg.handsCalm.ms;
     /** A head move starts on a frame that passes `start` and counts if the next frame still passes `hold`. */
     const held = (kind: 'jump' | 'duck' | 'dodge', start: boolean, hold: boolean) => {
       if (t - this.pendingCore[kind] <= 150 && hold) return true;
