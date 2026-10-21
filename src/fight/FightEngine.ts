@@ -103,7 +103,7 @@ export class FightEngine {
       : undefined;
     return {
       x: f.x, hp: f.hp, stamina: f.stamina, phase: f.phase, move: a?.move, frame: f.frame,
-      hand: a?.hand, height: a?.height, length, evade: f.evade?.kind, evadeDir: f.evade?.dir, meter: f.meter,
+      hand: a?.hand, height: a?.height, length, heavy: a?.heavy, evade: f.evade?.kind, evadeDir: f.evade?.dir, meter: f.meter,
       guard: f.guard, guardLock: f.guardLock,
     };
   }

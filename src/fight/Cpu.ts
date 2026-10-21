@@ -44,18 +44,24 @@ type LevelSpec = {
   comboChance: number;
   /** speed × windup on its attacks (damage scale). */
   power: number;
+  /** A single cross, hook or uppercut comes as a heavy this often (a longer, readable tell; parry it). */
+  heavyChance: number;
+  /** It parries a heavy it sees coming this often (drops its guard, raises it just before the hit). */
+  parryChance: number;
 };
 
 const LEVELS: Record<CpuLevel, LevelSpec> = {
-  easy: { react: [27, 34], reflex: [8, 13], defendChance: 0.2, punishChance: 0.3, shellChance: 0.2, cooldown: [150, 240], telegraph: [26, 36], still: 120, comboChance: 0.12, power: 0.85 },
-  normal: { react: [15, 24], reflex: [5, 10], defendChance: 0.42, punishChance: 0.6, shellChance: 0.4, cooldown: [96, 168], telegraph: [16, 24], still: 75, comboChance: 0.3, power: 1 },
-  hard: { react: [10, 16], reflex: [3, 8], defendChance: 0.62, punishChance: 0.85, shellChance: 0.55, cooldown: [60, 120], telegraph: [11, 16], still: 50, comboChance: 0.45, power: 1 },
+  easy: { react: [27, 34], reflex: [8, 13], defendChance: 0.2, punishChance: 0.3, shellChance: 0.2, cooldown: [150, 240], telegraph: [26, 36], still: 120, comboChance: 0.12, power: 0.85, heavyChance: 0.3, parryChance: 0.1 },
+  normal: { react: [15, 24], reflex: [5, 10], defendChance: 0.42, punishChance: 0.6, shellChance: 0.4, cooldown: [96, 168], telegraph: [16, 24], still: 75, comboChance: 0.3, power: 1, heavyChance: 0.25, parryChance: 0.35 },
+  hard: { react: [10, 16], reflex: [3, 8], defendChance: 0.62, punishChance: 0.85, shellChance: 0.55, cooldown: [60, 120], telegraph: [11, 16], still: 50, comboChance: 0.45, power: 1, heavyChance: 0.2, parryChance: 0.55 },
 };
 
 /** Where it hovers when not attacking (m): just outside an unlunged jab (0.85). */
 const COMFORT = 1.0;
 /** Farther out while getting its breath back. */
 const REST_DISTANCE = 1.25;
+/** Extra ticks of tell before a heavy. */
+const HEAVY_TELL = 12;
 /** Never start anything that would leave stamina below this (gassed is below FIGHT.gassedBelow). */
 const STAMINA_FLOOR = 30;
 const REST_BELOW = 35;
@@ -93,6 +99,9 @@ export class Cpu {
   private retreatUntil = 0;
   private guardUntil = 0;
   private holdGuard = false;
+  /** This plan's first move is a heavy. A parry in progress: guard down until parryAt, then up. */
+  private heavy = false;
+  private parryAt = -1;
   private reactions: Reaction[] = [];
   private seen: FighterState | null = null;
   private selfPhase: FighterState['phase'] = 'idle';
@@ -117,6 +126,8 @@ export class Cpu {
     this.nextAttack = -1;
     this.windupUntil = this.giveUpAt = this.retreatUntil = this.guardUntil = 0;
     this.holdGuard = false;
+    this.heavy = false;
+    this.parryAt = -1;
     this.reactions = [];
     this.seen = null;
     this.selfPhase = 'idle';
@@ -163,7 +174,9 @@ export class Cpu {
           }
           this.plan = plan;
           this.mode = 'windup';
-          this.windupUntil = tick + this.int(this.spec.telegraph);
+          // A lone power punch sometimes comes as a heavy, with a longer tell to match.
+          this.heavy = plan.length === 1 && ['cross', 'hook', 'uppercut'].includes(plan[0]) && this.rng() < this.spec.heavyChance;
+          this.windupUntil = tick + this.int(this.spec.telegraph) + (this.heavy ? HEAVY_TELL : 0);
           this.giveUpAt = this.windupUntil + 90;
           commands.push({ kind: 'anticipate', player: this.player, t, hand: handFor(plan[0]) });
         }
@@ -215,7 +228,12 @@ export class Cpu {
     }
 
     const attacking = this.mode === 'windup' || this.mode === 'attack';
-    const guard = !attacking && !evaded && engine.evading(this.player) === null && (tick < this.guardUntil || this.holdGuard);
+    if (this.parryAt >= 0 && tick >= this.parryAt) {
+      this.guardUntil = Math.max(this.guardUntil, tick + 20);
+      this.parryAt = -1;
+    }
+    const parrying = this.parryAt >= 0;
+    const guard = !attacking && !evaded && !parrying && engine.evading(this.player) === null && (tick < this.guardUntil || this.holdGuard);
     return { commands, stance: this.stance(guard, advance) };
   }
 
@@ -228,6 +246,9 @@ export class Cpu {
       if (move === 'fireball') {
         // Seen from anywhere: put the guard up for it.
         if (this.rng() < this.spec.defendChance) this.reactions.push({ at: tick + this.int(this.spec.reflex), kind: 'defend', move, defense: 'block' });
+      } else if (opp.heavy && d <= MOVES[move].range + 0.45 && this.rng() < this.spec.parryChance) {
+        // A heavy it saw coming: guard down now, up again just before it lands (FIGHT.parryFrames).
+        this.parryAt = tick + Math.max(1, (opp.length ?? MOVES[move].startup) - opp.frame - 4);
       } else if (d <= MOVES[move].range + 0.45 && this.rng() < this.spec.defendChance) {
         this.reactions.push({ at: tick + this.int(this.spec.reflex), kind: 'defend', move, defense: this.pickDefense(move) });
       }
@@ -308,7 +329,9 @@ export class Cpu {
     const lunge = move !== 'fireball' && d > reach(move) ? Math.min(MAX_LUNGE, d - reach(move)) : 0;
     const body = move === 'hook' ? this.rng() < 0.35 : move === 'jab' || move === 'cross' ? this.rng() < 0.15 : false;
     const power = this.spec.power;
-    return { kind: 'attack', player: this.player, t, move, hand: handFor(move), height: body ? 'body' : 'head', speed: power, windup: 1, lunge };
+    const windup = this.heavy ? 1.3 : 1;
+    this.heavy = false;
+    return { kind: 'attack', player: this.player, t, move, hand: handFor(move), height: body ? 'body' : 'head', speed: power, windup, lunge };
   }
 
   private pickDefense(move: AttackMove): Defense {

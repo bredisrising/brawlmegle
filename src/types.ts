@@ -82,6 +82,7 @@ export type FighterState = {
   hand?: Hand; // the attacking hand (or leg, for knees and kicks)
   height?: 'head' | 'body';
   length?: number; // total frames of the current phase, when it has a fixed length
+  heavy?: boolean; // the current attack is a heavy (big wind-up: slower, harder, parryable)
   evade?: 'slip' | 'duck';
   evadeDir?: Hand;
   /** Super meter, 0..FIGHT.maxMeter: a full one throws a fireball. */
