@@ -59,6 +59,8 @@ type LimbState = {
   phase: 'idle' | 'onset' | 'recover';
   /** This strike started as an overhand (chopping down from above the shoulder). */
   overhand: boolean;
+  /** Highest the hand has been (body space) since this strike began, until its style is settled. */
+  topY: number;
   /** When this limb last struck, when it last got back to its usual position after one, and when it last held still. */
   struckAt: number;
   homeAt: number;
@@ -399,13 +401,14 @@ export class IntentReader {
           s.otherAtOnset = { x: o.x - os.x, y: o.y - os.y, z: 0 };
           s.tipAtOnset = { x: tipPt.p.x - root.p.x, y: tipPt.p.y - root.p.y, z: 0 };
         }
-        Object.assign(s, { phase: 'onset', overhand, since: t, grewAt: t, faceBeforeOnset: s.nearFaceAt, peakDisp: disp, peakSpeed: outward, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: legs ? 0 : body.elbow[side], peakTipSeen: tipPt.visibility > 0.3, anchorTip: { x: tipPt.p.x - tTip.x, y: tipPt.p.y - tTip.y, z: tipPt.p.z } });
+        Object.assign(s, { phase: 'onset', overhand, topY: tipPt.p.y, since: t, grewAt: t, faceBeforeOnset: s.nearFaceAt, peakDisp: disp, peakSpeed: outward, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: legs ? 0 : body.elbow[side], peakTipSeen: tipPt.visibility > 0.3, anchorTip: { x: tipPt.p.x - tTip.x, y: tipPt.p.y - tTip.y, z: tipPt.p.z } });
         out.push({ kind: 'anticipate', limb: name, t });
       }
       return;
     }
 
     if (s.phase === 'onset') {
+      s.topY = Math.max(s.topY, tipPt.p.y);
       if (disp > s.peakDisp) Object.assign(s, { grewAt: t, peakDisp: disp, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: legs ? 0 : body.elbow[side], peakTipSeen: tipPt.visibility > 0.3 });
       s.peakSpeed = Math.max(s.peakSpeed, outward);
       // Confirm as soon as it has traveled far enough (don't wait for the arm to slow down: that costs most
@@ -497,10 +500,14 @@ export class IntentReader {
     // turned out to be something else (a hook that started straight, an overhand that started rising), say so: the
     // engine can still change the move while it's in startup.
     if (!s.restyleDone) {
+      s.topY = Math.max(s.topY, tipPt.p.y);
       if (disp > s.peakDisp) Object.assign(s, { grewAt: t, peakDisp: disp, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: body.elbow[side], peakTipSeen: tipPt.visibility > 0.3 });
       if (t - s.grewAt >= 60 || t - s.since > this.config.restyleMs) {
         s.restyleDone = true;
-        const style = this.styleOf(def, s, root.p);
+        let style = this.styleOf(def, s, root.p);
+        // Rose and then came back down over the top: an overhand (the most common real swing), not an uppercut. The
+        // game has no overhand, so it plays as the hook.
+        if (style === 'upper' && s.topY - tipPt.p.y > this.config.style.overDrop) style = 'hook';
         if (style !== s.style) {
           s.style = style;
           out.push({ kind: 'restyle', limb: name, t, onsetT: s.onsetAt, style, height: heightOf(def.kind, s.peakTip, body) });
@@ -611,7 +618,7 @@ export class IntentReader {
     const c = this.config.style;
     const ruleStyle: StrikeStyle = s.overhand ? 'hook' : def.kind === 'arm' && Math.abs(s.peak.x) <= c.side && (s.peakExt > len(s.peak) || s.peakExt > c.ext || len(s.peak) < 0.6 * s.peakMidTravel)
       ? 'straight'
-      : classify(def.kind, dir, dir.x * def.side, s.peakTip, s.peakMid, s.peakMidOut, s.peak, s.peakMidRise, c, s.peakExt, s.peakElbow, s.peakTipSeen);
+      : classify(def.kind, dir, dir.x * def.side, s.peakTip, s.peakMid, s.peakMidOut, s.peak, s.peakMidRise, c, shoulder.y, s.peakExt, s.peakElbow, s.peakTipSeen);
     return def.kind === 'arm' && this.matcher ? this.matcher.decide(strikeFeatures(def, s, shoulder), ruleStyle) : ruleStyle;
   }
 
@@ -925,7 +932,7 @@ function raisingGuard(body: Body, limb: LimbName, start: Vec3, end: Vec3, radius
   return startedLow && endsUp && (otherUp || otherRose);
 }
 
-function classify(kind: 'arm' | 'leg', dir: Vec3, out: number, tip: Vec3, mid: Vec3, midOut: number, travel: Vec3, midRise: number, c: IntentConfig['style'], ext = 0, elbow = 180, tipSeen = true): StrikeStyle {
+function classify(kind: 'arm' | 'leg', dir: Vec3, out: number, tip: Vec3, mid: Vec3, midOut: number, travel: Vec3, midRise: number, c: IntentConfig['style'], shoulderY: number, ext = 0, elbow = 180, tipSeen = true): StrikeStyle {
   // Kick: the foot comes up near knee height. Knee strike: the knee rises with the foot tucked under it (or out of
   // view: the fight engine picks knee or kick from the distance anyway).
   if (kind === 'leg') return tipSeen && tip.y > mid.y - 0.3 ? 'kick' : 'knee';
@@ -937,7 +944,9 @@ function classify(kind: 'arm' | 'leg', dir: Vec3, out: number, tip: Vec3, mid: V
   // tilt holds up when the camera is off to the side, where sideways travel doesn't.
   if (dir.y > c.upDir && travel.y > 0.3 && travel.y > c.upRise * midRise) {
     const tilt = Math.atan2(Math.abs(tip.x - mid.x), tip.y - mid.y);
-    return tilt > (c.upTilt * Math.PI) / 180 ? 'hook' : 'upper';
+    // An uppercut keeps the elbow down by the ribs; swinging the elbow up to the shoulder is an overhand coming over
+    // the top (the most common real swing; the rules called a third of real overhands uppercuts).
+    return tilt > (c.upTilt * Math.PI) / 180 || mid.y > shoulderY - c.upElbow ? 'hook' : 'upper';
   }
   // Smaller sideways swing with the elbow flared: a tight hook. A cross drifts inward but stays tucked.
   if (Math.abs(out) > c.hookOut && midOut > 0.05) return 'hook';
@@ -964,7 +973,7 @@ function windupOf(s: LimbState, dir: Vec3) {
 
 function newLimb(): LimbState {
   return {
-    phase: 'idle', overhand: false, struckAt: -Infinity, homeAt: -Infinity, quietAt: -Infinity, onsetAt: 0, style: 'straight', restyleDone: true, rest: null, anchor: null, since: 0, grewAt: 0, peakDisp: 0, peakSpeed: 0,
+    phase: 'idle', overhand: false, topY: 0, struckAt: -Infinity, homeAt: -Infinity, quietAt: -Infinity, onsetAt: 0, style: 'straight', restyleDone: true, rest: null, anchor: null, since: 0, grewAt: 0, peakDisp: 0, peakSpeed: 0,
     peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, peakMidTravel: 0, peakMidOut: 0, anchorTip: { x: 0, y: 0, z: 0 }, peakElbow: 0, peakTipSeen: false, history: [], extended: null, lastRestDisp: 0, rearmedAt: -Infinity, nearFaceAt: -Infinity, faceBeforeOnset: -Infinity, risingAt: -Infinity, travel: { x: 0, y: 0, z: 0 }, tipAtOnset: { x: 0, y: 0, z: 0 }, otherAtOnset: { x: 0, y: 0, z: 0 }, disp: 0, out: 0, blocked: null,
   };
 }

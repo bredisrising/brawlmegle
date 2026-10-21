@@ -107,9 +107,11 @@ export type IntentConfig = {
    * Telling punches apart at the peak (IntentReader.styleOf / classify). Straight: sideways travel under `side` (body
    * units) and the elbow opening more than `ext`. Hook: a sideways sweep over `side`, or the fist going out (`hookOut`,
    * share of the travel) with the elbow flared. Uppercut: rising (`upDir` of the travel), the fist rising `upRise`x the
-   * elbow, the forearm within `upTilt` degrees of vertical.
+   * elbow, the forearm within `upTilt` degrees of vertical, the elbow at least `upElbow` under the shoulder, and not
+   * coming back down more than `overDrop` from its highest point by the time the style settles (those two are an
+   * overhand, played as a hook).
    */
-  style: { side: number; ext: number; hookOut: number; upDir: number; upRise: number; upTilt: number };
+  style: { side: number; ext: number; hookOut: number; upDir: number; upRise: number; upTilt: number; overDrop: number; upElbow: number };
   /**
    * The learned move model as a gate and rescue on arm strikes (IntentReader.secondOpinion), on with `gate` 1. A rule
    * strike needs the model's p(rise) to reach `keep`; the model adds its own strike at p(rise) `on` -> `confirm`, and
@@ -143,7 +145,7 @@ export const DEFAULT_INTENT: IntentConfig = {
   tuckReach: 0.5,
   heavy: { windup: 1.2, holdMs: 250 },
   restyleMs: 200,
-  style: { side: 0.45, ext: 0.15, hookOut: 0.6, upDir: 0.6, upRise: 1.5, upTilt: 30 },
+  style: { side: 0.45, ext: 0.15, hookOut: 0.6, upDir: 0.6, upRise: 1.5, upTilt: 30, overDrop: 0.15, upElbow: 0.25 },
   model: { gate: 1, keep: 0.2, on: 0.6, confirm: 0.75, off: 0.2, rescue: 2, needHips: 1 },
   staleMs: 300,
 };
