@@ -11,6 +11,7 @@ import { ROUND_CALL_SECONDS } from '../director/walkoutTiming';
 import { Cpu, type CpuLevel, type CpuOutput } from '../fight/Cpu';
 import { FightEngine } from '../fight/FightEngine';
 import { Resolver } from '../fight/Resolver';
+import { FairDelay } from './fairDelay';
 import { IntentReader } from '../intent/IntentReader';
 import type { Intent } from '../intent/intents';
 import { InputHub, createLocalSource, preloadLocalInput, type InputSource } from '../input';
@@ -138,6 +139,8 @@ export class Game {
   /** Host: P2's moves as read on the client laptop (newer clients read their own camera), waiting for the tick. */
   private remoteIntents: Intent[] = [];
   private remoteStance: { stance: Stance; at: number } | null = null;
+  /** P1's engine input waiting out the fairness delay (see equalize). */
+  private readonly fair = new FairDelay('p1');
   /** Host: each slot's fighter, for the client laptop's copy of the fight; and what to tell it this tick. */
   private readonly fighters: Partial<Record<PlayerId, ForgedFighter>> = {};
   private outbox: MirrorEvent[] = [];
@@ -1246,6 +1249,7 @@ export class Game {
   private startCountdown() {
     this.phaseTimer = 0;
     this.clock = ROUND;
+    this.fair.reset();
     useGameStore.setState({ phase: 'countdown', countdown: COUNTDOWN_FROM, timeLeft: ROUND, ending: null });
   }
 
@@ -1322,6 +1326,7 @@ export class Game {
       }
       stances[id] = out?.stance ?? { player: id, guard: true, advance: 0, lean: { x: 0, y: 0 }, tracked: false };
     }
+    this.equalize(commands, stances, phase === 'fighting');
     for (const c of commands) {
       if (c.kind !== 'anticipate') continue;
       this.views[c.player].anticipate(c.hand);
@@ -1482,6 +1487,17 @@ export class Game {
     else this.announcer.bark('ko', true);
     const perfect = winner && useGameStore.getState().players[winner].hp >= MAX_HP;
     if (perfect) setTimeout(() => this.announcer.bark('perfect', true), 1400);
+  }
+
+  /**
+   * Online fairness: the client's moves get here half a round trip after the player made them, so the host's own player
+   * (P1) is held back by the same before the engine sees them (config.fairDelayMaxMs at most). Only P1's engine input
+   * waits: their fighter's tell and live arm still move at once, so it feels as quick. Off against the CPU or locally.
+   */
+  private equalize(commands: Command[], stances: Record<PlayerId, Stance>, fighting: boolean) {
+    const rtt = useGameStore.getState().link?.rttMs;
+    const remote = this.remoteStance && performance.now() - this.remoteStance.at < 1000;
+    this.fair.apply(commands, stances, fighting && remote && rtt ? Math.round(Math.min(config.fairDelayMaxMs, rtt / 2) / (SIM_DT * 1000)) : 0);
   }
 
   /** The client's latest read of P2, if it's been sending them (stale after a second: back to reading poses here). */

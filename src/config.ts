@@ -58,6 +58,11 @@ export const config = {
    * each) instead of the optimized copy, to compare quality. Falls back to the optimized one when there's no original.
    */
   fullModels: params.get('models') === 'full',
+  /**
+   * Online, the client's moves reach the host's engine half a round trip late. The host holds its own player's commands
+   * back by the same (up to this many ms) so neither side wins trades by being the host. `?fair=0` turns it off.
+   */
+  fairDelayMaxMs: params.get('fair') === '0' ? 0 : 60,
   /** `?forge=hq`: the slower, sharper forge (bigger sheet, more sculpting steps, bigger textures), for showcase fighters. */
   forgeQuality: params.get('forge') === 'hq' ? ('hq' as const) : undefined,
 };
