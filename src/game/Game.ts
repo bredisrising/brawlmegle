@@ -139,6 +139,8 @@ export class Game {
   /** Host: P2's moves as read on the client laptop (newer clients read their own camera), waiting for the tick. */
   private remoteIntents: Intent[] = [];
   private remoteStance: { stance: Stance; at: number } | null = null;
+  /** Hit-stop is on and its impact frame has been drawn: hold the picture until it ends. */
+  private holdingImpact = false;
   /** P1's engine input waiting out the fairness delay (see equalize). */
   private readonly fair = new FairDelay('p1');
   /** Host: each slot's fighter, for the client laptop's copy of the fight; and what to tell it this tick. */
@@ -1352,7 +1354,10 @@ export class Game {
       { states: { p1: this.fight.state('p1'), p2: this.fight.state('p2') }, guard: { p1: stances.p1.guard, p2: stances.p2.guard }, distance: this.fight.distance(), frozen, timeLeft: null, projectiles: [...this.fight.projectiles()] },
       { p1: this.cpu.p1 ? null : this.input.latest('p1'), p2: this.cpu.p2 ? null : this.input.latest('p2') },
     );
-    if (frozen) return;
+    // The impact itself is drawn (fist out, the other fighter reeling), then held: holding the frame before it froze the
+    // fighters short of the hit while its sound had already played (up to 200 ms of sound before the action).
+    if (frozen && this.holdingImpact) return;
+    this.holdingImpact = frozen;
     const distance = this.fight.distance();
     this.hearStrikes({ p1: this.fight.state('p1'), p2: this.fight.state('p2') });
     for (const id of PLAYER_IDS) {
@@ -1686,7 +1691,8 @@ export class Game {
         else if (e.kind === 'anticipate' && !e.cancel) this.views[e.player].anticipate(e.hand);
       }
       this.fireballs.sync(f.projectiles ?? []);
-      if (!f.frozen) {
+      // A hit-stop's first frame is the impact: draw it, then hold.
+      if (!f.frozen || !r.frames[i - 1]?.frozen) {
         for (const id of PLAYER_IDS) {
           this.views[id].update({
             state: f.states[id], live: f.live[id], guard: f.guard[id], distance: f.distance,
@@ -1989,7 +1995,9 @@ export class Game {
     this.fireballs.sync(m.projectiles ?? []);
     this.showMeters(m.states);
     this.record(m, { p1: null, p2: this.client?.lastFrame ?? null });
-    if (m.frozen && phase === 'fighting') return;
+    // Same as the host: draw the impact frame, then hold it.
+    if (m.frozen && phase === 'fighting' && this.holdingImpact) return;
+    this.holdingImpact = m.frozen && phase === 'fighting';
     this.hearStrikes(m.states);
     for (const id of PLAYER_IDS) {
       this.views[id].update({
