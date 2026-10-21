@@ -64,7 +64,8 @@ export function MoveGuide({ inline = false }: { inline?: boolean }) {
           </button>
         )}
       </div>
-      <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 bg-ink/85 px-3 py-2.5 text-sm leading-snug">
+      {/* On a laptop-height screen the list scrolls rather than running down over the player's name plate. */}
+      <dl className={`mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 bg-ink/85 px-3 py-2.5 text-sm leading-snug ${inline ? '' : 'max-h-[calc(100svh-23rem)] overflow-y-auto'}`}>
         {MOVES.map(([name, how]) => (
           <div key={name} className="contents">
             <dt className="font-display uppercase tracking-tight text-paper">{name}</dt>

@@ -74,7 +74,7 @@ export function Drill() {
           <p className="mt-2 font-cond text-lg font-bold uppercase tracking-[0.15em] text-paper drop-shadow-[0_2px_0_#0b0a10]">{drill.hint}</p>
         </div>
       ) : null}
-      <p className="mt-3 font-cond text-xs font-bold uppercase tracking-[0.3em] text-paper/60">
+      <p className="mt-3 bg-ink/70 px-2 py-0.5 font-cond text-xs font-bold uppercase tracking-[0.3em] text-paper/85">
         {Math.max(0, drill.index + 1)}/{drill.total}
       </p>
     </div>

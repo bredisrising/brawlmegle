@@ -135,7 +135,7 @@ function Plate({ id, use, beats }: { id: PlayerId; use: Use; beats: () => { p1: 
         <span className="px-1.5 py-0.5 font-display tracking-normal text-ink" style={{ background: color }}>
           {p1 ? 'P1' : 'P2'}
         </span>
-        <span>{tag ?? 'Information'}</span>
+        <span>{tag ?? 'Challenger'}</span>
       </div>
       <div className="max-w-[40vw] truncate font-display text-3xl uppercase leading-none tracking-tight text-paper drop-shadow-[0_2px_8px_rgba(0,0,0,0.7)] sm:text-5xl">
         {name}

@@ -454,7 +454,8 @@ export class Walkout {
 
   /**
    * One fighter, close: fighter 1 from low on their outside with fighter 2 soft behind them across the frame; fighter
-   * 2 from lower still, in front on the inside, looking up. A slow drift in over the shot.
+   * 2 from lower still, in front on the inside, looking up (far enough back that their face stays in, letterbox and
+   * all). A slow drift in over the shot.
    */
   private closeOn(id: PlayerId, out: Shot, t: number, narrow: number) {
     const B = this.beats;
@@ -471,9 +472,9 @@ export class Walkout {
       out.fov = 32;
     } else {
       const angle = 0.22 - 0.1 * k;
-      const dist = (0.58 - 0.05 * k) * narrow;
-      out.pos.set(at.x - Math.sin(angle) * dist, 0.27 + 0.03 * k, at.z + Math.cos(angle) * dist);
-      out.look.set(at.x + 0.02, 0.58 - 0.02 * k, at.z);
+      const dist = (0.8 - 0.06 * k) * narrow;
+      out.pos.set(at.x - Math.sin(angle) * dist, 0.3 + 0.03 * k, at.z + Math.cos(angle) * dist);
+      out.look.set(at.x + 0.02, 0.72 - 0.02 * k, at.z);
       out.fov = 42;
     }
   }

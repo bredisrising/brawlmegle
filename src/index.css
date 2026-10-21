@@ -165,6 +165,12 @@ html, body, #root {
   font-family: var(--font-sans);
 }
 
+/* Thin, dark scrollbars (the roster, the leaderboard) instead of the browser's bright default. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--color-paper) 28%, transparent) transparent;
+}
+
 ::selection {
   background: var(--color-hp);
   color: var(--color-ink);
