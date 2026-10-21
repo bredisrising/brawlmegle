@@ -56,14 +56,16 @@ export function CameraPip() {
   const note = <PoseWarningNote source={source} />;
   // Hidden with C: the tracking warning (if any) still shows where the picture was.
   if (!open) return <div className={`pointer-events-none fixed z-40 ${place}`}>{note}</div>;
-  const fresh = lastMove && performance.now() - lastMove.at < 1500;
+  // Each read pops in and fades out on its own within 0.6 s (the animation, not a re-render, hides it), so a second
+  // jab shows as a second pop instead of the same word left up.
+  const fresh = lastMove && performance.now() - lastMove.at < 600;
   return (
     <div className={`pointer-events-none fixed z-40 overflow-hidden border-2 border-paper/30 bg-black shadow-2xl ${place}`}>
       {note}
       <div className="relative aspect-[4/3]">
         <SkeletonVideo source={source} />
         {fresh && (
-          <p key={lastMove!.at} className="absolute inset-x-0 bottom-2 text-center font-display text-2xl uppercase tracking-tight text-hp drop-shadow-[0_2px_6px_#000]">
+          <p key={lastMove!.at} className="animate-move-read absolute inset-x-0 bottom-2 text-center font-display text-2xl uppercase tracking-tight text-hp drop-shadow-[0_2px_6px_#000]">
             {lastMove!.text}
           </p>
         )}
