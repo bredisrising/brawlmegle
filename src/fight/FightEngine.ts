@@ -19,6 +19,8 @@ type Attack = {
   landed: boolean;
   /** Blocked: no chaining, a longer recovery (see FIGHT.blockRecovery). */
   blocked: boolean;
+  /** Loaded up big: slower and harder, and a guard raised just in time parries it (FIGHT.heavy*, parry*). */
+  heavy: boolean;
 };
 type Fighter = {
   x: number;
@@ -46,6 +48,9 @@ type Fighter = {
   sinceGuard: number;
   /** Whether the guard was up before the current attack started (see guardFirst). */
   guardWas: boolean;
+  /** The guard last tick, and the tick it last went up (a parry needs it raised just in time). */
+  guardPrev: boolean;
+  guardUpAt: number;
 };
 
 const DT = 1 / 60;
@@ -196,6 +201,7 @@ export class FightEngine {
       done: false,
       landed: false,
       blocked: false,
+      heavy,
     };
     f.phase = 'startup';
     f.frame = 0;
@@ -327,6 +333,19 @@ export class FightEngine {
     const canBlock = (before.phase === 'idle' || before.phase === 'blockstun') && g.guardLock === 0;
     const guarding = Boolean(stances[defenderId]?.guard) && canBlock;
     const guardBreak = guarding && FIGHT.guardBreakers.includes(a.move);
+    if (guarding && !guardBreak && a.heavy && this.tick - g.guardUpAt <= FIGHT.parryFrames) {
+      // Parry: a heavy met by a guard raised just in time. The attacker reels and the defender is free to punish.
+      a.blocked = true;
+      f.attack = null;
+      f.queue = [];
+      f.phase = 'hitstun';
+      f.stun = FIGHT.parryStun;
+      f.frame = 0;
+      this.gainMeter(defenderId, FIGHT.meterOnHit);
+      this.hitstop = Math.max(this.hitstop, FIGHT.parryHitstop);
+      events.push({ t: this.now, type: 'parry', attacker: id, move: a.move, damage: 0, hitstopFrames: FIGHT.parryHitstop });
+      return;
+    }
     if (guarding && !guardBreak) {
       const chip = Math.max(1, Math.round(a.spec.chip * a.scale * this.damageScale));
       g.hp = Math.max(0, g.hp - chip);
@@ -389,6 +408,8 @@ export class FightEngine {
     }
     // Remembered per attack: the guard only cancels a punch if it wasn't up when the punch started.
     if (f.phase !== 'startup') f.guardWas = guard;
+    if (guard && !f.guardPrev) f.guardUpAt = this.tick;
+    f.guardPrev = guard;
   }
 
   /** The guard drains while it's up and refills once it's down (FIGHT.guard*); a crushed one counts down its lockout. */
@@ -538,7 +559,7 @@ function fresh(x: number): Fighter {
   return {
     x, hp: FIGHT.maxHp, stamina: FIGHT.maxStamina, phase: 'idle', frame: 0,
     attack: null, stun: 0, evade: null, queue: [], chain: 0, meter: 0, mash: 0, lastLanded: false, lastAttackAt: -1, sinceAttack: 10,
-    guard: FIGHT.guardMax, guardLock: 0, sinceGuard: 10, guardWas: false,
+    guard: FIGHT.guardMax, guardLock: 0, sinceGuard: 10, guardWas: false, guardPrev: false, guardUpAt: -Infinity,
   };
 }
 

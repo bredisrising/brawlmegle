@@ -80,8 +80,15 @@ export const FIGHT = {
   guardCrushStun: 20,
   /** A punch loaded up at least this much (Command.windup) is a heavy: heavyStartup frames slower, heavyDamage x windup. */
   heavyWindup: 1.15,
-  heavyStartup: 4,
+  heavyStartup: 6,
   heavyDamage: 1.15,
+  /**
+   * A guard raised at most parryFrames before a heavy lands parries it: no damage, and the attacker reels for parryStun
+   * frames (time to punish). Only heavies: they're the punches you can see coming, so a parry is a read, not luck.
+   */
+  parryFrames: 10,
+  parryStun: 30,
+  parryHitstop: 8,
   /** A guard raised within this many frames of a punch starting calls the punch off (FightEngine.guardFirst). */
   guardCancelFrames: 9,
   /** Slip and duck stay effective this many frames. */

@@ -83,7 +83,7 @@ const WAITING_TEXT = 'Opponent found, waiting for them to come back…';
 const playerId = () => (crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** Big moments with a template line ready for each side (Commentary TEMPLATES). */
-const MOMENTS = ['first', 'counter', 'combo', 'guardBreak', 'guardCrush', 'danger', 'ko', 'time'] as const;
+const MOMENTS = ['first', 'counter', 'combo', 'guardBreak', 'guardCrush', 'parry', 'danger', 'ko', 'time'] as const;
 type Moment = (typeof MOMENTS)[number];
 
 const ARENA_CENTER = new THREE.Vector3(0, 0.5, 0);
@@ -1507,7 +1507,7 @@ export class Game {
   /** Engine event -> HP in the store, hit-stop, effects, popups. */
   private applyEvent(event: FightEvent) {
     const { players, phase } = useGameStore.getState();
-    if (phase === 'fighting' && event.type === 'guardCrush') {
+    if (phase === 'fighting' && (event.type === 'guardCrush' || event.type === 'parry')) {
       const by = this.fight.state(event.attacker);
       this.showHit(event, by, false);
       this.outbox.push({ kind: 'fight', event, by, ko: false });
@@ -1535,6 +1535,15 @@ export class Game {
       useGameStore.setState({ callout: { text: 'Guard crushed', key: performance.now() } });
       this.announcer.crowd('ooh', 0.6);
       this.sfx.play('whoosh', 0.6);
+      return;
+    }
+    // A heavy turned away by a guard raised just in time: the read of the round, so everyone sees it.
+    if (event.type === 'parry') {
+      if (!replaying) {
+        useGameStore.setState({ callout: { text: 'Parry!', key: performance.now() } });
+        this.announcer.crowd('ooh', 0.8);
+        this.sfx.play('whoosh', 0.8);
+      }
       return;
     }
     if (!event.damage) return;
@@ -1751,6 +1760,7 @@ export class Game {
     const a = event.attacker;
     const d = opponentOf(a);
     if (event.type === 'guardCrush' && useGameStore.getState().phase === 'fighting') return this.call([this.momentLine('guardCrush', a)], true);
+    if (event.type === 'parry' && useGameStore.getState().phase === 'fighting') return this.call([this.momentLine('parry', a)], true);
     if (!event.damage || useGameStore.getState().phase !== 'fighting') return;
     if (event.type === 'blocked') return this.blocked(d);
     this.blockStreak = { defender: null, n: 0, called: false };

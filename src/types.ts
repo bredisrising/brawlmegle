@@ -96,8 +96,11 @@ export type Projectile = { id: number; owner: PlayerId; x: number };
 
 export type FightEvent = {
   t: number;
-  /** guardCrush: the defender's guard ran out (attacker = the other fighter, who gets the opening). */
-  type: 'startup' | 'hit' | 'blocked' | 'whiff' | 'counter' | 'ko' | 'timeout' | 'guardCrush';
+  /**
+   * guardCrush: the defender's guard ran out (attacker = the other fighter, who gets the opening). parry: the attacker's
+   * heavy was parried (they reel).
+   */
+  type: 'startup' | 'hit' | 'blocked' | 'whiff' | 'counter' | 'ko' | 'timeout' | 'guardCrush' | 'parry';
   attacker: PlayerId;
   move: string;
   damage?: number;
