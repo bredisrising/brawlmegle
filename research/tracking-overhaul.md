@@ -195,6 +195,66 @@ These could turn into papers. A pass to prototype the pixel ideas was started an
 - **Few-shot personal templates.** Jackknife-style direction-vector DTW from 2–3 examples as a confirm-time style
   picker. It reported F1 96% on our exact move set on Kinect. Their code is non-commercial, so reimplement it.
 
+## Progress on the `skill` branch (2026-10-20, later)
+
+### Reading moves
+
+Measured with `test/intent/hackathon.test.ts` (the 509 video-verified labels; set `HACKATHON_DIR`) on the 19 sides
+without the masher. The synthetic matrix and both guided sessions were checked at every step, and they held: matrix
+mean recall stayed at 89–90%, and the guided sessions' head moves stayed at 5/5.
+
+| | Start of the day | Now |
+|---|---|---|
+| Real strikes read | 50.6% | **63.5%** (15 of 20 sides better, 2 worse) |
+| Precision | 82.8% | 84.9% |
+| Style right, of all real strikes | 20.4% | 29.0% (24% at confirm, the rest from the peak `restyle`) |
+| Fake slips/ducks a minute | 4.7 / 2 | **0.3** / 1 |
+| Labeled blocks read as guard | 14/18 | 17/18 (guard up 61% of the time, was 34%) |
+
+What changed in `IntentReader` (each change was measured on its own; anything that didn't help was reverted):
+
+- **No slip or duck within 600 ms of a fast hand.** Every fake dodge followed one: hand speed median 6, against 1.3
+  in real slips.
+- **Overhead swings count.** Only slow rises are hair fixing.
+- **"Both hands up" needs the other hand to really rise.** In a big overhead swing the other shoulder dips, and a
+  hand held still in guard looked like it was rising.
+- **Overhand chops and looping swings start a read.** A third of real swings are overhands.
+- **A long sweep across the body is a hook** even with the elbow low.
+- **The other hand has to move at least 70% as far** to cancel a punch.
+- **A chest-level guard counts** as a guard: both hands up in front of the chest, elbows bent.
+- **A `restyle` at the strike's peak** fixes the style picked on the wind-up, and the engine swaps the move while it's
+  still in startup.
+
+Tried and dropped:
+- **A shorter confirm wait** (20 ms): 32 ms faster, but one more fake a minute.
+- **The cheap pixel check:** frame differencing in the forearm box at 320×240 removes only about 20% of fakes when 95%
+  of real reads are kept. The 45% needs optical flow.
+
+### The fight
+
+`test/fight/skill.test.ts` has scripted players fight through the real engine with the camera's measured flaws, at
+today's read rates and at a "nearly every punch read" target. Changes:
+
+- **Guard beats the phantom punch.** A guard raised within 9 frames of a punch starting calls the punch off.
+- **Holding guard is free.** It used to drain the guard meter, which crushed the only defense that worked at the event.
+  Blocked hits still wear it down.
+  - Result: turtle vs a 3-punches-a-second masher went from 10–30 to 25–15.
+  - Patient play still beats the turtle, 38–2.
+- **Damage comes from real speed and form.** It's the same scale for everyone, and punching with the other hand up in
+  guard counts more (87% of clean punches had it up, against 66% of flails). The old relative-speed × wind-up formula
+  was a hidden coin flip of up to 2×.
+- **Heavies are a move you choose.** Pull back, hold a beat, swing: slower, harder, and drawn with a big wind-up. That
+  covers 17% of real haymakers.
+- **Parry.** A guard raised just before a heavy lands turns it away: the attacker reels, with a callout and a commentator
+  line. The CPU throws heavies and parries yours.
+- **Getting hit no longer eats the punch you just threw.** One queued punch survives hitstun.
+- **Ducks work.** The resolver no longer turns any punch at a ducking opponent into an uppercut.
+
+Still needs playtests:
+- **Round length:** rounds are about 7–11 s.
+- **How often people parry by accident.**
+- **Whether heavies feel too slow.**
+
 ## Found along the way (not tracking, but urgent for going viral)
 
 - **Strangers see your webcam by default.** `camHidden` defaults to false (`src/game/store.ts:117`). Omegle shut down
