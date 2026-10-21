@@ -27,6 +27,9 @@ const FACE = 0.07;
 /** Farthest the whole body steps in to land a strike (local m). Past that it falls short: a whiff. */
 const MAX_LUNGE = 0.24;
 
+/** How much bigger a heavy's wind-up is (fist drawn back, torso turned away). */
+const HEAVY_LOAD = 2.4;
+
 /** Per-move shape: how much of startup is wind-up, how far the torso turns and leans in. */
 const STRIKES = {
   jab: { wind: 0.2, twist: 0.25, lean: 0.03 },
@@ -211,7 +214,8 @@ export function applyAction(pose: Pose, input: ActionInput, motion: Motion): Pos
 function strikeCurve(move: StrikeMove, st: Readonly<FighterState>) {
   const L = Math.max(1, st.length ?? 1);
   const p = clamp01(st.frame / L);
-  const wind = STRIKES[move].wind;
+  // A heavy spends more of its (longer) startup coiled up: the opponent should see it coming.
+  const wind = st.heavy ? Math.min(0.8, STRIKES[move].wind * 1.6) : STRIKES[move].wind;
   if (st.phase === 'startup') {
     const ext = p < wind ? -smooth(p / wind) : -1 + 2 * easeIn((p - wind) / (1 - wind));
     return { ext, weight: smooth(p / 0.15) };
@@ -229,9 +233,11 @@ function strike(pose: Pose, move: StrikeMove, st: Readonly<FighterState>, reach:
   const coil = Math.max(0, -ext);
   const aimY = AIM[st.height ?? 'head'];
 
-  // Torso: coil away on the wind-up, turn the striking side through on the strike, lean in.
-  twist(pose, -s * spec.twist * (forward - 0.35 * coil) * weight);
-  lean(pose, spec.lean * forward * weight);
+  // Torso: coil away on the wind-up, turn the striking side through on the strike, lean in. A heavy loads up big:
+  // turned well away and leaning back before it comes.
+  const load = st.heavy ? HEAVY_LOAD : 1;
+  twist(pose, -s * spec.twist * (forward - 0.35 * coil * load) * weight);
+  lean(pose, (spec.lean * forward - (st.heavy ? 0.04 * coil : 0)) * weight);
   if (move === 'uppercut') crouch(pose, (0.05 * coil - 0.01 * forward) * weight);
   if (move === 'kick' || move === 'knee') crouch(pose, 0.02 * weight);
 
@@ -283,7 +289,7 @@ function strike(pose: Pose, move: StrikeMove, st: Readonly<FighterState>, reach:
     target.copy(guard).multiplyScalar((1 - t) * (1 - t)).addScaledVector(ctrl, 2 * (1 - t) * t).addScaledVector(end, t * t);
   } else {
     const back = move === 'hook' ? [s * 0.07, -0.02, -0.03] : move === 'uppercut' ? [s * 0.05, -0.17, -0.02] : [0, -0.01, -0.06];
-    target.copy(guard).add(tC.set(back[0], back[1], back[2]).multiplyScalar(coil));
+    target.copy(guard).add(tC.set(back[0], back[1], back[2]).multiplyScalar(coil * load));
   }
   target.lerp(guard, 1 - weight);
   solve(S, target, UPPER_ARM, FOREARM, pole, pose[elbow], pose[wrist]);

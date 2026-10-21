@@ -7,6 +7,7 @@ import { useGame } from '../GameContext';
 import { HighlightReel } from '../HighlightReel';
 import { DeleteWithCode } from '../DeleteFighter';
 import { TitleCam } from '../TitleCam';
+import { Kings } from '../Kings';
 
 /**
  * The main menu, written so a first-time player needs no explanation: Find a fight (matchmaking) first, then Play a
@@ -80,6 +81,7 @@ export function TitleScreen() {
           <p className="mt-[clamp(0.6rem,2.2vh,1.25rem)] inline-block bg-paper px-3 py-1.5 font-cond text-base font-extrabold uppercase tracking-[0.3em] text-ink sm:text-lg">
             Get scanned. Get forged. Throw hands.
           </p>
+          {mode !== 'leaderboard' && <Kings onOpen={() => setMode('leaderboard')} />}
         </div>
 
         <div className="flex flex-1 items-end gap-[clamp(1.5rem,3.5vw,3.5rem)]">

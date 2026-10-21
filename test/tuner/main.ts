@@ -237,6 +237,7 @@ function describe(intent: Intent): string | null {
     case 'guard': return intent.up ? 'guard up' : 'guard down';
     case 'anticipate': return `… ${LIMB_LABEL[intent.limb]} winding up`;
     case 'cancel': return `× ${LIMB_LABEL[intent.limb]} wind-up dropped${intent.reason ? ` (${intent.reason})` : ''}`;
+    case 'restyle': return `↻ ${LIMB_LABEL[intent.limb]} was a ${intent.style.toUpperCase()}`;
   }
 }
 

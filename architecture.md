@@ -119,8 +119,18 @@ Memory card = the forge server's fighters + localStorage + house fighters (forge
 All shared contracts: PoseFrame, Command, Stance, FighterState, FightEvent, ForgedFighter.
 
 ### input/
-InputSource interface, InputHub (the wrapper), CameraSource (MediaPipe; lite model on phones, and drops to
-lite by itself when full can't keep up), RemoteSource, MockSource.
+InputSource interface, InputHub (the wrapper; keeps every pose since the last tick, so a render hitch doesn't drop
+any before the reader), CameraSource (MediaPipe; lite model on phones, and drops to lite by itself only when the
+CPU runs it, since lite isn't faster on a GPU), RemoteSource, MockSource.
+- personPicker.ts: which of the people in frame is the player: the biggest near the middle to start (by size, not
+  hip height: a seated player's hips are below the picture), then only a pose near where they were and about their
+  size. A bystander is never taken while the player isn't found; that frame reports nobody instead.
+- exposure.ts: short exposure (less blur on punches) where the camera allows it, as short as the room's light
+  allows (median brightness kept over a floor); the camera gets its own exposure back when the tab hides or closes,
+  the camera stops, or anything fails. Off during the body scan (Game.tuneCamera), `?exposure=0` to never touch it.
+- poseHealth.ts: poses a second as a health check: a strip over the camera picture (ui/CameraPip.tsx) when tracking
+  runs under ~18 a second or on the CPU. Match recordings' headers carry each laptop's tracker (model, GPU or CPU,
+  ms, poses a second, camera, exposure, browser); the client sends its own as each round starts (`tracker`).
 
 ### net/
 Signaling (AWS WebSocket), Peer (WebRTC), protocol.ts (message types).

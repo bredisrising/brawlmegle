@@ -1,6 +1,7 @@
 // Edge cases the live game hits: a player walking out of frame, bad landmark data from a peer, clock jumps.
 import { describe, expect, test } from 'vitest';
 import { IntentReader } from '../../src/intent/IntentReader';
+import { readingConfig } from '../../src/intent/intents';
 import { PosePreprocessor, type Body } from '../../src/intent/preprocess';
 import type { PoseFrame } from '../../src/types';
 import { synthesize } from './synth';
@@ -121,7 +122,8 @@ describe('gaps in the frames', () => {
     const clean = frames.filter((f): f is PoseFrame => !('missing' in f));
     const punch = labels[0];
     expect(labels[1].start).toBeGreaterThan(punch.end + 700); // nothing else going on after the gap
-    const reader = new IntentReader('p1');
+    // The rules' own state across a gap (the learned model, off here, confirms this punch before the gap).
+    const reader = new IntentReader('p1', readingConfig(false));
     const before: string[] = [];
     // Partway into the first punch (wound up, not confirmed yet)...
     for (const f of clean.filter((f) => f.t < punch.start + 140)) {

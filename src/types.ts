@@ -31,6 +31,26 @@ export type PoseFrame = {
   aspect?: number; // video width / height. Image x and y are normalized separately, so distances need it.
 };
 
+/** What a laptop tracked its player with (match recordings keep it, so the data says what each laptop ran). */
+export type TrackerInfo = {
+  model: 'lite' | 'full';
+  delegate: 'GPU' | 'CPU';
+  runner: 'worker' | 'page';
+  onePose: boolean;
+  /** MediaPipe's ms per detection, and detections and camera frames per second (the last 2 s). */
+  detectMs: number;
+  posesPerSec: number;
+  cameraFps: number;
+  /** The camera's picture, and the frame rate it's set to. */
+  width: number;
+  height: number;
+  frameRate: number;
+  /** Short exposure: what it's doing ('off', 'hold', 'auto', ...) and the time (100 µs units) while it's set. */
+  exposure: string;
+  exposureTime: number | null;
+  userAgent: string;
+};
+
 // ---------------------------------------------------------------------------
 // Intent -> Fight engine
 // ---------------------------------------------------------------------------
@@ -48,13 +68,16 @@ export type Command =
       move: AttackMove;
       hand: Hand;
       height: 'head' | 'body';
-      speed: number; // 0.8–1.3, relative to this player's calibrated max
-      windup: number; // 0.8–1.3
+      speed: number; // 0.8–1.3: how fast and how clean (see IntentReader)
+      windup: number; // 0.8–1.3: how far the player loaded up
+      heavy?: boolean; // loaded up and held, then thrown: slower and harder, and a just-in-time guard parries it
       lunge?: number; // meters to step in during startup (the resolver adds it when the strike starts out of range)
       autoLunge?: boolean; // instead: step in as far as needed when it actually starts (queued combo punches)
       headStart?: number; // frames the wind-up has already been on screen (the reader saw the motion start that long ago)
     }
-  | { kind: 'defend'; player: PlayerId; t: number; move: DefendMove; dir?: Hand };
+  | { kind: 'defend'; player: PlayerId; t: number; move: DefendMove; dir?: Hand }
+  /** The reader saw this hand's strike was another punch at its peak: still winding up (or queued), it becomes that. */
+  | { kind: 'restyle'; player: PlayerId; t: number; hand: Hand; move: AttackMove };
 
 /** Continuous, every frame. */
 export type Stance = {
@@ -80,6 +103,7 @@ export type FighterState = {
   hand?: Hand; // the attacking hand (or leg, for knees and kicks)
   height?: 'head' | 'body';
   length?: number; // total frames of the current phase, when it has a fixed length
+  heavy?: boolean; // the current attack is a heavy (big wind-up: slower, harder, parryable)
   evade?: 'slip' | 'duck';
   evadeDir?: Hand;
   /** Super meter, 0..FIGHT.maxMeter: a full one throws a fireball. */
@@ -94,8 +118,11 @@ export type Projectile = { id: number; owner: PlayerId; x: number };
 
 export type FightEvent = {
   t: number;
-  /** guardCrush: the defender's guard ran out (attacker = the other fighter, who gets the opening). */
-  type: 'startup' | 'hit' | 'blocked' | 'whiff' | 'counter' | 'ko' | 'timeout' | 'guardCrush';
+  /**
+   * guardCrush: the defender's guard ran out (attacker = the other fighter, who gets the opening). parry: the attacker's
+   * heavy was parried (they reel).
+   */
+  type: 'startup' | 'hit' | 'blocked' | 'whiff' | 'counter' | 'ko' | 'timeout' | 'guardCrush' | 'parry';
   attacker: PlayerId;
   move: string;
   damage?: number;

@@ -183,6 +183,10 @@ export const TEMPLATES = {
     { voice: 'A', text: '[shouting] {a} smashes through the guard!' },
     { voice: 'A', text: "[excited] You can't just block against {a}! The leg goes right through!" },
   ],
+  parry: [
+    { voice: 'A', text: '[shouting] Parried! {d} saw that haymaker coming!' },
+    { voice: 'A', text: '[shouting] {d} turns it away! {a} is wide open!' },
+  ],
   guardCrush: [
     { voice: 'A', text: "[shouting] The guard is gone! {d} can't block!" },
     { voice: 'A', text: '[shouting] Guard crushed! Go get {d}, {a}!' },

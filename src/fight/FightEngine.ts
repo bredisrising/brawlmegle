@@ -19,6 +19,8 @@ type Attack = {
   landed: boolean;
   /** Blocked: no chaining, a longer recovery (see FIGHT.blockRecovery). */
   blocked: boolean;
+  /** Loaded up big: slower and harder, and a guard raised just in time parries it (FIGHT.heavy*, parry*). */
+  heavy: boolean;
 };
 type Fighter = {
   x: number;
@@ -44,6 +46,11 @@ type Fighter = {
   guard: number;
   guardLock: number;
   sinceGuard: number;
+  /** Whether the guard was up before the current attack started (see guardFirst). */
+  guardWas: boolean;
+  /** The guard last tick, and the tick it last went up (a parry needs it raised just in time). */
+  guardPrev: boolean;
+  guardUpAt: number;
 };
 
 const DT = 1 / 60;
@@ -75,6 +82,7 @@ export class FightEngine {
       this.hitstop--;
       return events;
     }
+    for (const id of PLAYER_IDS) this.guardFirst(id, stances[id]);
     for (const id of PLAYER_IDS) this.advance(id, events);
     for (const id of PLAYER_IDS) this.wearGuard(id, stances[id], events);
     // Both swings resolve against the same moment, so a same-tick exchange is a trade, not a P1 win.
@@ -95,7 +103,7 @@ export class FightEngine {
       : undefined;
     return {
       x: f.x, hp: f.hp, stamina: f.stamina, phase: f.phase, move: a?.move, frame: f.frame,
-      hand: a?.hand, height: a?.height, length, evade: f.evade?.kind, evadeDir: f.evade?.dir, meter: f.meter,
+      hand: a?.hand, height: a?.height, length, heavy: a?.heavy, evade: f.evade?.kind, evadeDir: f.evade?.dir, meter: f.meter,
       guard: f.guard, guardLock: f.guardLock,
     };
   }
@@ -152,6 +160,8 @@ export class FightEngine {
         f.queue.push({ command: c, frames: FIGHT.bufferFrames });
         if (f.queue.length > FIGHT.queueSize) f.queue.shift();
       }
+    } else if (c.kind === 'restyle') {
+      this.restyle(f, c);
     } else if (c.kind === 'defend' && (c.move === 'slip' || c.move === 'duck')) {
       if (f.phase === 'idle' || f.phase === 'recovery') f.evade = { kind: c.move, frames: FIGHT.evadeFrames, dir: c.dir };
     }
@@ -174,20 +184,24 @@ export class FightEngine {
     // A NaN here would stick: HP that never reaches 0, a position that's always "in range".
     const speed = finiteOr(c.speed, 1);
     const windup = finiteOr(c.windup, 1);
+    // A heavy (loaded up and held, then thrown) hits harder but comes out slower, so the other player can see it
+    // coming. Other punches' wind-up adds nothing (it used to scale every punch's damage, a hidden coin flip).
+    const heavy = PUNCHES.has(c.move) && Boolean(c.heavy);
     f.attack = {
       move: c.move,
       hand: c.hand,
       spec,
       startup: Math.max(
         Math.min(FIGHT.minStartup, spec.startup),
-        spec.startup + (gassed ? FIGHT.gassedStartup : 0) + mash * FIGHT.mashStartup - clamp(finiteOr(c.headStart ?? 0, 0), 0, FIGHT.maxHeadStart),
+        spec.startup + (gassed ? FIGHT.gassedStartup : 0) + mash * FIGHT.mashStartup + (heavy ? FIGHT.heavyStartup : 0) - clamp(finiteOr(c.headStart ?? 0, 0), 0, FIGHT.maxHeadStart),
       ),
-      scale: speed * windup * (gassed ? FIGHT.gassedDamage : 1) * (1 - mash * FIGHT.mashDamage),
+      scale: speed * (heavy ? windup * FIGHT.heavyDamage : 1) * (gassed ? FIGHT.gassedDamage : 1) * (1 - mash * FIGHT.mashDamage),
       height: c.height,
       lunge: this.lungeFor(c, spec),
       done: false,
       landed: false,
       blocked: false,
+      heavy,
     };
     f.phase = 'startup';
     f.frame = 0;
@@ -196,6 +210,26 @@ export class FightEngine {
     if (c.move === 'fireball') f.meter = 0;
     f.sinceAttack = 0;
     events.push({ t: this.now, type: 'startup', attacker: id, move: c.move });
+  }
+
+  /**
+   * A punch still in startup (or waiting in the queue) turns into the one the player really threw, keeping the startup
+   * frames it has already used: the reader picks the style early, from the wind-up, and sees the real one at the peak.
+   * Once it's active it's too late, and legs, fireballs and the other hand's attacks never change.
+   */
+  private restyle(f: Fighter, c: Extract<Command, { kind: 'restyle' }>) {
+    if (!PUNCHES.has(c.move)) return;
+    const queued = [...f.queue].reverse().find((q) => q.command.hand === c.hand && PUNCHES.has(q.command.move));
+    if (queued) {
+      queued.command = { ...queued.command, move: c.move };
+      return;
+    }
+    const a = f.attack;
+    if (f.phase !== 'startup' || !a || a.hand !== c.hand || a.move === c.move || !PUNCHES.has(a.move)) return;
+    const spec = MOVES[c.move];
+    a.startup = Math.max(f.frame + 1, a.startup + spec.startup - a.spec.startup);
+    a.move = c.move;
+    a.spec = spec;
   }
 
   private advance(id: PlayerId, events: FightEvent[]) {
@@ -299,6 +333,19 @@ export class FightEngine {
     const canBlock = (before.phase === 'idle' || before.phase === 'blockstun') && g.guardLock === 0;
     const guarding = Boolean(stances[defenderId]?.guard) && canBlock;
     const guardBreak = guarding && FIGHT.guardBreakers.includes(a.move);
+    if (guarding && !guardBreak && a.heavy && this.tick - g.guardUpAt <= FIGHT.parryFrames) {
+      // Parry: a heavy met by a guard raised just in time. The attacker reels and the defender is free to punish.
+      a.blocked = true;
+      f.attack = null;
+      f.queue = [];
+      f.phase = 'hitstun';
+      f.stun = FIGHT.parryStun;
+      f.frame = 0;
+      this.gainMeter(defenderId, FIGHT.meterOnHit);
+      this.hitstop = Math.max(this.hitstop, FIGHT.parryHitstop);
+      events.push({ t: this.now, type: 'parry', attacker: id, move: a.move, damage: 0, hitstopFrames: FIGHT.parryHitstop });
+      return;
+    }
     if (guarding && !guardBreak) {
       const chip = Math.max(1, Math.round(a.spec.chip * a.scale * this.damageScale));
       g.hp = Math.max(0, g.hp - chip);
@@ -329,7 +376,9 @@ export class FightEngine {
     this.gainMeter(id, FIGHT.meterOnHit);
     this.gainMeter(defenderId, FIGHT.meterOnHurt);
     g.attack = null;
-    g.queue = [];
+    // The punch they threw last still comes out once they recover (if it's fresh): getting hit first shouldn't eat what
+    // the player threw, and exchanges trade instead of one side landing in streaks.
+    g.queue = g.queue.slice(-FIGHT.keepOnHit);
     g.chain = 0;
     g.evade = null;
     g.phase = 'hitstun';
@@ -340,6 +389,27 @@ export class FightEngine {
     events.push({ t: this.now, type: counter ? 'counter' : 'hit', attacker: id, move: a.move, damage, hitstopFrames: stop, ...(guardBreak ? { guardBreak: true } : {}) });
     this.knockback(defenderId, damage);
     if (g.hp <= 0) this.ko(defenderId, id, a.move, events);
+  }
+
+  /**
+   * Hands going up into a guard look like a punch to the camera for a moment (real block moments: 64 of 101 read a
+   * strike first). So a guard that comes up while a punch is barely started wins: the punch is called off (its stamina
+   * back) and the fighter blocks. A punch thrown from a guard that was already up isn't affected.
+   */
+  private guardFirst(id: PlayerId, stance: Stance | undefined) {
+    const f = this.fighters[id];
+    const guard = Boolean(stance?.guard);
+    const a = f.attack;
+    if (guard && !f.guardWas && f.phase === 'startup' && a && PUNCHES.has(a.move) && f.frame <= FIGHT.guardCancelFrames && f.guardLock === 0) {
+      f.stamina = Math.min(FIGHT.maxStamina, f.stamina + a.spec.stamina);
+      f.attack = null;
+      f.queue = [];
+      this.idle(f);
+    }
+    // Remembered per attack: the guard only cancels a punch if it wasn't up when the punch started.
+    if (f.phase !== 'startup') f.guardWas = guard;
+    if (guard && !f.guardPrev) f.guardUpAt = this.tick;
+    f.guardPrev = guard;
   }
 
   /** The guard drains while it's up and refills once it's down (FIGHT.guard*); a crushed one counts down its lockout. */
@@ -489,7 +559,7 @@ function fresh(x: number): Fighter {
   return {
     x, hp: FIGHT.maxHp, stamina: FIGHT.maxStamina, phase: 'idle', frame: 0,
     attack: null, stun: 0, evade: null, queue: [], chain: 0, meter: 0, mash: 0, lastLanded: false, lastAttackAt: -1, sinceAttack: 10,
-    guard: FIGHT.guardMax, guardLock: 0, sinceGuard: 10,
+    guard: FIGHT.guardMax, guardLock: 0, sinceGuard: 10, guardWas: false, guardPrev: false, guardUpAt: -Infinity,
   };
 }
 

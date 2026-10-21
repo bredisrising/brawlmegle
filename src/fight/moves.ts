@@ -66,23 +66,38 @@ export const FIGHT = {
    */
   guardBreakers: ['kick', 'knee'] as readonly string[],
   /**
-   * The guard wears out, so nobody can turtle forever: holding a block drains it (guardDrain per second) and every
-   * blocked hit takes a chunk (guardPerBlock). Empty: the guard is crushed, a short stagger and no blocking for
-   * guardLockout seconds while it refills. Let go and it comes back (guardRegen per second, after guardRegenDelay).
+   * The guard wears out, so nobody can turtle forever: every blocked hit takes a chunk (guardPerBlock). Empty: the guard
+   * is crushed, a short stagger and no blocking for guardLockout seconds while it refills. Let go and it comes back
+   * (guardRegen per second, after guardRegenDelay). Just holding it costs nothing (guardDrain 0): real players keep
+   * their hands up between swings, and a drain crushed the only defense that worked at the hackathon (skill.test.ts).
    */
   guardMax: 100,
-  guardDrain: 12,
+  guardDrain: 0,
   guardPerBlock: 10,
   guardRegen: 30,
   guardRegenDelay: 0.5,
   guardLockout: 2.5,
   guardCrushStun: 20,
+  /** A heavy (Command.heavy): heavyStartup frames slower, heavyDamage x windup. */
+  heavyStartup: 6,
+  heavyDamage: 1.15,
+  /**
+   * A guard raised at most parryFrames before a heavy lands parries it: no damage, and the attacker reels for parryStun
+   * frames (time to punish). Only heavies: they're the punches you can see coming, so a parry is a read, not luck.
+   */
+  parryFrames: 10,
+  parryStun: 30,
+  parryHitstop: 8,
+  /** A guard raised within this many frames of a punch starting calls the punch off (FightEngine.guardFirst). */
+  guardCancelFrames: 9,
   /** Slip and duck stay effective this many frames. */
   evadeFrames: 15,
   /** Attacks thrown while busy wait this long for the fighter to be free (or to chain), so none get lost. */
   bufferFrames: 24,
   /** How many attacks can wait at once (a fast three-punch combo: one swinging, two waiting). */
   queueSize: 2,
+  /** Of those, how many survive the fighter getting hit (they come out after the hitstun, if still fresh). */
+  keepOnHit: 1,
   /** Punches in a row that can cancel each other's recovery (see FightEngine.chainable). */
   maxChain: 4,
   /**

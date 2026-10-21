@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { InputSource } from '../input/InputSource';
+import { FramingCoach } from '../input/framing';
+import { poseWarningOf, type PoseWarning } from '../input/poseHealth';
 import type { Landmark, PoseFrame } from '../types';
 import { localPlayerId, useGameStore } from '../game/store';
 import { useGame } from './GameContext';
@@ -47,16 +49,17 @@ export function CameraPip() {
   if (source?.video && scanning) {
     return <ScanOverlay source={source} id={localId} view={scan?.view ?? null} thumbs={scan?.thumbs ?? {}} detail={detail} onSkip={skipScan} />;
   }
-  if (!source?.video || !open) return null;
+  if (!source?.video) return null;
+  const place = lobby
+    ? 'bottom-4 left-1/2 w-[min(32vw,240px)] -translate-x-1/2' // between the two "Ready" banners
+    : 'bottom-4 left-4 w-[min(32vw,300px)]';
+  const note = <PoseWarningNote source={source} />;
+  // Hidden with C: the tracking warning (if any) still shows where the picture was.
+  if (!open) return <div className={`pointer-events-none fixed z-40 ${place}`}>{note}</div>;
   const fresh = lastMove && performance.now() - lastMove.at < 1500;
   return (
-    <div
-      className={`pointer-events-none fixed z-40 overflow-hidden border-2 border-paper/30 bg-black shadow-2xl ${
-        lobby
-          ? 'bottom-4 left-1/2 w-[min(32vw,240px)] -translate-x-1/2' // between the two "Ready" banners
-          : 'bottom-4 left-4 w-[min(32vw,300px)]'
-      }`}
-    >
+    <div className={`pointer-events-none fixed z-40 overflow-hidden border-2 border-paper/30 bg-black shadow-2xl ${place}`}>
+      {note}
       <div className="relative aspect-[4/3]">
         <SkeletonVideo source={source} />
         {fresh && (
@@ -69,6 +72,32 @@ export function CameraPip() {
         </span>
       </div>
     </div>
+  );
+}
+
+/**
+ * A strip over the camera picture when tracking is too slow to read moves well (few poses a second, a dim camera, no
+ * GPU), saying what helps. Otherwise, when the player is framed badly (head cut off, too close, hands out of the shot),
+ * what to fix (FramingCoach). The camera re-rates every 2 s; this looks four times a second.
+ */
+function PoseWarningNote({ source }: { source: InputSource }) {
+  const [warning, setWarning] = useState<PoseWarning | null>(() => poseWarningOf(source));
+  useEffect(() => {
+    const coach = new FramingCoach();
+    const look = () => setWarning((old) => {
+      const framing = coach.update(source.latestFrame);
+      const now = poseWarningOf(source) ?? (framing && { kind: 'camera' as const, text: framing.text });
+      return now?.text === old?.text ? old : now;
+    });
+    look();
+    const t = setInterval(look, 250);
+    return () => clearInterval(t);
+  }, [source]);
+  if (!warning) return null;
+  return (
+    <p role="status" data-testid="pose-warning" className="bg-low px-2 py-1 font-cond text-[11px] font-bold uppercase leading-tight tracking-[0.12em] text-ink">
+      {warning.text}
+    </p>
   );
 }
 

@@ -27,25 +27,6 @@ export function toLandmark(point: NormalizedLandmark): Landmark {
   return { x: point.x, y: point.y, z: point.z, visibility: point.visibility ?? 0 };
 }
 
-/** With numPoses 2 (bystanders around), pick the person nearest the center. */
-export function selectCenteredPose(poses: NormalizedLandmark[][]): number {
-  let selected = -1;
-  let nearest = Infinity;
-  poses.forEach((pose, index) => {
-    const left = pose[23];
-    const right = pose[24];
-    if (!left || !right) return;
-    const x = (left.x + right.x) / 2;
-    const y = (left.y + right.y) / 2;
-    const distance = (x - 0.5) ** 2 + (y - 0.5) ** 2;
-    if (distance < nearest) {
-      selected = index;
-      nearest = distance;
-    }
-  });
-  return selected;
-}
-
 /** Worker protocol (CameraSource <-> poseWorker). */
 export type PoseWorkerRequest =
   /** model: the model file the page preloaded (a copy), so the worker doesn't download it again. */

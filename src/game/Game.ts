@@ -11,10 +11,13 @@ import { ROUND_CALL_SECONDS } from '../director/walkoutTiming';
 import { Cpu, type CpuLevel, type CpuOutput } from '../fight/Cpu';
 import { FightEngine } from '../fight/FightEngine';
 import { Resolver } from '../fight/Resolver';
+import { FairDelay } from './fairDelay';
+import { Drill } from './drill';
 import { IntentReader } from '../intent/IntentReader';
-import type { Intent } from '../intent/intents';
+import { readingConfig, type Intent } from '../intent/intents';
 import { InputHub, createLocalSource, preloadLocalInput, type InputSource } from '../input';
 import { MockSource } from '../input/sources/MockSource';
+import { trackerInfoOf } from '../input/poseHealth';
 import { captureScan, forgeBusy, forgeFighter, type ForgeOwner, type ScanFrames } from '../forge/forge';
 import { forgePreview, forgeStatus, onChange, samePreview, scanStatus } from '../forge/status';
 import { fetchServerFighters, maskedFighter, saveFighter, saveOwner } from '../forge/roster';
@@ -32,9 +35,10 @@ import { SpectatorSession } from './SpectatorSession';
 import type { HostMessage, MatchPlayer, MirrorEvent, MirrorFrame } from '../net/protocol';
 import { HostSession } from './HostSession';
 import { MatchRecorder, recordingEnabled } from './MatchRecorder';
+import { readPoses } from './readPoses';
 import { HighlightRecorder } from './HighlightRecorder';
 import { Commentary, TEMPLATES, fill, spoken, type Line } from './Commentary';
-import { NO_VOTES, localPlayerId, pushPopup, updatePlayer, useGameStore } from './store';
+import { NO_VOTES, localPlayerId, pushPopup, updatePlayer, useGameStore, type DrillView } from './store';
 
 /** Round length: shorter at a demo booth (`?demo=1`). */
 const ROUND = config.demo ? 45 : ROUND_SECONDS;
@@ -83,7 +87,7 @@ const WAITING_TEXT = 'Opponent found, waiting for them to come back…';
 const playerId = () => (crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** Big moments with a template line ready for each side (Commentary TEMPLATES). */
-const MOMENTS = ['first', 'counter', 'combo', 'guardBreak', 'guardCrush', 'danger', 'ko', 'time'] as const;
+const MOMENTS = ['first', 'counter', 'combo', 'guardBreak', 'guardCrush', 'parry', 'danger', 'ko', 'time'] as const;
 type Moment = (typeof MOMENTS)[number];
 
 const ARENA_CENTER = new THREE.Vector3(0, 0.5, 0);
@@ -108,7 +112,7 @@ export class Game {
   readonly renderer: Renderer;
   readonly input = new InputHub();
   private readonly fight = new FightEngine({ damageScale: config.demo ? 1.6 : 1 });
-  /** Intent + fight state -> the move that happens (lunges, knee vs kick, punishing a duck...). */
+  /** Intent + fight state -> the move that happens (lunges, knee vs kick, a restyle at the peak...). */
   private readonly resolver = new Resolver();
   private readonly effects: Effects;
   private readonly views: Record<PlayerId, FighterView>;
@@ -136,8 +140,13 @@ export class Game {
   /** Host: P2's moves as read on the client laptop (newer clients read their own camera), waiting for the tick. */
   private remoteIntents: Intent[] = [];
   private remoteStance: { stance: Stance; at: number } | null = null;
+  /** Training's punch drill, while it runs (and after, until closed), and the last view of it put in the store. */
+  private drill: Drill | null = null;
+  private drillShown = '';
   /** Hit-stop is on and its impact frame has been drawn: hold the picture until it ends. */
   private holdingImpact = false;
+  /** P1's engine input waiting out the fairness delay (see equalize). */
+  private readonly fair = new FairDelay('p1');
   /** Host: each slot's fighter, for the client laptop's copy of the fight; and what to tell it this tick. */
   private readonly fighters: Partial<Record<PlayerId, ForgedFighter>> = {};
   private outbox: MirrorEvent[] = [];
@@ -195,6 +204,8 @@ export class Game {
   private readonly cam = new CameraShare();
   /** Test hook: a camera stream to share when the local input has none (the mock input in dev and tests). */
   cameraOverride: MediaStream | null = null;
+  /** The local camera last told whether to use short exposure, and what (see tuneCamera). */
+  private tuned: { source: InputSource | null; on: boolean } = { source: null, on: false };
   /**
    * "Find a fight": this tab's matchmaker id, the fighter picked once and kept for every opponent (as host it's set up
    * as P1; as client it's sent as a pick), and the camera, kept running as the role flips between host and client.
@@ -241,7 +252,7 @@ export class Game {
     this.effects = new Effects(this.renderer.scene, this.renderer.camera);
     this.fireballs = new Fireballs(this.renderer.scene);
     this.views = { p1: new FighterView('p1'), p2: new FighterView('p2') };
-    this.intent = { p1: new IntentReader('p1'), p2: new IntentReader('p2') };
+    this.intent = { p1: new IntentReader('p1', readingConfig(config.moveModel)), p2: new IntentReader('p2', readingConfig(config.moveModel)) };
     for (const v of Object.values(this.views)) this.renderer.scene.add(v.root);
 
     this.walkout = new Walkout(this.renderer, this.effects, this.views, this.announcer, this.sfx, () => this.skipWalkout(), () => !this.liveMatch());
@@ -377,6 +388,7 @@ export class Game {
       heard: () => mine() && (this.lastPeerAt = performance.now()),
       quickJoin: (code) => mine() && void this.joinQuick(code),
       cam: (hidden) => mine() && this.cam.remoteHidden(hidden),
+      tracker: (info) => mine() && this.recorder.tracker('p2', info),
       read: (intents, stance) => {
         this.remoteIntents.push(...intents);
         this.remoteStance = { stance: { ...stance, player: 'p2' }, at: performance.now() };
@@ -814,6 +826,50 @@ export class Game {
     this.tryStart();
   }
 
+  /** Training: start the punch drill (game/drill.ts), or run it again. */
+  startDrill() {
+    if (!useGameStore.getState().training) return;
+    this.drill = new Drill(performance.now());
+    this.drillShown = '';
+    this.showDrill();
+  }
+
+  stopDrill() {
+    this.drill = null;
+    useGameStore.setState({ drill: null });
+  }
+
+  /** The finished drill's poses and the moves asked (points only, never video) to /samples, with the player's OK. */
+  async sendDrill() {
+    const drill = this.drill;
+    const view = useGameStore.getState().drill;
+    if (!drill || !view?.result || view.sent === 'sending' || view.sent === 'sent') return;
+    useGameStore.setState({ drill: { ...view, sent: 'sending' } });
+    let sent: 'sent' | 'failed' = 'failed';
+    try {
+      const body = drill.sample({ ua: navigator.userAgent, tracker: trackerInfoOf(this.input.source('p1')) });
+      const res = await fetch(`${config.forgeApi.replace(/\/+$/, '')}/samples`, { method: 'POST', headers: { 'content-type': 'text/plain' }, body });
+      if (res.ok) sent = 'sent';
+    } catch (err) {
+      console.warn('[drill] upload failed', err);
+    }
+    const now = useGameStore.getState().drill;
+    if (now) useGameStore.setState({ drill: { ...now, sent } });
+  }
+
+  /** The drill's prompt (or its score) into the store, only when it changes. */
+  private showDrill() {
+    const d = this.drill!;
+    const at = d.at(performance.now(), this.input.latest('p1')?.t ?? null);
+    const prev = useGameStore.getState().drill;
+    const view: DrillView = {
+      say: at.step?.say ?? null, hint: at.step?.hint ?? null, ready: at.ready, index: at.index, total: d.steps.length,
+      result: at.done ? prev?.result ?? d.result() : null, sent: prev?.sent ?? 'no',
+    };
+    const key = JSON.stringify([view.say, view.ready, view.index, !!view.result, view.sent]);
+    if (key !== this.drillShown) (this.drillShown = key), useGameStore.setState({ drill: view });
+  }
+
   /** Title screen: "Practice". Hosts as usual (a friend can still join), and P2 is a CPU once P1 is ready. */
   async practice(level: CpuLevel | 'dummy' = 'normal') {
     this.practiceLevel = level;
@@ -1243,12 +1299,14 @@ export class Game {
   private startCountdown() {
     this.phaseTimer = 0;
     this.clock = ROUND;
+    this.fair.reset();
     useGameStore.setState({ phase: 'countdown', countdown: COUNTDOWN_FROM, timeLeft: ROUND, ending: null });
   }
 
   private update = (dt: number, frozen: boolean) => {
     this.effects.update(dt);
     this.shareCamera();
+    this.tuneCamera();
     this.checkNext();
     this.watchPeer();
     if (this.replayIn > 0 && !frozen && (this.replayIn -= dt) <= 0) {
@@ -1297,10 +1355,13 @@ export class Game {
         continue;
       }
       // P2 on a client laptop that reads its own moves: use what it sent (a full-rate local read, no network
-      // jitter on the poses). Otherwise read the streamed poses here.
+      // jitter on the poses). Otherwise read the poses here: every one since the last tick (after a render hitch,
+      // several), so none skip the reader.
+      const frames = this.input.take(id);
+      for (const frame of frames) this.recorder.frame(id, frame);
       const remote = id === 'p2' ? this.takeRemoteRead() : null;
-      const frame = remote ? null : this.input.latest(id);
-      const out = remote ?? (frame ? this.intent[id].update(frame) : null);
+      const out = remote ?? readPoses(this.intent[id], frames, this.input.latest(id));
+      if (this.drill && id === 'p1') this.drill.feed(frames, out?.intents ?? []);
       if (out) {
         commands.push(...this.resolver.resolve(id, out.intents, this.fight));
         for (const i of out.intents) {
@@ -1316,6 +1377,8 @@ export class Game {
       }
       stances[id] = out?.stance ?? { player: id, guard: true, advance: 0, lean: { x: 0, y: 0 }, tracked: false };
     }
+    this.equalize(commands, stances, phase === 'fighting');
+    if (this.drill) this.showDrill();
     for (const c of commands) {
       if (c.kind !== 'anticipate') continue;
       this.views[c.player].anticipate(c.hand);
@@ -1334,7 +1397,6 @@ export class Game {
     // Hit-stop: the picture holds on the impact while the engine does (effects and camera shake keep going).
     // (Only mid-round: the K.O. hit's hit-stop never runs out, since the engine stops stepping.)
     const frozen = useGameStore.getState().phase === 'fighting' && this.fight.frozen;
-    for (const id of PLAYER_IDS) this.recorder.frame(id, this.cpu[id] ? null : this.input.latest(id));
     this.fireballs.sync(this.fight.projectiles());
     this.showMeters({ p1: this.fight.state('p1'), p2: this.fight.state('p2') });
     this.sendFrame(stances, frozen);
@@ -1368,12 +1430,26 @@ export class Game {
       { p1: { name: players.p1.name, cpu: !!this.cpu.p1 }, p2: { name: players.p2.name, cpu: !!this.cpu.p2 } },
       (cam?.video?.srcObject as MediaStream | null) ?? null,
     );
+    this.recorder.tracker('p1', trackerInfoOf(this.input.source('p1'))); // P2's comes from the client laptop
   }
 
   /** Hand this laptop's camera (whichever source tracks the player now) to the camera share. Cheap; every frame. */
   private shareCamera() {
     const video = this.localInputSource()?.video?.srcObject;
     this.cam.camera(video instanceof MediaStream ? video : this.cameraOverride);
+  }
+
+  /**
+   * Short exposure on this laptop's camera (less blur on every punch), except during the body scan: the forge's photos
+   * want the camera's own exposure. Cheap; every frame (it only tells the camera when something changed).
+   */
+  private tuneCamera() {
+    const { role, players } = useGameStore.getState();
+    const source = this.localInputSource() as (InputSource & { setShortExposure?: (on: boolean) => Promise<boolean> }) | null;
+    const on = players[localPlayerId(role)].status !== 'scanning';
+    if (source === this.tuned.source && on === this.tuned.on) return;
+    this.tuned = { source, on };
+    void source?.setShortExposure?.(on);
   }
 
   private async pollLink() {
@@ -1391,6 +1467,7 @@ export class Game {
    */
   /** Back to the title screen (a fresh page). The client laptop tells the host first, so its slot opens up. */
   toTitle() {
+    this.stopDrill();
     this.client?.leave();
     // A moment for the message to go out before the page (and its connection) goes away.
     window.setTimeout(() => window.location.reload(), this.client ? 150 : 0);
@@ -1468,6 +1545,17 @@ export class Game {
     if (perfect) setTimeout(() => this.announcer.bark('perfect', true), 1400);
   }
 
+  /**
+   * Online fairness: the client's moves get here half a round trip after the player made them, so the host's own player
+   * (P1) is held back by the same before the engine sees them (config.fairDelayMaxMs at most). Only P1's engine input
+   * waits: their fighter's tell and live arm still move at once, so it feels as quick. Off against the CPU or locally.
+   */
+  private equalize(commands: Command[], stances: Record<PlayerId, Stance>, fighting: boolean) {
+    const rtt = useGameStore.getState().link?.rttMs;
+    const remote = this.remoteStance && performance.now() - this.remoteStance.at < 1000;
+    this.fair.apply(commands, stances, fighting && remote && rtt ? Math.round(Math.min(config.fairDelayMaxMs, rtt / 2) / (SIM_DT * 1000)) : 0);
+  }
+
   /** The client's latest read of P2, if it's been sending them (stale after a second: back to reading poses here). */
   private takeRemoteRead(): { intents: Intent[]; stance: Stance } | null {
     const r = this.remoteStance;
@@ -1512,7 +1600,7 @@ export class Game {
   /** Engine event -> HP in the store, hit-stop, effects, popups. */
   private applyEvent(event: FightEvent) {
     const { players, phase } = useGameStore.getState();
-    if (phase === 'fighting' && event.type === 'guardCrush') {
+    if (phase === 'fighting' && (event.type === 'guardCrush' || event.type === 'parry')) {
       const by = this.fight.state(event.attacker);
       this.showHit(event, by, false);
       this.outbox.push({ kind: 'fight', event, by, ko: false });
@@ -1540,6 +1628,15 @@ export class Game {
       useGameStore.setState({ callout: { text: 'Guard crushed', key: performance.now() } });
       this.announcer.crowd('ooh', 0.6);
       this.sfx.play('whoosh', 0.6);
+      return;
+    }
+    // A heavy turned away by a guard raised just in time: the read of the round, so everyone sees it.
+    if (event.type === 'parry') {
+      if (!replaying) {
+        useGameStore.setState({ callout: { text: 'Parry!', key: performance.now() } });
+        this.announcer.crowd('ooh', 0.8);
+        this.sfx.play('whoosh', 0.8);
+      }
       return;
     }
     if (!event.damage) return;
@@ -1757,6 +1854,7 @@ export class Game {
     const a = event.attacker;
     const d = opponentOf(a);
     if (event.type === 'guardCrush' && useGameStore.getState().phase === 'fighting') return this.call([this.momentLine('guardCrush', a)], true);
+    if (event.type === 'parry' && useGameStore.getState().phase === 'fighting') return this.call([this.momentLine('parry', a)], true);
     if (!event.damage || useGameStore.getState().phase !== 'fighting') return;
     if (event.type === 'blocked') return this.blocked(d);
     this.blockStreak = { defender: null, n: 0, called: false };

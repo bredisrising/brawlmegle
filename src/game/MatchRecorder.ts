@@ -1,7 +1,7 @@
 import { config } from '../config';
 import { useGameStore } from './store';
 import type { Intent } from '../intent/intents';
-import type { FightEvent, PlayerId, PoseFrame } from '../types';
+import type { FightEvent, PlayerId, PoseFrame, TrackerInfo } from '../types';
 
 /**
  * Records real matches to improve the move reader: per player, every camera frame's pose points, every intent the
@@ -65,6 +65,9 @@ const roundLandmarks = (ls: PoseFrame['image']) => ls.map((p) => ({ x: round(p.x
 export class MatchRecorder {
   private lines: Record<PlayerId, Line[]> = { p1: [], p2: [] };
   private lastT: Record<PlayerId, number> = { p1: -1, p2: -1 };
+  private firstT: Record<PlayerId, number> = { p1: -1, p2: -1 };
+  /** What each player's laptop tracked them with (CameraSource.info), as last heard. */
+  private trackers: Record<PlayerId, TrackerInfo | null> = { p1: null, p2: null };
   private startedAt = 0;
   private names: Record<PlayerId, string> = { p1: '', p2: '' };
   private video: { recorder: MediaRecorder; chunks: Blob[]; track: MediaStreamTrack | null } | null = null;
@@ -74,6 +77,8 @@ export class MatchRecorder {
   start(who: Record<PlayerId, { name: string; cpu: boolean }>, stream: MediaStream | null) {
     this.lines = { p1: [], p2: [] };
     this.lastT = { p1: -1, p2: -1 };
+    this.firstT = { p1: -1, p2: -1 };
+    this.trackers = { p1: null, p2: null };
     this.startedAt = Date.now();
     this.names = { p1: who.p1.name, p2: who.p2.name };
     this.cpu = { p1: who.p1.cpu, p2: who.p2.cpu };
@@ -86,8 +91,14 @@ export class MatchRecorder {
   /** A camera frame for a player (deduped: the same frame is handed over every tick until a new one arrives). */
   frame(id: PlayerId, f: PoseFrame | null) {
     if (!this.active || !f || this.cpu[id] || f.t === this.lastT[id]) return;
+    if (this.firstT[id] < 0) this.firstT[id] = f.t;
     this.lastT[id] = f.t;
     this.lines[id].push(JSON.stringify({ t: round(f.t), aspect: f.aspect, image: roundLandmarks(f.image), world: roundLandmarks(f.world) }));
+  }
+
+  /** What a player's laptop tracks them with: model, GPU or CPU, poses a second, camera, browser (kept in the header). */
+  tracker(id: PlayerId, info: TrackerInfo | null) {
+    if (this.active && info) this.trackers[id] = info;
   }
 
   /** What the reader made of a player's motion (strikes, guards, cancels with their reasons...). */
@@ -113,6 +124,8 @@ export class MatchRecorder {
       const header = {
         clip: 'match', player: id, name: this.names[id], opponent: this.names[id === 'p1' ? 'p2' : 'p1'],
         startedAt: this.startedAt, result, frames: this.lines[id].filter((l) => l.includes('"image"')).length,
+        // Poses over this long: what reached the recording (and the reader), and what the laptop said it ran.
+        seconds: Math.round(this.lastT[id] - this.firstT[id]) / 1000, tracker: this.trackers[id],
         labels: [], // unlabeled: matches are free play
       };
       const body = [JSON.stringify(header), ...this.lines[id]].join('\n') + '\n';

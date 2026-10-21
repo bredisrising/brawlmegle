@@ -3,6 +3,8 @@ import { LM, PosePreprocessor, type Body, type BodyPoint, type Vec3 } from './pr
 import { DEFAULT_INTENT, type Intent, type IntentConfig, type LimbConfig, type LimbName, type StrikeStyle } from './intents';
 import { StyleMatcher, type Template } from './StyleMatcher';
 import styleModel from './styleModel.json';
+import { GATE_RESCUE as GATE_DEFAULTS, GateRescue, MoveModel, type MoveModelWeights } from './MoveModel';
+import moveWeights from './moveModel.weights.json';
 
 /** The shared style model, trained from everyone's guided-test sessions (test/intent/train.test.ts). */
 const SHARED_MODEL = (styleModel as Template[]).length ? StyleMatcher.fromJSON(styleModel as Template[]) : null;
@@ -43,6 +45,8 @@ const EXT_DEADBAND = 0.1;
  */
 const FEET_SECONDS = 1.5;
 const FEET_IN_VIEW = 0.2;
+/** An arm moving at under this share of its speed away from its anchor has turned: re-anchor there. */
+const ARC_REANCHOR = 0.3;
 const LIMB_NAMES = Object.keys(LIMBS) as LimbName[];
 const PARTNER: Record<LimbName, LimbName> = { armL: 'armR', armR: 'armL', legL: 'legR', legR: 'legL' };
 
@@ -53,6 +57,18 @@ const PARTNER: Record<LimbName, LimbName> = { armL: 'armR', armR: 'armL', legL: 
 type Pair = { tip: Vec3; mid: Vec3; ext: number; head: Vec3; seen: boolean };
 type LimbState = {
   phase: 'idle' | 'onset' | 'recover';
+  /** This strike started as an overhand (chopping down from above the shoulder). */
+  overhand: boolean;
+  /** Highest the hand has been (body space) since this strike began, until its style is settled. */
+  topY: number;
+  /** When this limb last struck, when it last got back to its usual position after one, and when it last held still. */
+  struckAt: number;
+  homeAt: number;
+  quietAt: number;
+  /** The current strike's onset, its style as last reported, and whether its peak has been checked for a restyle. */
+  onsetAt: number;
+  style: StrikeStyle;
+  restyleDone: boolean;
   /** Usual position (guard or relaxed); "back near rest" means ready to strike again. */
   rest: Pair | null;
   /** Where the limb last paused. Strikes are measured from here, so a cocked-back hook or a dropped
@@ -83,7 +99,6 @@ type LimbState = {
   /** Whether the tip was in view at the peak (feet often aren't). */
   peakTipSeen: boolean;
   history: { t: number; d: Vec3 }[];
-  typicalSpeed: number;
   /** Where the limb was at its furthest after the last strike (recover phase), to see it retract. */
   extended: Pair | null;
   /** Distance from rest last frame: falling = the limb is coming back. */
@@ -103,10 +118,12 @@ type LimbState = {
   // Debug readouts
   disp: number;
   out: number;
+  /** Why a fast enough, far enough motion didn't start a strike this frame (null: it did, or it wasn't). */
+  blocked: string | null;
 };
 
 export type IntentDebug = {
-  limbs: Record<LimbName, { phase: LimbState['phase']; disp: number; out: number }>;
+  limbs: Record<LimbName, { phase: LimbState['phase']; disp: number; out: number; blocked: string | null }>;
   headDrop: number;
   lean: number;
   rootY: number;
@@ -146,12 +163,23 @@ export class IntentReader {
   private pendingCore: Record<'jump' | 'duck' | 'dodge', number> = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
   /** Last time each arm was throwing a strike. Punching moves the head; that isn't a dodge or a duck. */
   private lastArmStrike: Record<'armL' | 'armR', number> = { armL: -Infinity, armR: -Infinity };
+  /** Last time either hand moved fast, read as a strike or not, and last time one really swung (config.handsCalm). */
+  private lastArmBurst = -Infinity;
+  private lastArmSwing = -Infinity;
   private guardSince: number | null = null;
   private guardUp = false;
   private stance: Stance;
   private debug: IntentDebug | null = null;
   /** The player's calibration examples, if any. Decides straight/hook/upper instead of the built-in rules. */
   private matcher: StyleMatcher | null = SHARED_MODEL;
+  /** The learned move model and its gate (config.model): a second opinion on every rule strike, and a catch for misses. */
+  private moveModel: MoveModel | null = null;
+  private gate: GateRescue | null = null;
+  /** The model's p(rise) last frame per arm, and whether it put up a wind-up tell that's still showing. */
+  private modelRise: Record<'armL' | 'armR', number> = { armL: 0, armR: 0 };
+  private modelTell: Record<'armL' | 'armR', boolean> = { armL: false, armR: false };
+  /** When the rules last saw each arm start a strike (config.model.rescue 1 only rescues those). */
+  private ruleOnsetAt: Record<'armL' | 'armR', number> = { armL: -Infinity, armR: -Infinity };
 
   constructor(player: PlayerId, config: IntentConfig = DEFAULT_INTENT) {
     this.player = player;
@@ -182,10 +210,14 @@ export class IntentReader {
 
   private resetLimbs() {
     for (const n of LIMB_NAMES) this.limbs[n] = newLimb();
+    this.moveModel?.reset();
+    this.gate = null;
     // Cooldowns are on the frame clock, which restarts when a peer reloads: stale ones would block for minutes.
     this.lastCore = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
     this.pendingCore = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
     this.lastArmStrike = { armL: -Infinity, armR: -Infinity };
+    this.lastArmBurst = -Infinity;
+    this.lastArmSwing = -Infinity;
     this.headRest = null;
     this.shoulderRest = null;
     this.feetRest = null;
@@ -223,6 +255,7 @@ export class IntentReader {
     for (const name of LIMB_NAMES) this.updateLimb(name, body, intents);
     this.bothArmsTogether(body.t, intents);
     this.updateCore(body, intents);
+    if (this.config.model.gate) this.secondOpinion(body, intents);
     return { commands: toCommands(this.player, intents), stance: this.stance, intents, body, debug: this.debug };
   }
 
@@ -324,11 +357,12 @@ export class IntentReader {
     s.out = outward;
     s.travel = tTip;
     s.history.push({ t, d: kneeOnly(now, s.rest) ? sub(now.mid, s.rest.mid) : tipTravel(now, s.rest) });
-    while (s.history.length && t - s.history[0].t > 500) s.history.shift();
+    while (s.history.length && t - s.history[0].t > 800) s.history.shift();
 
     if (s.phase === 'idle') {
       if (speed < cfg.quietSpeed) {
         // Paused: strikes start from here. Rest recalibrates slowly toward wherever the limb usually sits.
+        s.quietAt = t;
         s.anchor = clonePair(now);
         const k = 1 - Math.exp(-body.dt / this.config.restSeconds);
         s.rest = lerpPair(s.rest, now, k);
@@ -339,28 +373,42 @@ export class IntentReader {
         // Coming back from the last strike: the next one starts from wherever the retraction turns around
         // (fast combos never get back to guard).
         s.anchor = clonePair(now);
+      } else if (def.kind === 'arm' && outward < ARC_REANCHOR * speed) {
+        // Moving, but not away from where it last paused: a windmill or a looping swing that never stops. The swing
+        // starts from where it turned (real play: most missed swings never "went outward" from a stale anchor).
+        s.anchor = clonePair(now);
       }
+      // An overhand: the hand starts up around shoulder height or higher and chops down fast, over the top and in or
+      // toward the camera. A third of real players' swings are these (hackathon rounds), so the two rules below spare them.
+      // (Not right after this arm's own strike: that's the arm coming back down from a sky punch or an uppercut.)
+      const overhand = def.kind === 'arm' && t - s.struckAt > 500 && s.anchor.tip.y > this.config.overhand.start && vel.tip.y < -this.config.overhand.speed && choppingIn(def, tTip, disp);
       // A hand dropping fast (back to the lap, or lowering the guard) can't be starting a punch.
-      const dropping = def.kind === 'arm' && vel.tip.y < -1.2;
+      const dropping = def.kind === 'arm' && vel.tip.y < -1.2 && !overhand;
       // An arm already up in the air (elbow at shoulder height, hand above it: waving, a hand on the head) isn't
-      // throwing a punch, whatever it does next. Punches start from a guard, elbow down.
-      const raised = def.kind === 'arm' && s.anchor.mid.y > -0.15 && s.anchor.tip.y - s.anchor.mid.y > 0.25;
+      // throwing a punch, unless it chops down. Punches start from a guard, elbow down.
+      const raised = def.kind === 'arm' && s.anchor.mid.y > -0.15 && s.anchor.tip.y - s.anchor.mid.y > 0.25 && !overhand;
       // Mid-kick, the arms swing for balance and the standing leg shifts: neither is a strike.
       const partner = this.limbs[PARTNER[name]];
       const busy = legs ? partner.phase === 'recover' && t - partner.since < 500 : this.kicking(t);
-      if (visible && !dropping && !raised && !busy && outward > cfg.onsetSpeed && disp > cfg.onsetDist && (strikeLike(def, tTip, tMid, disp) || extensionStrike(def, tTip, tExt, disp))) {
+      const shaped = strikeLike(def, tTip, tMid, disp) || extensionStrike(def, tTip, tExt, disp) || overhand;
+      // Fast enough and far enough but held back: say why (the tuner and the evals show it).
+      s.blocked = outward > cfg.onsetSpeed && disp > cfg.onsetDist
+        ? (!visible ? 'not visible' : dropping ? 'dropping' : raised ? 'raised' : busy ? 'busy' : !shaped ? 'not strike-shaped' : null)
+        : null;
+      if (visible && !dropping && !raised && !busy && outward > cfg.onsetSpeed && disp > cfg.onsetDist && shaped) {
         if (!legs) {
           const o = body.points[def.side === 1 ? LM.rWrist : LM.lWrist].p, os = body.points[def.side === 1 ? LM.rShoulder : LM.lShoulder].p;
           s.otherAtOnset = { x: o.x - os.x, y: o.y - os.y, z: 0 };
           s.tipAtOnset = { x: tipPt.p.x - root.p.x, y: tipPt.p.y - root.p.y, z: 0 };
         }
-        Object.assign(s, { phase: 'onset', since: t, grewAt: t, faceBeforeOnset: s.nearFaceAt, peakDisp: disp, peakSpeed: outward, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: legs ? 0 : body.elbow[side], peakTipSeen: tipPt.visibility > 0.3, anchorTip: { x: tipPt.p.x - tTip.x, y: tipPt.p.y - tTip.y, z: tipPt.p.z } });
+        Object.assign(s, { phase: 'onset', overhand, topY: tipPt.p.y, since: t, grewAt: t, faceBeforeOnset: s.nearFaceAt, peakDisp: disp, peakSpeed: outward, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: legs ? 0 : body.elbow[side], peakTipSeen: tipPt.visibility > 0.3, anchorTip: { x: tipPt.p.x - tTip.x, y: tipPt.p.y - tTip.y, z: tipPt.p.z } });
         out.push({ kind: 'anticipate', limb: name, t });
       }
       return;
     }
 
     if (s.phase === 'onset') {
+      s.topY = Math.max(s.topY, tipPt.p.y);
       if (disp > s.peakDisp) Object.assign(s, { grewAt: t, peakDisp: disp, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: legs ? 0 : body.elbow[side], peakTipSeen: tipPt.visibility > 0.3 });
       s.peakSpeed = Math.max(s.peakSpeed, outward);
       // Confirm as soon as it has traveled far enough (don't wait for the arm to slow down: that costs most
@@ -383,18 +431,19 @@ export class IntentReader {
       // Legs must also lift the knee above where it usually sits, so stepping isn't kicking (a step lifts the foot).
       const lift = s.peakMidRise;
       // Punches don't travel down: an arm straightening as the hand drops (back to the lap) isn't a strike.
-      const goingDown = def.kind === 'arm' && s.peak.y < -0.15 && s.peak.y < -0.5 * len(s.peak);
+      const goingDown = def.kind === 'arm' && !s.overhand && s.peak.y < -0.15 && s.peak.y < -0.5 * len(s.peak);
       const reason = s.peakDisp < needed || (def.kind === 'leg' && lift < this.config.legRise) ? 'too small'
         : legs && this.supportLeg(name, t) ? 'support leg'
         : def.kind === 'arm' && this.kicking(t) ? 'not a punch'
         : goingDown ? 'going down'
         : def.kind === 'arm' && raisingGuard(body, name, s.anchorTip, tipPt.p, this.config.guard.radius, t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 400) ? 'raising guard'
-        : def.kind === 'arm' && bothHandsUp(body, name, s.peak, s.since - s.faceBeforeOnset > 600 && t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 250) ? 'both hands up'
-        : def.kind === 'arm' && raisedOverHead(body, s.peakTip, s.peak, midPt.p, root.p) ? 'not a punch'
+        : def.kind === 'arm' && bothHandsUp(body, name, s.peak, s.since - s.faceBeforeOnset > 600 && t - this.limbs[name === 'armL' ? 'armR' : 'armL'].risingAt < 250, s.otherAtOnset) ? 'both hands up'
+        : def.kind === 'arm' && s.peakSpeed < this.config.overheadSpeed && raisedOverHead(body, s.peakTip, s.peak, midPt.p, root.p) ? 'not a punch'
         : def.kind === 'arm' && otherHandAlong(body, def, s, tipPt.p, root.p) ? 'both hands moved'
-        // A hand pulled in across the body with the elbow tucking in and staying down is the guard closing up (the
-        // other hand's usual move while one hand punches), not a hook: a hook brings the elbow up.
-        : def.kind === 'arm' && s.peakMidRise < 0.08 && s.peakMidOut < -0.05 && sweepsIn(def, s.peak) ? 'not a punch'
+        // A hand pulled in a short way across the body with the elbow tucking in and staying down is the guard closing
+        // up (the other hand's usual move while one hand punches), not a hook: a hook brings the elbow up. A long sweep
+        // is a hook anyway, elbow or not (real play: casual hooks keep it low, 18 were cancelled here).
+        : def.kind === 'arm' && s.peakMidRise < 0.08 && s.peakMidOut < -0.05 && s.peakDisp < this.config.tuckReach && sweepsIn(def, s.peak) ? 'not a punch'
         : null;
       if (reason) {
         s.phase = 'idle';
@@ -403,13 +452,10 @@ export class IntentReader {
       }
       const dir = normalize(s.peak);
       const strikeOut = dir.x * def.side;
-      const speedRatio = s.peakSpeed / s.typicalSpeed;
-      s.typicalSpeed += 0.2 * (s.peakSpeed - s.typicalSpeed);
+      const otherGuard = this.otherInGuard(def, body);
+      const windup = windupOf(s, dir);
       const features = def.kind === 'arm' ? strikeFeatures(def, s, root.p) : undefined;
-      const ruleStyle: StrikeStyle = def.kind === 'arm' && Math.abs(s.peak.x) <= 0.45 && (s.peakExt > len(s.peak) || s.peakExt > 0.15 || len(s.peak) < 0.6 * s.peakMidTravel)
-        ? 'straight'
-        : classify(def.kind, dir, strikeOut, s.peakTip, s.peakMid, s.peakMidOut, s.peak, s.peakMidRise, s.peakExt, s.peakElbow, s.peakTipSeen);
-      const style = features && this.matcher ? this.matcher.decide(features, ruleStyle) : ruleStyle;
+      const style = this.styleOf(def, s, root.p);
       out.push({
         kind: 'strike',
         limb: name,
@@ -421,14 +467,25 @@ export class IntentReader {
         style,
         height: heightOf(def.kind, s.peakTip, body),
         dir: { out: strikeOut, up: dir.y, fwd: dir.z },
-        speed: clamp(0.8 + 0.5 * (speedRatio - 0.6), 0.8, 1.3),
-        windup: windupOf(s, dir),
+        // Faster hits harder, the same scale for everyone (2.9–9.1 body units/s covers most real punches), and punching
+        // with the other hand kept up in guard counts more (real clean punches: 87% had it up, flails 66%).
+        speed: clamp((0.85 + 0.05 * (s.peakSpeed - 3)) * (otherGuard ? 1.08 : 0.94), 0.8, 1.3),
+        windup,
+        // Loaded: pulled back, held there a moment, then thrown. A heavy: slower and harder, and it can be parried.
+        // Windmills and flurries never pause, and a punch from guard has no pull-back.
+        heavy: def.kind === 'arm' && windup >= this.config.heavy.windup && s.since - s.quietAt < this.config.heavy.holdMs,
         reach: s.peakDisp,
         rawSpeed: s.peakSpeed,
+        chained: t - s.rearmedAt < 600 && s.rearmedAt > s.homeAt,
+        otherGuard,
         features,
       });
       s.phase = 'recover';
+      s.onsetAt = s.since;
       s.since = t;
+      s.struckAt = t;
+      s.style = style;
+      s.restyleDone = def.kind !== 'arm';
       s.extended = clonePair(now);
       // The other leg was what this one stood on.
       const partner = this.limbs[PARTNER[name]];
@@ -437,6 +494,25 @@ export class IntentReader {
         out.push({ kind: 'cancel', limb: PARTNER[name], t, reason: 'support leg' });
       }
       return;
+    }
+
+    // The style was picked early (confirmMs in), often on the wind-up. Keep following the strike to its peak, and if it
+    // turned out to be something else (a hook that started straight, an overhand that started rising), say so: the
+    // engine can still change the move while it's in startup.
+    if (!s.restyleDone) {
+      s.topY = Math.max(s.topY, tipPt.p.y);
+      if (disp > s.peakDisp) Object.assign(s, { grewAt: t, peakDisp: disp, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: body.elbow[side], peakTipSeen: tipPt.visibility > 0.3 });
+      if (t - s.grewAt >= 60 || t - s.since > this.config.restyleMs) {
+        s.restyleDone = true;
+        let style = this.styleOf(def, s, root.p);
+        // Rose and then came back down over the top: an overhand (the most common real swing), not an uppercut. The
+        // game has no overhand, so it plays as the hook.
+        if (style === 'upper' && s.topY - tipPt.p.y > this.config.style.overDrop) style = 'hook';
+        if (style !== s.style) {
+          s.style = style;
+          out.push({ kind: 'restyle', limb: name, t, onsetT: s.onsetAt, style, height: heightOf(def.kind, s.peakTip, body) });
+        }
+      }
     }
 
     // Recover: ready again once the limb comes back near rest, or has clearly pulled back from its furthest
@@ -450,7 +526,100 @@ export class IntentReader {
       s.phase = 'idle';
       s.anchor = clonePair(now);
       if (!home) s.rearmedAt = t;
+      else s.homeAt = t;
     }
+  }
+
+  /**
+   * The learned move model's say on this frame's arm strikes (MoveModel.ts, trained on the hackathon rounds): a rule
+   * strike it doesn't believe is dropped (most of those were hands going up into a guard), a swing the rules missed but
+   * it saw is added, and a swing both caught counts once, at whichever confirmed first. Style stays the rules'.
+   * Held-out players: 57.5% -> 72.7% of real strikes read, precision 84.9% -> 86.5%, confirm 133 -> 64 ms median.
+   */
+  private secondOpinion(body: Body, out: Intent[]) {
+    const m = this.config.model;
+    // Trained on standing players with their hips in the shot: seated and chest-up framings fool it, so the rules
+    // read those alone.
+    if (m.needHips && body.fullBodyFor < 500) {
+      if (this.gate) (this.moveModel?.reset(), (this.gate = null));
+      return;
+    }
+    this.moveModel ??= new MoveModel(moveWeights as unknown as MoveModelWeights);
+    this.gate ??= new GateRescue({ ...GATE_DEFAULTS, keep: m.keep, on: m.on, confirm: m.confirm, off: m.off });
+    const scores = this.moveModel.update(body);
+    const added: Intent[] = [];
+    // The model starting a swing the rules haven't: show the wind-up tell now, like a rule onset (and drop it if the
+    // model lets go without confirming).
+    for (const n of ['armL', 'armR'] as const) {
+      const p = scores[n].rise;
+      const was = this.modelRise[n];
+      this.modelRise[n] = p;
+      if (this.limbs[n].phase !== 'idle') continue;
+      if (p >= m.on && was < m.on) (added.push({ kind: 'anticipate', limb: n, t: body.t }), (this.modelTell[n] = true));
+      else if (this.modelTell[n] && p < m.off) (added.push({ kind: 'cancel', limb: n, t: body.t, reason: 'not a punch' }), (this.modelTell[n] = false));
+    }
+    for (const n of ['armL', 'armR'] as const) for (const x of out) if (x.kind === 'anticipate' && x.limb === n) this.ruleOnsetAt[n] = x.t;
+    for (const d of this.gate.scores(scores)) {
+      if (d.kind !== 'emit') continue;
+      if (m.rescue === 0 || (m.rescue === 1 && d.t - this.ruleOnsetAt[d.limb] > 400)) continue;
+      // The rules may be mid-swing on this arm too: once they confirm it, the gate folds theirs into this one.
+      added.push(this.modelStrike(d.limb, d.t, d.onsetT, d.style as StrikeStyle, body));
+      this.modelTell[d.limb] = false;
+    }
+    for (let i = 0; i < out.length; i++) {
+      const x = out[i];
+      if (x.kind === 'strike' && (x.limb === 'armL' || x.limb === 'armR')) {
+        const d = this.gate.rule({ limb: x.limb, t: x.t, onsetT: x.onsetT, style: x.style });
+        if (d.kind === 'drop') out[i] = { kind: 'cancel', limb: x.limb, t: x.t, reason: 'not a punch' };
+        else if (d.kind === 'restyle') out[i] = { kind: 'restyle', limb: x.limb, t: x.t, onsetT: d.onsetT, style: x.style, height: x.height };
+      } else if (x.kind === 'restyle' && (x.limb === 'armL' || x.limb === 'armR')) {
+        const d = this.gate.ruleRestyle({ limb: x.limb, t: x.t, onsetT: x.onsetT, style: x.style });
+        if (d?.kind === 'restyle') out[i] = { ...x, onsetT: d.onsetT };
+        else out.splice(i--, 1);
+      }
+    }
+    out.push(...added);
+  }
+
+  /** A strike only the model saw: its shape from where the arm is now (the rules never measured this swing). */
+  private modelStrike(limb: 'armL' | 'armR', t: number, onsetT: number, style: StrikeStyle, body: Body): Intent {
+    const def = LIMBS[limb];
+    const s = this.limbs[limb];
+    const tip = body.points[def.tip], root = body.points[def.root];
+    const travel = len(s.travel) > 1e-3 ? s.travel : { x: tip.p.x - root.p.x, y: tip.p.y - root.p.y, z: 0 };
+    const dir = normalize(travel);
+    const speed = Math.hypot(tip.vf.x - root.vf.x, tip.vf.y - root.vf.y);
+    const otherGuard = this.otherInGuard(def, body);
+    return {
+      kind: 'strike', limb, t, onsetT, style,
+      height: heightOf('arm', tip.p, body),
+      dir: { out: dir.x * def.side, up: dir.y, fwd: dir.z },
+      speed: clamp((0.85 + 0.05 * (speed - 3)) * (otherGuard ? 1.08 : 0.94), 0.8, 1.3),
+      windup: 1,
+      reach: Math.max(s.disp, this.config.arm.strikeDist),
+      rawSpeed: speed,
+      otherGuard,
+    };
+  }
+
+  /** The other hand is up by the face or in front of the chest (its half of the guard zone). */
+  private otherInGuard(def: LimbDef, body: Body) {
+    if (def.kind !== 'arm') return false;
+    const g = this.config.guard;
+    const w = body.points[def.side === 1 ? LM.rWrist : LM.lWrist].p;
+    const nose = body.points[LM.nose].p;
+    const ls = body.points[LM.lShoulder].p, rs = body.points[LM.rShoulder].p;
+    return Math.hypot(w.x - nose.x, w.y - nose.y) < g.radius || (w.y > (ls.y + rs.y) / 2 - g.chestDrop && Math.abs(w.x - (ls.x + rs.x) / 2) < g.chestWidth);
+  }
+
+  /** Straight, hook or uppercut from the strike's shape so far (the player's own examples decide, if calibrated). */
+  private styleOf(def: LimbDef, s: LimbState, shoulder: Vec3): StrikeStyle {
+    const dir = normalize(s.peak);
+    const c = this.config.style;
+    const ruleStyle: StrikeStyle = s.overhand ? 'hook' : def.kind === 'arm' && Math.abs(s.peak.x) <= c.side && (s.peakExt > len(s.peak) || s.peakExt > c.ext || len(s.peak) < 0.6 * s.peakMidTravel)
+      ? 'straight'
+      : classify(def.kind, dir, dir.x * def.side, s.peakTip, s.peakMid, s.peakMidOut, s.peak, s.peakMidRise, c, shoulder.y, s.peakExt, s.peakElbow, s.peakTipSeen);
+    return def.kind === 'arm' && this.matcher ? this.matcher.decide(strikeFeatures(def, s, shoulder), ruleStyle) : ruleStyle;
   }
 
   /** A leg is kicking (its knee has come up for real) or just kicked: arm swings and leans now are balance. */
@@ -502,6 +671,16 @@ export class IntentReader {
     for (const n of ['armL', 'armR'] as const) if (this.limbs[n].phase === 'onset') this.lastArmStrike[n] = t;
     const since = (n: 'armL' | 'armR') => t - this.lastArmStrike[n];
     const punching = Math.min(since('armL'), since('armR')) < 500;
+    // Any fast hand, even a swing the reader didn't take for a strike (windmills, haymakers, overhead swings), throws
+    // the head around. On real play every slip and duck the reader saw came within 600 ms of one (hands at 3–13 body
+    // units/s, median 6); real slips and ducks keep the hands in guard (under ~2.5).
+    const handSpeed = (w: number, s: number) => Math.hypot(body.points[w].v.x - body.points[s].v.x, body.points[w].v.y - body.points[s].v.y);
+    const hands = Math.max(handSpeed(LM.lWrist, LM.lShoulder), handSpeed(LM.rWrist, LM.rShoulder));
+    if (hands > cfg.handsCalm.quiet) this.lastArmBurst = t;
+    // Ducking moves the guard a bit more (hands drop or tuck as the body goes down), so only a real swing blocks it.
+    if (hands > cfg.handsCalm.swing) this.lastArmSwing = t;
+    const handsCalm = t - this.lastArmBurst > cfg.handsCalm.ms;
+    const noSwing = t - this.lastArmSwing > cfg.handsCalm.ms;
     /** A head move starts on a frame that passes `start` and counts if the next frame still passes `hold`. */
     const held = (kind: 'jump' | 'duck' | 'dodge', start: boolean, hold: boolean) => {
       if (t - this.pendingCore[kind] <= 150 && hold) return true;
@@ -514,7 +693,7 @@ export class IntentReader {
     const dropSpeed = -headV.y;
     const duckK = punching ? 1.6 : 1;
     const dropping = headDrop > cfg.duck.drop * duckK;
-    if (held('duck', dropping && dropSpeed > cfg.duck.speed, dropping && dropSpeed > -cfg.duck.speed) && t - this.lastCore.duck > cfg.coreCooldownMs) {
+    if (held('duck', noSwing && dropping && dropSpeed > cfg.duck.speed, noSwing && dropping && dropSpeed > -cfg.duck.speed) && t - this.lastCore.duck > cfg.coreCooldownMs) {
       this.lastCore.duck = t;
       out.push({ kind: 'duck', t });
     }
@@ -542,19 +721,25 @@ export class IntentReader {
     const leaningFast = leaning && Math.sign(headV.x) === Math.sign(lean) && Math.abs(headV.x) > cfg.dodge.speed;
     // Kicking leans the body away from the kick, for balance.
     const kicking = this.kicking(t);
-    if (held('dodge', leaningFast && !kicking, leaning && !kicking && headV.x * Math.sign(lean) > -cfg.dodge.speed) && t - this.lastCore.dodge > cfg.coreCooldownMs) {
+    if (held('dodge', handsCalm && leaningFast && !kicking, handsCalm && leaning && !kicking && headV.x * Math.sign(lean) > -cfg.dodge.speed) && t - this.lastCore.dodge > cfg.coreCooldownMs) {
       this.lastCore.dodge = t;
       out.push({ kind: 'dodge', t, dir: lean > 0 ? 'L' : 'R' });
     }
 
-    // Guard: both wrists up near the face.
+    // Guard: both wrists up near the face, or both held up in front of the chest with the elbows bent: that's where
+    // real players keep them between swings (hackathon rounds: the lower hand a median 0.43 torso lengths under the
+    // shoulders; labeled blocks sit inside both zones).
     const lw = body.points[LM.lWrist].p;
     const rw = body.points[LM.rWrist].p;
-    // Hysteresis: up inside the radius, down only once a hand is clearly away, so it doesn't flicker.
-    const radius = this.guardUp ? cfg.guard.radius * 1.35 : cfg.guard.radius;
-    const near = (w: Vec3) => Math.hypot(w.x - nose.p.x, w.y - nose.p.y) < radius;
+    // Hysteresis: up inside the zone, down only once a hand is clearly out of it, so it doesn't flicker.
+    const k = this.guardUp ? 1.35 : 1;
+    const near = (w: Vec3) => Math.hypot(w.x - nose.p.x, w.y - nose.p.y) < cfg.guard.radius * k;
+    const shoulderY = (ls.p.y + rs.p.y) / 2;
+    const centerX = (ls.p.x + rs.p.x) / 2;
+    const chest = (w: Vec3) => w.y > shoulderY - cfg.guard.chestDrop * k && Math.abs(w.x - centerX) < cfg.guard.chestWidth * k;
+    const bent = Math.max(body.elbow.L, body.elbow.R) < cfg.guard.maxElbow + (this.guardUp ? 10 : 0);
     const striking = this.limbs.armL.phase === 'onset' || this.limbs.armR.phase === 'onset';
-    const inGuard = near(lw) && near(rw) && !striking;
+    const inGuard = ((near(lw) && near(rw)) || (chest(lw) && chest(rw) && bent)) && !striking;
     if (inGuard === this.guardUp) this.guardSince = null;
     else {
       this.guardSince ??= t;
@@ -575,7 +760,7 @@ export class IntentReader {
       tracked: true,
     };
     this.debug = {
-      limbs: Object.fromEntries(LIMB_NAMES.map((n) => [n, { phase: this.limbs[n].phase, disp: this.limbs[n].disp, out: this.limbs[n].out }])) as IntentDebug['limbs'],
+      limbs: Object.fromEntries(LIMB_NAMES.map((n) => [n, { phase: this.limbs[n].phase, disp: this.limbs[n].disp, out: this.limbs[n].out, blocked: this.limbs[n].blocked }])) as IntentDebug['limbs'],
       headDrop,
       lean,
       rootY: body.root.y,
@@ -600,6 +785,7 @@ function toCommands(player: PlayerId, intents: Intent[]): Command[] {
         height: intent.height === 'high' ? 'head' : 'body',
         speed: intent.speed,
         windup: intent.windup,
+        heavy: intent.heavy,
       });
     } else if (intent.kind === 'duck') {
       commands.push({ kind: 'defend', player, t: intent.t, move: 'duck' });
@@ -638,6 +824,12 @@ function strikeLike(def: LimbDef, tip: Vec3, mid: Vec3, disp: number) {
   return Math.max(fwd, up, inward) > 0.35 * disp;
 }
 
+/** Going down and also in across the body or toward the camera: an overhand's path, not hands dropping to the sides. */
+function choppingIn(def: LimbDef, tip: Vec3, disp: number) {
+  const inward = -tip.x * def.side;
+  return disp > 0.1 && tip.y < -0.3 * disp && Math.max(inward, tip.z) > 0.25 * disp;
+}
+
 /**
  * The elbow straightening also counts as a strike (a punch at the camera), unless the hand is mostly
  * dropping or swinging outward: that's the dip before an uppercut or the wind-up before a hook.
@@ -657,11 +849,14 @@ function windingUp(def: LimbDef, tip: Vec3) {
  * uppercuts are one hand at a time. `bothCameUp`: this hand came up from low (not from guard) right as the
  * other one rose too.
  */
-function bothHandsUp(body: Body, limb: LimbName, travel: Vec3, bothCameUp: boolean) {
+function bothHandsUp(body: Body, limb: LimbName, travel: Vec3, bothCameUp: boolean, otherAtOnset: Vec3) {
   if (travel.y < 0.15 || travel.y < 0.5 * len(travel)) return false;
   const other = body.points[limb === 'armL' ? LM.rWrist : LM.lWrist];
   const otherShoulder = body.points[limb === 'armL' ? LM.rShoulder : LM.lShoulder];
-  return bothCameUp || other.vf.y - otherShoulder.vf.y > 1.0;
+  // The other hand has to have really come up since this one started, not just be moving against its shoulder: in a
+  // big overhead swing the other shoulder dips, and a hand held still in guard seems to rise.
+  const otherRise = other.p.y - otherShoulder.p.y - otherAtOnset.y;
+  return bothCameUp || (other.vf.y - otherShoulder.vf.y > 1.0 && otherRise > 0.15);
 }
 
 /**
@@ -698,7 +893,8 @@ function otherHandAlong(body: Body, def: LimbDef, s: LimbState, tip: Vec3, shoul
   const ox = o.x - os.x - s.otherAtOnset.x, oy = o.y - os.y - s.otherAtOnset.y;
   const mx = tip.x - shoulder.x - s.tipAtOnset.x, my = tip.y - shoulder.y - s.tipAtOnset.y;
   const a = Math.hypot(mx, my), b = Math.hypot(ox, oy);
-  if (a < 0.05 || b < 0.5 * a) return false;
+  // Comparable: at least 70% as far (an arm swinging round in a windmill drags the other along a little).
+  if (a < 0.05 || b < 0.7 * a) return false;
   return (mx * ox + my * oy) / (a * b) > 0.8;
 }
 
@@ -736,25 +932,24 @@ function raisingGuard(body: Body, limb: LimbName, start: Vec3, end: Vec3, radius
   return startedLow && endsUp && (otherUp || otherRose);
 }
 
-/** An uppercut's forearm stands within this of vertical (radians); laid over further, a rising fist is a hook. */
-const UPPER_MAX_TILT = (30 * Math.PI) / 180;
-
-function classify(kind: 'arm' | 'leg', dir: Vec3, out: number, tip: Vec3, mid: Vec3, midOut: number, travel: Vec3, midRise: number, ext = 0, elbow = 180, tipSeen = true): StrikeStyle {
+function classify(kind: 'arm' | 'leg', dir: Vec3, out: number, tip: Vec3, mid: Vec3, midOut: number, travel: Vec3, midRise: number, c: IntentConfig['style'], shoulderY: number, ext = 0, elbow = 180, tipSeen = true): StrikeStyle {
   // Kick: the foot comes up near knee height. Knee strike: the knee rises with the foot tucked under it (or out of
   // view: the fight engine picks knee or kick from the distance anyway).
   if (kind === 'leg') return tipSeen && tip.y > mid.y - 0.3 ? 'kick' : 'knee';
   // A big sideways sweep is a hook (or a haymaker), however straight the arm.
-  if (Math.abs(travel.x) > 0.45 && Math.abs(out) > 0.6) return 'hook';
+  if (Math.abs(travel.x) > c.side && Math.abs(out) > c.hookOut) return 'hook';
   // Uppercut: the fist drives up much more than the elbow (a punch at the camera lifts the elbow more), with the forearm
   // standing up: fist over the elbow. A rising fist with the forearm laid over (swinging across the chest) is a hook,
   // the punch most real players throw (vision-labeled 1v1 rounds: 135 of 151 rising reads were hooks). The forearm's
   // tilt holds up when the camera is off to the side, where sideways travel doesn't.
-  if (dir.y > 0.6 && travel.y > 0.3 && travel.y > 1.5 * midRise) {
+  if (dir.y > c.upDir && travel.y > 0.3 && travel.y > c.upRise * midRise) {
     const tilt = Math.atan2(Math.abs(tip.x - mid.x), tip.y - mid.y);
-    return tilt > UPPER_MAX_TILT ? 'hook' : 'upper';
+    // An uppercut keeps the elbow down by the ribs; swinging the elbow up to the shoulder is an overhand coming over
+    // the top (the most common real swing; the rules called a third of real overhands uppercuts).
+    return tilt > (c.upTilt * Math.PI) / 180 || mid.y > shoulderY - c.upElbow ? 'hook' : 'upper';
   }
   // Smaller sideways swing with the elbow flared: a tight hook. A cross drifts inward but stays tucked.
-  if (Math.abs(out) > 0.6 && midOut > 0.05) return 'hook';
+  if (Math.abs(out) > c.hookOut && midOut > 0.05) return 'hook';
   // Fist sweeping across the body with the elbow staying bent (a cross straightens the elbow as it drifts in).
   const inward = -out * len(travel);
   if (inward > 0.2 && inward >= 0.8 * travel.y && ext < 0.1 && elbow < 100) return 'hook';
@@ -778,8 +973,8 @@ function windupOf(s: LimbState, dir: Vec3) {
 
 function newLimb(): LimbState {
   return {
-    phase: 'idle', rest: null, anchor: null, since: 0, grewAt: 0, peakDisp: 0, peakSpeed: 0,
-    peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, peakMidTravel: 0, peakMidOut: 0, anchorTip: { x: 0, y: 0, z: 0 }, peakElbow: 0, peakTipSeen: false, history: [], typicalSpeed: 4, extended: null, lastRestDisp: 0, rearmedAt: -Infinity, nearFaceAt: -Infinity, faceBeforeOnset: -Infinity, risingAt: -Infinity, travel: { x: 0, y: 0, z: 0 }, tipAtOnset: { x: 0, y: 0, z: 0 }, otherAtOnset: { x: 0, y: 0, z: 0 }, disp: 0, out: 0,
+    phase: 'idle', overhand: false, topY: 0, struckAt: -Infinity, homeAt: -Infinity, quietAt: -Infinity, onsetAt: 0, style: 'straight', restyleDone: true, rest: null, anchor: null, since: 0, grewAt: 0, peakDisp: 0, peakSpeed: 0,
+    peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, peakMidTravel: 0, peakMidOut: 0, anchorTip: { x: 0, y: 0, z: 0 }, peakElbow: 0, peakTipSeen: false, history: [], extended: null, lastRestDisp: 0, rearmedAt: -Infinity, nearFaceAt: -Infinity, faceBeforeOnset: -Infinity, risingAt: -Infinity, travel: { x: 0, y: 0, z: 0 }, tipAtOnset: { x: 0, y: 0, z: 0 }, otherAtOnset: { x: 0, y: 0, z: 0 }, disp: 0, out: 0, blocked: null,
   };
 }
 
