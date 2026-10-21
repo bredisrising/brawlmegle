@@ -53,6 +53,11 @@ const ARM_QUIET_MS = 600;
  * cancelled as "not a punch" before).
  */
 const OVERHEAD_PUNCH_SPEED = 4;
+/** Overhands start with the hand this far above its shoulder (body units) and come down faster than OVERHAND_SPEED. */
+const OVERHAND_START = 0.05;
+const OVERHAND_SPEED = 4.5;
+/** An arm moving at under this share of its speed away from its anchor has turned: re-anchor there. */
+const ARC_REANCHOR = 0.3;
 const LIMB_NAMES = Object.keys(LIMBS) as LimbName[];
 const PARTNER: Record<LimbName, LimbName> = { armL: 'armR', armR: 'armL', legL: 'legR', legR: 'legL' };
 
@@ -63,6 +68,8 @@ const PARTNER: Record<LimbName, LimbName> = { armL: 'armR', armR: 'armL', legL: 
 type Pair = { tip: Vec3; mid: Vec3; ext: number; head: Vec3; seen: boolean };
 type LimbState = {
   phase: 'idle' | 'onset' | 'recover';
+  /** This strike started as an overhand (chopping down from above the shoulder). */
+  overhand: boolean;
   /** Usual position (guard or relaxed); "back near rest" means ready to strike again. */
   rest: Pair | null;
   /** Where the limb last paused. Strikes are measured from here, so a cocked-back hook or a dropped
@@ -113,10 +120,12 @@ type LimbState = {
   // Debug readouts
   disp: number;
   out: number;
+  /** Why a fast enough, far enough motion didn't start a strike this frame (null: it did, or it wasn't). */
+  blocked: string | null;
 };
 
 export type IntentDebug = {
-  limbs: Record<LimbName, { phase: LimbState['phase']; disp: number; out: number }>;
+  limbs: Record<LimbName, { phase: LimbState['phase']; disp: number; out: number; blocked: string | null }>;
   headDrop: number;
   lean: number;
   rootY: number;
@@ -354,22 +363,34 @@ export class IntentReader {
         // Coming back from the last strike: the next one starts from wherever the retraction turns around
         // (fast combos never get back to guard).
         s.anchor = clonePair(now);
+      } else if (def.kind === 'arm' && outward < ARC_REANCHOR * speed) {
+        // Moving, but not away from where it last paused: a windmill or a looping swing that never stops. The swing
+        // starts from where it turned (real play: most missed swings never "went outward" from a stale anchor).
+        s.anchor = clonePair(now);
       }
+      // An overhand: the hand starts up above the shoulder and chops down fast, over the top and in or toward the
+      // camera. A third of real players' swings are these (hackathon rounds), so the two rules below spare them.
+      const overhand = def.kind === 'arm' && s.anchor.tip.y > OVERHAND_START && vel.tip.y < -OVERHAND_SPEED && choppingIn(def, tTip, disp);
       // A hand dropping fast (back to the lap, or lowering the guard) can't be starting a punch.
-      const dropping = def.kind === 'arm' && vel.tip.y < -1.2;
+      const dropping = def.kind === 'arm' && vel.tip.y < -1.2 && !overhand;
       // An arm already up in the air (elbow at shoulder height, hand above it: waving, a hand on the head) isn't
-      // throwing a punch, whatever it does next. Punches start from a guard, elbow down.
-      const raised = def.kind === 'arm' && s.anchor.mid.y > -0.15 && s.anchor.tip.y - s.anchor.mid.y > 0.25;
+      // throwing a punch, unless it chops down. Punches start from a guard, elbow down.
+      const raised = def.kind === 'arm' && s.anchor.mid.y > -0.15 && s.anchor.tip.y - s.anchor.mid.y > 0.25 && !overhand;
       // Mid-kick, the arms swing for balance and the standing leg shifts: neither is a strike.
       const partner = this.limbs[PARTNER[name]];
       const busy = legs ? partner.phase === 'recover' && t - partner.since < 500 : this.kicking(t);
-      if (visible && !dropping && !raised && !busy && outward > cfg.onsetSpeed && disp > cfg.onsetDist && (strikeLike(def, tTip, tMid, disp) || extensionStrike(def, tTip, tExt, disp))) {
+      const shaped = strikeLike(def, tTip, tMid, disp) || extensionStrike(def, tTip, tExt, disp) || overhand;
+      // Fast enough and far enough but held back: say why (the tuner and the evals show it).
+      s.blocked = outward > cfg.onsetSpeed && disp > cfg.onsetDist
+        ? (!visible ? 'not visible' : dropping ? 'dropping' : raised ? 'raised' : busy ? 'busy' : !shaped ? 'not strike-shaped' : null)
+        : null;
+      if (visible && !dropping && !raised && !busy && outward > cfg.onsetSpeed && disp > cfg.onsetDist && shaped) {
         if (!legs) {
           const o = body.points[def.side === 1 ? LM.rWrist : LM.lWrist].p, os = body.points[def.side === 1 ? LM.rShoulder : LM.lShoulder].p;
           s.otherAtOnset = { x: o.x - os.x, y: o.y - os.y, z: 0 };
           s.tipAtOnset = { x: tipPt.p.x - root.p.x, y: tipPt.p.y - root.p.y, z: 0 };
         }
-        Object.assign(s, { phase: 'onset', since: t, grewAt: t, faceBeforeOnset: s.nearFaceAt, peakDisp: disp, peakSpeed: outward, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: legs ? 0 : body.elbow[side], peakTipSeen: tipPt.visibility > 0.3, anchorTip: { x: tipPt.p.x - tTip.x, y: tipPt.p.y - tTip.y, z: tipPt.p.z } });
+        Object.assign(s, { phase: 'onset', overhand, since: t, grewAt: t, faceBeforeOnset: s.nearFaceAt, peakDisp: disp, peakSpeed: outward, peak: { ...tTip }, peakTip: { ...tipPt.p }, peakMid: { ...midPt.p }, peakMidRise: tMid.y, peakExt: tExt, peakMidTravel: len(tMid), peakMidOut: tMid.x * def.side, peakElbow: legs ? 0 : body.elbow[side], peakTipSeen: tipPt.visibility > 0.3, anchorTip: { x: tipPt.p.x - tTip.x, y: tipPt.p.y - tTip.y, z: tipPt.p.z } });
         out.push({ kind: 'anticipate', limb: name, t });
       }
       return;
@@ -398,7 +419,7 @@ export class IntentReader {
       // Legs must also lift the knee above where it usually sits, so stepping isn't kicking (a step lifts the foot).
       const lift = s.peakMidRise;
       // Punches don't travel down: an arm straightening as the hand drops (back to the lap) isn't a strike.
-      const goingDown = def.kind === 'arm' && s.peak.y < -0.15 && s.peak.y < -0.5 * len(s.peak);
+      const goingDown = def.kind === 'arm' && !s.overhand && s.peak.y < -0.15 && s.peak.y < -0.5 * len(s.peak);
       const reason = s.peakDisp < needed || (def.kind === 'leg' && lift < this.config.legRise) ? 'too small'
         : legs && this.supportLeg(name, t) ? 'support leg'
         : def.kind === 'arm' && this.kicking(t) ? 'not a punch'
@@ -421,7 +442,7 @@ export class IntentReader {
       const speedRatio = s.peakSpeed / s.typicalSpeed;
       s.typicalSpeed += 0.2 * (s.peakSpeed - s.typicalSpeed);
       const features = def.kind === 'arm' ? strikeFeatures(def, s, root.p) : undefined;
-      const ruleStyle: StrikeStyle = def.kind === 'arm' && Math.abs(s.peak.x) <= 0.45 && (s.peakExt > len(s.peak) || s.peakExt > 0.15 || len(s.peak) < 0.6 * s.peakMidTravel)
+      const ruleStyle: StrikeStyle = s.overhand ? 'hook' : def.kind === 'arm' && Math.abs(s.peak.x) <= 0.45 && (s.peakExt > len(s.peak) || s.peakExt > 0.15 || len(s.peak) < 0.6 * s.peakMidTravel)
         ? 'straight'
         : classify(def.kind, dir, strikeOut, s.peakTip, s.peakMid, s.peakMidOut, s.peak, s.peakMidRise, s.peakExt, s.peakElbow, s.peakTipSeen);
       const style = features && this.matcher ? this.matcher.decide(features, ruleStyle) : ruleStyle;
@@ -600,7 +621,7 @@ export class IntentReader {
       tracked: true,
     };
     this.debug = {
-      limbs: Object.fromEntries(LIMB_NAMES.map((n) => [n, { phase: this.limbs[n].phase, disp: this.limbs[n].disp, out: this.limbs[n].out }])) as IntentDebug['limbs'],
+      limbs: Object.fromEntries(LIMB_NAMES.map((n) => [n, { phase: this.limbs[n].phase, disp: this.limbs[n].disp, out: this.limbs[n].out, blocked: this.limbs[n].blocked }])) as IntentDebug['limbs'],
       headDrop,
       lean,
       rootY: body.root.y,
@@ -661,6 +682,12 @@ function strikeLike(def: LimbDef, tip: Vec3, mid: Vec3, disp: number) {
   const up = tip.y + 0.5 * mid.y;
   const inward = -(tip.x + 0.5 * mid.x) * def.side;
   return Math.max(fwd, up, inward) > 0.35 * disp;
+}
+
+/** Going down and also in across the body or toward the camera: an overhand's path, not hands dropping to the sides. */
+function choppingIn(def: LimbDef, tip: Vec3, disp: number) {
+  const inward = -tip.x * def.side;
+  return disp > 0.1 && tip.y < -0.3 * disp && Math.max(inward, tip.z) > 0.25 * disp;
 }
 
 /**
@@ -806,8 +833,8 @@ function windupOf(s: LimbState, dir: Vec3) {
 
 function newLimb(): LimbState {
   return {
-    phase: 'idle', rest: null, anchor: null, since: 0, grewAt: 0, peakDisp: 0, peakSpeed: 0,
-    peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, peakMidTravel: 0, peakMidOut: 0, anchorTip: { x: 0, y: 0, z: 0 }, peakElbow: 0, peakTipSeen: false, history: [], typicalSpeed: 4, extended: null, lastRestDisp: 0, rearmedAt: -Infinity, nearFaceAt: -Infinity, faceBeforeOnset: -Infinity, risingAt: -Infinity, travel: { x: 0, y: 0, z: 0 }, tipAtOnset: { x: 0, y: 0, z: 0 }, otherAtOnset: { x: 0, y: 0, z: 0 }, disp: 0, out: 0,
+    phase: 'idle', overhand: false, rest: null, anchor: null, since: 0, grewAt: 0, peakDisp: 0, peakSpeed: 0,
+    peak: { x: 0, y: 0, z: 0 }, peakTip: { x: 0, y: 0, z: 0 }, peakMid: { x: 0, y: 0, z: 0 }, peakMidRise: 0, peakExt: 0, peakMidTravel: 0, peakMidOut: 0, anchorTip: { x: 0, y: 0, z: 0 }, peakElbow: 0, peakTipSeen: false, history: [], typicalSpeed: 4, extended: null, lastRestDisp: 0, rearmedAt: -Infinity, nearFaceAt: -Infinity, faceBeforeOnset: -Infinity, risingAt: -Infinity, travel: { x: 0, y: 0, z: 0 }, tipAtOnset: { x: 0, y: 0, z: 0 }, otherAtOnset: { x: 0, y: 0, z: 0 }, disp: 0, out: 0, blocked: null,
   };
 }
 
