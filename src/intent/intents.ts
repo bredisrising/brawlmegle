@@ -23,7 +23,9 @@ export type Intent =
       /** Unit direction of the strike in body space: x = outward from this limb's side, y = up, z = toward camera. */
       dir: { out: number; up: number; fwd: number };
       speed: number; // 0.8–1.3: how fast (the same scale for everyone), a bit more with the other hand up in guard
-      windup: number; // 0.8–1.3, how far they loaded up first (a big one is a heavy: slower, harder)
+      windup: number; // 0.8–1.3, how far they loaded up first
+      /** Loaded up and held before throwing it: a heavy (slower, harder, parryable). */
+      heavy?: boolean;
       reach: number; // peak displacement from rest, body units
       /** Peak outward speed in body units per second (raw, not relative). */
       rawSpeed: number;

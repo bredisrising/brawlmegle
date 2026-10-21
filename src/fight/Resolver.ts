@@ -72,6 +72,7 @@ export class Resolver {
       height: intent.height === 'high' || opponent.phase === 'hitstun' ? 'head' : 'body',
       speed: intent.speed,
       windup: intent.windup,
+      heavy: intent.heavy,
       lunge,
       autoLunge: true,
       // The fighter has been showing the wind-up since the motion started (the 'anticipate' tell).

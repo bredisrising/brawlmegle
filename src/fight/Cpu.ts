@@ -329,9 +329,9 @@ export class Cpu {
     const lunge = move !== 'fireball' && d > reach(move) ? Math.min(MAX_LUNGE, d - reach(move)) : 0;
     const body = move === 'hook' ? this.rng() < 0.35 : move === 'jab' || move === 'cross' ? this.rng() < 0.15 : false;
     const power = this.spec.power;
-    const windup = this.heavy ? 1.3 : 1;
+    const heavy = this.heavy;
     this.heavy = false;
-    return { kind: 'attack', player: this.player, t, move, hand: handFor(move), height: body ? 'body' : 'head', speed: power, windup, lunge };
+    return { kind: 'attack', player: this.player, t, move, hand: handFor(move), height: body ? 'body' : 'head', speed: power, windup: heavy ? 1.3 : 1, heavy, lunge };
   }
 
   private pickDefense(move: AttackMove): Defense {

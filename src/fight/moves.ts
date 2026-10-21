@@ -78,8 +78,7 @@ export const FIGHT = {
   guardRegenDelay: 0.5,
   guardLockout: 2.5,
   guardCrushStun: 20,
-  /** A punch loaded up at least this much (Command.windup) is a heavy: heavyStartup frames slower, heavyDamage x windup. */
-  heavyWindup: 1.15,
+  /** A heavy (Command.heavy): heavyStartup frames slower, heavyDamage x windup. */
   heavyStartup: 6,
   heavyDamage: 1.15,
   /**

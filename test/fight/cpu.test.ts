@@ -15,7 +15,7 @@ const cpu = (player: PlayerId, level: CpuLevel, seed: number): Driver => {
 /** Stands there: no attacks, no guard, no lean. */
 const passive = (player: PlayerId): Driver => () => ({ commands: [], stance: stance(player) });
 /** Walks in and throws `moves` in turn every `every` ticks, lunging like the resolver does. No defense. */
-const attacker = (player: PlayerId, every: number, moves: AttackMove[], windup = 1): Driver => {
+const attacker = (player: PlayerId, every: number, moves: AttackMove[], heavy = false): Driver => {
   let n = 0;
   return (e, tick) => {
     const d = e.distance();
@@ -23,7 +23,7 @@ const attacker = (player: PlayerId, every: number, moves: AttackMove[], windup =
     if (tick % every === 0 && e.state(player).phase === 'idle') {
       const move = moves[n++ % moves.length];
       const reach = MOVES[move].range * 0.9;
-      commands.push({ kind: 'attack', player, t: tick, move, hand: 'L', height: 'head', speed: 1, windup, lunge: d > reach ? Math.min(0.4, d - reach) : 0 });
+      commands.push({ kind: 'attack', player, t: tick, move, hand: 'L', height: 'head', speed: 1, windup: heavy ? 1.3 : 1, heavy, lunge: d > reach ? Math.min(0.4, d - reach) : 0 });
     }
     return { commands, stance: stance(player, { advance: d > 0.75 ? 0.6 : 0 }) };
   };
@@ -127,7 +127,7 @@ describe('cpu opponent', () => {
   test('it throws the odd heavy, and a hard one parries heavies it sees coming', () => {
     const heavies = fight(passive('p1'), cpu('p2', 'normal', 2), 60).events.filter((ev) => ev.attacker === 'p2' && (ev.type === 'hit' || ev.type === 'counter') && ev.damage! > MOVES.hook.damage);
     expect(heavies.length).toBeGreaterThan(0);
-    const parries = [1, 2, 3].flatMap((seed) => fight(attacker('p1', 80, ['cross', 'hook'], 1.3), cpu('p2', 'hard', seed), 40).events.filter((ev) => ev.type === 'parry'));
+    const parries = [1, 2, 3].flatMap((seed) => fight(attacker('p1', 80, ['cross', 'hook'], true), cpu('p2', 'hard', seed), 40).events.filter((ev) => ev.type === 'parry'));
     expect(parries.length).toBeGreaterThan(0);
     expect(parries.every((ev) => ev.attacker === 'p1')).toBe(true);
   });

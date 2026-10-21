@@ -133,20 +133,20 @@ describe('heavies and parries', () => {
 
   test('a big wind-up is a heavy: slower, and it hits harder', () => {
     const normal = play(attack('p1', 'cross'), () => false).events.find((ev) => ev.type === 'hit')!;
-    const heavy = play(attack('p1', 'cross', { windup: 1.3 }), () => false).events.find((ev) => ev.type === 'hit')!;
+    const heavy = play(attack('p1', 'cross', { windup: 1.3, heavy: true }), () => false).events.find((ev) => ev.type === 'hit')!;
     expect(heavy.damage!).toBeGreaterThan(normal.damage!);
     expect(heavy.t).toBeGreaterThan(normal.t);
   });
 
   test('a guard raised just before a heavy lands parries it: no damage, the attacker reels', () => {
-    const { e, events } = play(attack('p1', 'cross', { windup: 1.3 }), guardFrom(heavyAt - 4));
+    const { e, events } = play(attack('p1', 'cross', { windup: 1.3, heavy: true }), guardFrom(heavyAt - 4));
     expect(events.map((ev) => ev.type)).toContain('parry');
     expect(e.state('p2').hp).toBe(FIGHT.maxHp);
     expect(events.some((ev) => ev.type === 'hit' || ev.type === 'blocked')).toBe(false);
   });
 
   test('a guard held up long before only blocks a heavy, and a normal punch is never parried', () => {
-    expect(play(attack('p1', 'cross', { windup: 1.3 }), () => true).events.map((ev) => ev.type)).toContain('blocked');
+    expect(play(attack('p1', 'cross', { windup: 1.3, heavy: true }), () => true).events.map((ev) => ev.type)).toContain('blocked');
     const normal = play(attack('p1', 'cross'), guardFrom(MOVES.cross.startup - 4)).events.map((ev) => ev.type);
     expect(normal).toContain('blocked');
     expect(normal).not.toContain('parry');
