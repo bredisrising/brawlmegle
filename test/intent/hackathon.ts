@@ -49,6 +49,8 @@ export type SideScore = {
   ducks: number;
   blocks: number;
   blocksGuarded: number;
+  /** Share of the side's time the guard was up. */
+  guardShare: number;
 };
 
 const LENIENT: Record<string, string> = { overhand: 'hook' };
@@ -102,6 +104,8 @@ export function scoreSide(side: HackSide, intents: Intent[]): SideScore {
   }).length;
   const t0 = side.frames[0]?.t ?? 0;
   const t1 = side.until ?? side.frames[side.frames.length - 1]?.t ?? t0;
+  let upMs = 0;
+  for (let t = t0; t < t1; t += 33) if (guardUpAt(t)) upMs += 33;
   return {
     id: side.id,
     minutes: (t1 - t0) / 60000,
@@ -114,6 +118,7 @@ export function scoreSide(side: HackSide, intents: Intent[]): SideScore {
     ducks: intents.filter((i) => i.kind === 'duck').length,
     blocks: blocks.length,
     blocksGuarded,
+    guardShare: t1 > t0 ? upMs / (t1 - t0) : 0,
   };
 }
 
@@ -129,7 +134,7 @@ const median = (xs: number[]) => {
 
 export type HackSummary = {
   sides: number; strikes: number; recall: number; arm: number; style: number; earlyStyle: number; lenient: number; precision: number;
-  fakesPerMin: number; dodgesPerMin: number; ducks: number; blocks: string; onsetMs: number; confirmMs: number; cleanRecall: number;
+  fakesPerMin: number; dodgesPerMin: number; ducks: number; blocks: string; guardShare: number; onsetMs: number; confirmMs: number; cleanRecall: number;
 };
 
 export function summarizeHackathon(scores: SideScore[]): HackSummary {
@@ -153,6 +158,7 @@ export function summarizeHackathon(scores: SideScore[]): HackSummary {
     dodgesPerMin: sum((s) => s.dodges) / minutes,
     ducks: sum((s) => s.ducks),
     blocks: `${sum((s) => s.blocksGuarded)}/${sum((s) => s.blocks)}`,
+    guardShare: sum((s) => s.guardShare * s.minutes) / minutes,
     onsetMs: median(sameArm.map((m) => m.onset)),
     confirmMs: median(sameArm.map((m) => m.confirm)),
     cleanRecall: clean / Math.max(1, cleanLabels),
@@ -162,6 +168,6 @@ export function summarizeHackathon(scores: SideScore[]): HackSummary {
 export function formatSummary(name: string, s: HackSummary) {
   const p = (x: number) => `${(100 * x).toFixed(1)}%`;
   return `${name.padEnd(14)} recall ${p(s.recall)} arm ${p(s.arm)} style ${p(s.style)} (at confirm ${p(s.earlyStyle)}, lenient ${p(s.lenient)}) precision ${p(s.precision)} ` +
-    `fakes/min ${s.fakesPerMin.toFixed(1)} dodges/min ${s.dodgesPerMin.toFixed(1)} ducks ${s.ducks} blocks ${s.blocks} ` +
+    `fakes/min ${s.fakesPerMin.toFixed(1)} dodges/min ${s.dodgesPerMin.toFixed(1)} ducks ${s.ducks} blocks ${s.blocks} guard up ${p(s.guardShare)} ` +
     `clean ${p(s.cleanRecall)} onset ${Math.round(s.onsetMs)} confirm ${Math.round(s.confirmMs)} ms (${s.sides} sides, ${s.strikes} strikes)`;
 }

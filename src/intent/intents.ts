@@ -73,7 +73,11 @@ export type IntentConfig = {
   jump: { rise: number; speed: number };
   duck: { drop: number; speed: number };
   dodge: { shift: number; speed: number };
-  guard: { radius: number; holdMs: number };
+  /**
+   * Guard: both wrists within `radius` of the nose, or both no lower than `chestDrop` under the shoulders and within
+   * `chestWidth` of the body's middle with the elbows bent under `maxElbow` degrees (a chest guard).
+   */
+  guard: { radius: number; holdMs: number; chestDrop: number; chestWidth: number; maxElbow: number };
   /** Torso size ratio beyond which the player counts as stepping in or backing off. */
   advance: { in: number; out: number };
   /** Ignore the same core move (jump, duck, dodge) again within this long. */
@@ -92,7 +96,7 @@ export const DEFAULT_INTENT: IntentConfig = {
   jump: { rise: 0.1, speed: 1.0 },
   duck: { drop: 0.28, speed: 1.0 },
   dodge: { shift: 0.13, speed: 0.6 },
-  guard: { radius: 0.5, holdMs: 120 },
+  guard: { radius: 0.5, holdMs: 120, chestDrop: 0.6, chestWidth: 0.5, maxElbow: 150 },
   advance: { in: 0.08, out: 0.07 },
   coreCooldownMs: 450,
   staleMs: 300,

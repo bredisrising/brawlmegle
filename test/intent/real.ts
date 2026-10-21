@@ -90,7 +90,11 @@ export function scoreGuided(file: string, config: IntentConfig = DEFAULT_INTENT,
       verdict = fake.length ? `${fake.length} FAKE` : 'ok';
     } else {
       s.other++;
-      const ok = during.some((i) => i.kind === l.expect.kind && (i.kind !== 'guard' || i.up) && (i.kind !== 'dodge' || !l.expect.dir || i.dir === l.expect.dir));
+      // A guard counts if it's up during the prompt, even when it went up before (a chest guard often already is).
+      const guardUp = (t: number) => shown.filter((i): i is Extract<Intent, { kind: 'guard' }> => i.kind === 'guard' && i.t <= t).pop()?.up ?? false;
+      const ok = l.expect.kind === 'guard'
+        ? Array.from({ length: Math.max(1, Math.round((l.end - l.start) / 100)) }, (_, k) => l.start + k * 100).some(guardUp)
+        : during.some((i) => i.kind === l.expect.kind && (i.kind !== 'dodge' || !l.expect.dir || i.dir === l.expect.dir));
       if (ok) s.otherOk++;
       const fake = actions(during).filter((i) => !(i.kind === l.expect.kind && (i.kind !== 'dodge' || !l.expect.dir || i.dir === l.expect.dir)));
       s.fakes += fake.length;

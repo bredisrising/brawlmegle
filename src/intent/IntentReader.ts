@@ -627,14 +627,20 @@ export class IntentReader {
       out.push({ kind: 'dodge', t, dir: lean > 0 ? 'L' : 'R' });
     }
 
-    // Guard: both wrists up near the face.
+    // Guard: both wrists up near the face, or both held up in front of the chest with the elbows bent: that's where
+    // real players keep them between swings (hackathon rounds: the lower hand a median 0.43 torso lengths under the
+    // shoulders; labeled blocks sit inside both zones).
     const lw = body.points[LM.lWrist].p;
     const rw = body.points[LM.rWrist].p;
-    // Hysteresis: up inside the radius, down only once a hand is clearly away, so it doesn't flicker.
-    const radius = this.guardUp ? cfg.guard.radius * 1.35 : cfg.guard.radius;
-    const near = (w: Vec3) => Math.hypot(w.x - nose.p.x, w.y - nose.p.y) < radius;
+    // Hysteresis: up inside the zone, down only once a hand is clearly out of it, so it doesn't flicker.
+    const k = this.guardUp ? 1.35 : 1;
+    const near = (w: Vec3) => Math.hypot(w.x - nose.p.x, w.y - nose.p.y) < cfg.guard.radius * k;
+    const shoulderY = (ls.p.y + rs.p.y) / 2;
+    const centerX = (ls.p.x + rs.p.x) / 2;
+    const chest = (w: Vec3) => w.y > shoulderY - cfg.guard.chestDrop * k && Math.abs(w.x - centerX) < cfg.guard.chestWidth * k;
+    const bent = Math.max(body.elbow.L, body.elbow.R) < cfg.guard.maxElbow + (this.guardUp ? 10 : 0);
     const striking = this.limbs.armL.phase === 'onset' || this.limbs.armR.phase === 'onset';
-    const inGuard = near(lw) && near(rw) && !striking;
+    const inGuard = ((near(lw) && near(rw)) || (chest(lw) && chest(rw) && bent)) && !striking;
     if (inGuard === this.guardUp) this.guardSince = null;
     else {
       this.guardSince ??= t;
