@@ -7,10 +7,12 @@ const MOVES: [name: string, how: string][] = [
   ['Hook', 'Swing a fist round from the side, elbow bent.'],
   ['Uppercut', 'Dip a fist, then drive it up, elbow bent.'],
   ['Combo', 'Punch after punch, each one big and clear: rushed little ones get missed.'],
-  ['Block', 'Both fists up in front of your face. Hold.'],
-  ['Duck', 'Drop your head and shoulders quickly.'],
-  ['Dodge', 'Lean your head quickly to one side.'],
-  ['Kick / knee', 'Standing: lift a knee fast. Breaks a block.'],
+  ['Heavy', 'Pull a fist back, hold it a beat, then swing. Hits harder, but they see it coming.'],
+  ['Block', 'Both fists up, by your face or in front of your chest.'],
+  ['Parry', 'Get your guard up just as a heavy comes in: it bounces off and they are wide open.'],
+  ['Duck', 'Hands still, drop your head and shoulders quickly.'],
+  ['Dodge', 'Hands still, lean your head and shoulders to one side.'],
+  ['Kick / knee', 'Only with your legs in the shot: lift a knee fast. Breaks a block.'],
 ];
 
 /**

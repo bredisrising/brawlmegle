@@ -8,9 +8,12 @@ const MAIN = "Don't rush: make every move big and clear, then come back to your 
 const OTHERS = [
   'Exaggerate it: a full swing reads better than a flick of the wrist.',
   'One punch at a time. Let each one finish before the next.',
-  'Block: both fists up by your face, and hold them there.',
-  'Dodge: lean your head and shoulders to one side, quickly.',
-  'A kick or a knee breaks a block. Punches beat a kick.',
+  'Block: both fists up, by your face or your chest. Holding it costs nothing.',
+  'Keep your other hand up while you punch: clean punches hit harder.',
+  'Heavy: pull back, hold a beat, swing. Big damage, but easy to see coming.',
+  'Parry: guard up right as their heavy lands, then punish while they reel.',
+  'Dodge or duck with your hands still: swinging moves your head too.',
+  'Legs in the shot? A kick or a knee breaks a block.',
   'Keep your head, shoulders and hands in the shot.',
   'Light on your face, not behind you, and the camera sees you better.',
 ];
