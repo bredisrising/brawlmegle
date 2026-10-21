@@ -63,7 +63,9 @@ export function evaluate(frames: Parameters<typeof runClip>[0]['frames'], labels
     s.hits++;
     if (label.combo) combo.hits++;
     if (match.kind === 'strike') {
-      if (match.style === label.style) s.styleOk++;
+      // The style the fight ends up using: a 'restyle' at the strike's peak replaces the one picked at confirm.
+      const restyle = intents.filter((i): i is Extract<Intent, { kind: 'restyle' }> => i.kind === 'restyle' && i.limb === match.limb && i.onsetT === match.onsetT).pop();
+      if ((restyle?.style ?? match.style) === label.style) s.styleOk++;
       const anticipate = intents.find((i) => i.kind === 'anticipate' && i.limb === label.limb && i.t >= label.start - 50 && i.t <= match.t);
       s.latency.push((anticipate?.t ?? match.t) - label.start);
       s.commit.push(match.t - label.start);

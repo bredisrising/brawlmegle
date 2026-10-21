@@ -77,12 +77,14 @@ export function scoreGuided(file: string, config: IntentConfig = DEFAULT_INTENT,
     if (l.expect.kind === 'strike') {
       s.strikes++;
       const mine = during.filter((i): i is Extract<Intent, { kind: 'strike' }> => i.kind === 'strike' && i.limb === l.expect.limb);
+      // The style the fight ends up using (a peak 'restyle' replaces the one picked at confirm).
+      const styleOf = (x: Extract<Intent, { kind: 'strike' }>) => shown.filter((i): i is Extract<Intent, { kind: 'restyle' }> => i.kind === 'restyle' && i.limb === x.limb && i.onsetT === x.onsetT).pop()?.style ?? x.style;
       if (mine.length) s.caught++;
-      if (mine.length && mine[0].style === l.expect.style) s.styled++;
+      if (mine.length && styleOf(mine[0]) === l.expect.style) s.styled++;
       s.doubles += Math.max(0, mine.length - 1);
       const wrong = actions(during).filter((i) => !(i.kind === 'strike' && i.limb === l.expect.limb));
       s.fakes += wrong.length;
-      verdict = !mine.length ? 'MISS' : mine[0].style === l.expect.style ? 'ok' : `ok, style ${mine[0].style}`;
+      verdict = !mine.length ? 'MISS' : styleOf(mine[0]) === l.expect.style ? 'ok' : `ok, style ${styleOf(mine[0])}`;
       if (wrong.length) verdict += `, +${wrong.length} fake`;
     } else if (l.expect.kind === 'none') {
       const fake = actions(during);
