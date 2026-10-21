@@ -173,6 +173,9 @@ export class IntentReader {
   /** The learned move model and its gate (config.model): a second opinion on every rule strike, and a catch for misses. */
   private moveModel: MoveModel | null = null;
   private gate: GateRescue | null = null;
+  /** The model's p(rise) last frame per arm, and whether it put up a wind-up tell that's still showing. */
+  private modelRise: Record<'armL' | 'armR', number> = { armL: 0, armR: 0 };
+  private modelTell: Record<'armL' | 'armR', boolean> = { armL: false, armR: false };
   /** When the rules last saw each arm start a strike (config.model.rescue 1 only rescues those). */
   private ruleOnsetAt: Record<'armL' | 'armR', number> = { armL: -Infinity, armR: -Infinity };
 
@@ -538,12 +541,23 @@ export class IntentReader {
     this.gate ??= new GateRescue({ ...GATE_DEFAULTS, keep: m.keep, on: m.on, confirm: m.confirm, off: m.off });
     const scores = this.moveModel.update(body);
     const added: Intent[] = [];
+    // The model starting a swing the rules haven't: show the wind-up tell now, like a rule onset (and drop it if the
+    // model lets go without confirming).
+    for (const n of ['armL', 'armR'] as const) {
+      const p = scores[n].rise;
+      const was = this.modelRise[n];
+      this.modelRise[n] = p;
+      if (this.limbs[n].phase !== 'idle') continue;
+      if (p >= m.on && was < m.on) (added.push({ kind: 'anticipate', limb: n, t: body.t }), (this.modelTell[n] = true));
+      else if (this.modelTell[n] && p < m.off) (added.push({ kind: 'cancel', limb: n, t: body.t, reason: 'not a punch' }), (this.modelTell[n] = false));
+    }
     for (const n of ['armL', 'armR'] as const) for (const x of out) if (x.kind === 'anticipate' && x.limb === n) this.ruleOnsetAt[n] = x.t;
     for (const d of this.gate.scores(scores)) {
       if (d.kind !== 'emit') continue;
       if (m.rescue === 0 || (m.rescue === 1 && d.t - this.ruleOnsetAt[d.limb] > 400)) continue;
       // The rules may be mid-swing on this arm too: once they confirm it, the gate folds theirs into this one.
       added.push(this.modelStrike(d.limb, d.t, d.onsetT, d.style as StrikeStyle, body));
+      this.modelTell[d.limb] = false;
     }
     for (let i = 0; i < out.length; i++) {
       const x = out[i];
