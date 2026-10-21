@@ -357,7 +357,9 @@ export class FightEngine {
     this.gainMeter(id, FIGHT.meterOnHit);
     this.gainMeter(defenderId, FIGHT.meterOnHurt);
     g.attack = null;
-    g.queue = [];
+    // The punch they threw last still comes out once they recover (if it's fresh): getting hit first shouldn't eat what
+    // the player threw, and exchanges trade instead of one side landing in streaks.
+    g.queue = g.queue.slice(-FIGHT.keepOnHit);
     g.chain = 0;
     g.evade = null;
     g.phase = 'hitstun';

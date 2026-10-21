@@ -90,6 +90,8 @@ export const FIGHT = {
   bufferFrames: 24,
   /** How many attacks can wait at once (a fast three-punch combo: one swinging, two waiting). */
   queueSize: 2,
+  /** Of those, how many survive the fighter getting hit (they come out after the hitstun, if still fresh). */
+  keepOnHit: 1,
   /** Punches in a row that can cancel each other's recovery (see FightEngine.chainable). */
   maxChain: 4,
   /**
