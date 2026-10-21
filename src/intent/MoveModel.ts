@@ -327,9 +327,9 @@ export class GateRescue {
     const c = this.cfg;
     this.ruleTimes.push(r.t);
     this.ruleTimes = this.ruleTimes.filter((t) => r.t - t <= c.blindMs);
-    this.lastRule[r.limb] = { onsetT: r.onsetT, t: r.t };
     const m = this.lastModel[r.limb];
     if (m && Math.abs(m.onsetT - r.onsetT) <= c.sameSwingMs) {
+      this.lastRule[r.limb] = { onsetT: r.onsetT, t: r.t };
       this.emittedFor[r.limb] = { rule: r.onsetT, emitted: m.onsetT };
       return { kind: 'restyle', limb: r.limb, t: r.t, onsetT: m.onsetT, style: r.style };
     }
@@ -341,6 +341,8 @@ export class GateRescue {
     }
     const blind = alive < c.aliveP && this.ruleTimes.length >= c.blindStrikes;
     if (peak >= c.keep || blind) {
+      // only an emitted rule strike blocks a later model strike of the same swing (a dropped one doesn't)
+      this.lastRule[r.limb] = { onsetT: r.onsetT, t: r.t };
       this.emittedFor[r.limb] = { rule: r.onsetT, emitted: r.onsetT };
       return { kind: 'emit', limb: r.limb, t: r.t, onsetT: r.onsetT, style: r.style, source: 'rules' };
     }

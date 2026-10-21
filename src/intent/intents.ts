@@ -107,10 +107,10 @@ export type IntentConfig = {
    * The learned move model as a gate and rescue on arm strikes (IntentReader.secondOpinion), on with `gate` 1. A rule
    * strike needs the model's p(rise) to reach `keep`; the model adds its own strike at p(rise) `on` -> `confirm`, and
    * re-arms below `off`. `rescue` 0: no strikes of its own, 1: only where the rules saw a wind-up start, 2: any.
-   * `needHips` 1: off unless the hips are in the shot. Held-out real players (nested leave-one-person-out): as many
-   * strikes read as the rules alone or a few more, same precision, confirmed ~60 ms sooner (139 -> 76 ms); synthetic
-   * suites: false positives 2.5 -> 0.9 a minute, confirm 238 -> 80 ms. Trained with the synthetic everyday motions
-   * (waves, scratches, hands coming back up) as negatives; `?model=0` turns it off in the game.
+   * `needHips` 1: off unless the hips are in the shot (it learned from standing players; seated ones lost strikes).
+   * Held-out real players (each person group left out of training): 64.9% -> 74.0% of strikes read (+9.1, 95% CI
+   * +4.1 to +15.3), precision 85.1 -> 86.2%, confirm median 139 -> 74 ms. Trained with the synthetic everyday motions
+   * (waves, scratches, hands coming back up) as negatives. `?model=0` turns it off in the game.
    */
   model: { gate: number; keep: number; on: number; confirm: number; off: number; rescue: number; needHips: number };
   /** No new frames for this long (host clock) = player lost. */
@@ -136,7 +136,7 @@ export const DEFAULT_INTENT: IntentConfig = {
   tuckReach: 0.5,
   heavy: { windup: 1.2, holdMs: 250 },
   restyleMs: 200,
-  model: { gate: 1, keep: 0.25, on: 0.65, confirm: 0.9, off: 0.2, rescue: 2, needHips: 0 },
+  model: { gate: 1, keep: 0.2, on: 0.6, confirm: 0.75, off: 0.2, rescue: 2, needHips: 1 },
   staleMs: 300,
 };
 
