@@ -400,7 +400,8 @@ async function handle(req, res) {
   // Leaderboard: every fighter's record. A rescan's record carries the earlier fighters' under that username too.
   if (req.method === "GET" && url.pathname === "/api/records") return json(res, 200, { records: withLineage(records) });
 
-  // The host reports a finished round. Only forged fighters on this server get records (not the CPU's or stand-ins).
+  // The host reports a finished round. Only rounds between two people count: a round with a side left out (the CPU,
+  // which wears someone else's fighter) is ignored. Only forged fighters on this server get records (not stand-ins).
   if (req.method === "POST" && url.pathname === "/api/matches") {
     if (ACCESS_KEY && req.headers["x-forge-key"] !== ACCESS_KEY) return json(res, 403, { error: "bad forge key" });
     if (!matchesAllowed()) return json(res, 429, { error: "slow down" });
@@ -413,6 +414,7 @@ async function handle(req, res) {
     const match = typeof body?.matchId === "string" ? body.matchId.slice(0, 64) : "";
     const winner = body?.winner === "p1" || body?.winner === "p2" ? body.winner : null;
     if (!match || seenMatches.has(match)) return json(res, 200, { ok: true, duplicate: !!match });
+    if (typeof body?.p1 !== "string" || typeof body?.p2 !== "string") return json(res, 200, { ok: true, ignored: "cpu round" });
     seenMatches.add(match);
     for (const side of ["p1", "p2"]) {
       const id = typeof body?.[side] === "string" ? body[side] : null;
@@ -425,6 +427,8 @@ async function handle(req, res) {
       else records[id] = { ...r, losses: r.losses + 1, streak: 0, recentResults };
     }
     saveRecords();
+    // One line per counted round, so the standings can be rebuilt from the log if they ever need fixing.
+    console.log(`match ${body.p1.slice(0, 8)} vs ${body.p2.slice(0, 8)}: ${winner ?? "draw"}`);
     return json(res, 200, { ok: true });
   }
 
@@ -562,7 +566,8 @@ async function handle(req, res) {
 //
 //   POST /api/highlights   body: the clip (video/webm or video/mp4, up to FORGE_HIGHLIGHT_MAX_BYTES)
 //                          x-forge-key, x-highlight-meta: URI-encoded JSON { p1, p2, winner, move, combo, roundTime,
-//                          duration }, each side { id?, name, cpu? }  ->  201 the highlight
+//                          duration }, each side { id?, name, cpu? }  ->  201 the highlight; 422 for a round against
+//                          the CPU (the reel is people beating people)
 //   GET  /api/highlights   ->  { highlights: [{ id, url, createdAt, bytes, ...meta }] } newest first
 //   GET  /api/highlights/<id>.webm  ->  the clip (immutable, range requests for <video>)
 // ---------------------------------------------------------------------------------------------------------------
@@ -579,6 +584,14 @@ fs.mkdirSync(HIGHLIGHTS, { recursive: true });
 let highlights = [];
 try {
   highlights = JSON.parse(fs.readFileSync(HIGHLIGHTS_INDEX, "utf8")).filter((h) => fs.existsSync(new URL(h.file, HIGHLIGHTS)));
+  // Rounds against the CPU stopped being highlights: clear out any kept from before.
+  const cpu = highlights.filter((h) => h.p1?.cpu || h.p2?.cpu);
+  if (cpu.length) {
+    highlights = highlights.filter((h) => !cpu.includes(h));
+    for (const h of cpu) fs.rmSync(new URL(h.file, HIGHLIGHTS), { force: true });
+    fs.writeFileSync(HIGHLIGHTS_INDEX, JSON.stringify(highlights));
+    console.log(`highlights: removed ${cpu.length} rounds against the CPU`);
+  }
 } catch {}
 
 /** Plain one-line text: no control characters, trimmed, capped. */
@@ -691,6 +704,7 @@ async function handleHighlights(req, res, parts, base) {
     if (!ext) return json(res, 415, { error: "send video/webm or video/mp4" });
     const meta = highlightMeta(req.headers["x-highlight-meta"]);
     if (typeof meta === "string") return json(res, 400, { error: meta });
+    if (meta.p1.cpu || meta.p2.cpu) return json(res, 422, { error: "rounds against the CPU aren't highlights" });
     if (deletedIds.has(meta.p1.id) || deletedIds.has(meta.p2.id)) return json(res, 410, { error: "that fighter was deleted" });
     if (!highlightAllowed()) return json(res, 429, { error: "slow down" });
     let video;

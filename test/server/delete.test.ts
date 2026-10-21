@@ -71,7 +71,7 @@ async function startForge(env: Record<string, string> = {}, data = fs.mkdtempSyn
       headers: {
         'content-type': 'video/webm',
         'x-forge-key': KEY,
-        'x-highlight-meta': encodeURIComponent(JSON.stringify({ p1, p2: { name: 'CPU', cpu: true }, winner: 'p1', move: 'uppercut', combo: 1, roundTime: 10, duration: 5 })),
+        'x-highlight-meta': encodeURIComponent(JSON.stringify({ p1, p2: { name: 'Dylan' }, winner: 'p1', move: 'uppercut', combo: 1, roundTime: 10, duration: 5 })),
       },
       body: webm(),
     });

@@ -26,14 +26,14 @@ export type Highlight = HighlightMeta & { id: string; url: string; createdAt: nu
 
 const api = () => config.forgeApi.replace(/\/+$/, '');
 
-/** The newest highlights first; [] when the server is unreachable or has none. */
+/** The newest highlights first (fights between two people only); [] when the server is unreachable or has none. */
 export async function fetchHighlights(signal?: AbortSignal): Promise<Highlight[]> {
   if (!config.forgeApi) return [];
   try {
     const res = await fetch(`${api()}/api/highlights`, { signal });
     if (!res.ok) return [];
     const body = (await res.json()) as { highlights?: Highlight[] };
-    return Array.isArray(body.highlights) ? body.highlights.filter((h) => h && typeof h.url === 'string') : [];
+    return Array.isArray(body.highlights) ? body.highlights.filter((h) => h && typeof h.url === 'string' && !h.p1?.cpu && !h.p2?.cpu) : [];
   } catch {
     return [];
   }

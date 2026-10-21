@@ -112,8 +112,8 @@ export function compareRecords(a: FighterRecord, b: FighterRecord) {
 }
 
 /**
- * Save one completed round. The host is authoritative for network matches. A side left out (a CPU, which wears
- * someone else's fighter) isn't recorded; the human side still is.
+ * Save one completed round between two people (rounds against the CPU aren't recorded: Game.ts doesn't call this, and
+ * the server ignores a round with a side left out). The host is authoritative for network matches.
  */
 export function recordMatch(fighters: Partial<Record<PlayerId, ForgedFighter>>, winner: PlayerId | null) {
   const records = readRecords();

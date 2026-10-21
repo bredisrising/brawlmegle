@@ -285,8 +285,8 @@ export class Game {
         void this.recorder.stop({ winner: s.winner, ending: s.ending });
         this.announceFinish(s.winner, s.ending);
         if (!this.mirroring) {
-          // The CPU wears someone else's fighter: only human sides get a record.
-          recordMatch({ p1: this.cpu.p1 ? undefined : this.fighters.p1, p2: this.cpu.p2 ? undefined : this.fighters.p2 }, s.winner);
+          // Only fights between two people go on the leaderboard: a round against the CPU counts for nobody.
+          if (!this.cpu.p1 && !this.cpu.p2) recordMatch(this.fighters, s.winner);
           this.callFinish(s.winner, s.ending);
         }
       }
@@ -1718,10 +1718,13 @@ export class Game {
     if (finish?.kind === 'fight') this.startHighlight(finish.event);
   }
 
-  /** Host or Practice (not Training, not the client laptop): record the replay for the title screen's reel. */
+  /**
+   * The host of a fight between two people (not against the CPU, not the client laptop): record the replay for the
+   * title screen's reel.
+   */
   private startHighlight(finish: FightEvent) {
     const { training, players } = useGameStore.getState();
-    if (this.mirroring || training || !HighlightRecorder.supported()) return;
+    if (this.mirroring || training || this.cpu.p1 || this.cpu.p2 || !HighlightRecorder.supported()) return;
     const side = (id: PlayerId) => ({ id: this.fighters[id]?.id, name: players[id].name.replace(/\s*\(CPU[^)]*\)$/, ''), cpu: !!this.cpu[id] });
     const winner = finish.attacker;
     this.highlight.start(this.renderer.renderer.domElement, {

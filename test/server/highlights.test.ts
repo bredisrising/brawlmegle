@@ -23,7 +23,7 @@ const webm = (bytes = 4096) => {
 
 const META = {
   p1: { id: 'a6535b14-7e5d-4b33-9685-765e2df703da', name: 'Rico' },
-  p2: { id: 'cpu', name: 'Dylan', cpu: true },
+  p2: { name: 'Dylan' },
   winner: 'p1',
   move: 'uppercut',
   combo: 5,
@@ -66,7 +66,7 @@ describe('highlights', () => {
     expect(second.status).toBe(201);
     const all = await list();
     expect(all.map((h) => h.move)).toEqual(['fireball', 'uppercut']);
-    expect(all[1]).toMatchObject({ winner: 'p1', combo: 5, roundTime: 23.4, duration: 6.8, bytes: 4096, p1: { name: 'Rico', id: META.p1.id }, p2: { name: 'Dylan', cpu: true } });
+    expect(all[1]).toMatchObject({ winner: 'p1', combo: 5, roundTime: 23.4, duration: 6.8, bytes: 4096, p1: { name: 'Rico', id: META.p1.id }, p2: { name: 'Dylan', cpu: false } });
     expect(all[0].p1).toEqual({ name: 'Zoë 🥊', cpu: false });
     expect(typeof all[0].createdAt).toBe('number');
     expect(all[0]).not.toHaveProperty('file');
@@ -129,6 +129,36 @@ describe('highlights', () => {
     expect((await fetch(local(urls[0]))).status).toBe(404);
     await new Promise((r) => setTimeout(r, 100));
     expect(fs.readdirSync(path.join(data, 'highlights')).filter((f) => f.endsWith('.webm'))).toHaveLength(3);
+  });
+
+  it('refuses rounds against the CPU, and clears out any kept from before', async () => {
+    const data = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-hl-'));
+    fs.mkdirSync(path.join(data, 'highlights'));
+    const old = (id: string, cpu: boolean) => {
+      fs.writeFileSync(path.join(data, 'highlights', `${id}.webm`), webm());
+      return { id, file: `${id}.webm`, createdAt: 1, bytes: 4096, ...META, p2: { name: 'Dylan', cpu } };
+    };
+    const people = old('11111111-1111-4111-8111-111111111111', false);
+    const cpu = old('22222222-2222-4222-8222-222222222222', true);
+    fs.writeFileSync(path.join(data, 'highlights', 'index.json'), JSON.stringify([cpu, people]));
+    const { upload, list } = await startForge({}, data);
+    expect((await list()).map((h) => h.id)).toEqual([people.id]);
+    expect(fs.existsSync(path.join(data, 'highlights', cpu.file))).toBe(false);
+    expect((await upload(webm(), { ...META, p2: { name: 'Dylan', cpu: true } })).status).toBe(422);
+    expect((await upload(webm(), { ...META, p1: { name: 'Rico', cpu: true } })).status).toBe(422);
+    expect(await list()).toHaveLength(1);
+  });
+
+  it('only counts rounds between two people on the leaderboard', async () => {
+    const { base } = await startForge();
+    const post = (body: unknown) =>
+      fetch(`${base}/api/matches`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-forge-key': KEY }, body: JSON.stringify(body) });
+    const records = async () => ((await (await fetch(`${base}/api/records`)).json()) as { records: Record<string, { wins: number }> }).records;
+    const id = META.p1.id;
+    // Against the CPU: the CPU's side is left out, and the round is ignored (delete.test.ts records a real one).
+    expect(await (await post({ matchId: 'cpu-1', p1: id, p2: null, winner: 'p1' })).json()).toMatchObject({ ok: true, ignored: 'cpu round' });
+    expect(await (await post({ matchId: 'cpu-2', p1: id, winner: 'p1' })).json()).toMatchObject({ ignored: 'cpu round' });
+    expect((await records())[id]).toBeUndefined();
   });
 
   it('rate-limits uploads', async () => {
