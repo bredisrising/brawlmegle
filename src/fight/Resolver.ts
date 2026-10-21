@@ -55,11 +55,9 @@ export class Resolver {
     const arm = intent.limb === 'armL' || intent.limb === 'armR';
     const hand = intent.limb.endsWith('L') ? 'L' : 'R';
 
-    // Legs: a knee up close, a kick from range, whatever the leg actually did.
-    let move: AttackMove = arm ? this.punch(hand, intent.style, engine) : distance < 0.6 ? 'knee' : 'kick';
-
-    // Opponent ducking: the next punch comes in low as an uppercut if it can reach.
-    if (arm && engine.evading(opponentOf(player)) === 'duck' && distance <= MOVES.uppercut.range + MAX_LUNGE) move = 'uppercut';
+    // Legs: a knee up close, a kick from range, whatever the leg actually did. (A punch at a ducking opponent stays
+    // what it was: punishing a duck takes a real uppercut, so ducking is worth doing.)
+    const move: AttackMove = arm ? this.punch(hand, intent.style, engine) : distance < 0.6 ? 'knee' : 'kick';
 
     // Out of range: step in during startup so the strike arrives (up to MAX_LUNGE).
     const reach = MOVES[move].range * 0.9;

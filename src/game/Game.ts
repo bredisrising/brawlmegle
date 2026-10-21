@@ -108,7 +108,7 @@ export class Game {
   readonly renderer: Renderer;
   readonly input = new InputHub();
   private readonly fight = new FightEngine({ damageScale: config.demo ? 1.6 : 1 });
-  /** Intent + fight state -> the move that happens (lunges, knee vs kick, punishing a duck...). */
+  /** Intent + fight state -> the move that happens (lunges, knee vs kick, a restyle at the peak...). */
   private readonly resolver = new Resolver();
   private readonly effects: Effects;
   private readonly views: Record<PlayerId, FighterView>;
