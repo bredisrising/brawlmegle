@@ -17,8 +17,12 @@ const NUM_POSES = PARAMS.get('poses') === '1' ? 1 : 2;
 const DELEGATE: PoseDelegate = PARAMS.get('posedelegate')?.toLowerCase() === 'cpu' ? 'CPU' : 'GPU';
 /** Detection runs in a worker where the browser can (`?poseworker=0` keeps it on the main thread, as before). */
 const WORKER_OK = PARAMS.get('poseworker') !== '0';
-/** Over this many ms per detection the full model can't keep up with a 30 fps camera: drop to lite (unless ?pose=). */
-const SLOW_DETECT_MS = 38;
+/**
+ * Lite only pays off on the CPU delegate: on a GPU the time goes to the person detector, so lite measured no faster
+ * (25.8 vs 29.5 ms on an RTX 4070, slower on a Radeon 780M) and only gave up accuracy. Full on a laptop's CPU managed 9
+ * poses a second: under this many, a CPU-delegate tracker drops to lite (unless ?pose=).
+ */
+const LITE_BELOW_FPS = 20;
 /** Same test as start(): the model runs in the worker (MediaPipe's module build) where the browser can. */
 const useWorker = () => WORKER_OK && typeof Worker === 'function' && typeof VideoFrame === 'function' && typeof OffscreenCanvas === 'function';
 
@@ -66,12 +70,13 @@ export class CameraSource implements InputSource {
   /** In-page model (no worker), and which of the people it finds is the player (the worker has its own). */
   private landmarker: PoseLandmarker | null = null;
   private readonly picker = new PersonPicker();
-  /** For swapping to the lite model when this machine is too slow for full (see SLOW_DETECT_MS). */
+  /** For swapping to the lite model when the CPU runs the model too slowly for full (see LITE_BELOW_FPS). */
   private files: unknown = null;
   private delegate: PoseDelegate = DELEGATE;
   private variant: PoseVariant = POSE_VARIANT;
   private timedFrames = 0;
   private swapping = false;
+  private liteTried = false;
   private frameRequest = 0;
   private running = false;
   private _latestFrame: PoseFrame | null = null;
@@ -384,6 +389,13 @@ export class CameraSource implements InputSource {
     this.stats.rated = this.timedFrames > 0;
     this.rateStart = now;
     this.cameraFrames = this.detections = 0;
+    // The CPU can't run the full model at the camera's rate: lite, since a punch is only a few frames long and frames
+    // matter more than full's extra accuracy. Decided by poses a second, not ms each (detections overlap frames).
+    const { rated, detectFps, cameraFps } = this.stats;
+    if (rated && this.delegate === 'CPU' && this.variant === 'full' && !POSE_PARAM && !this.liteTried && detectFps < Math.min(LITE_BELOW_FPS, cameraFps * 0.8)) {
+      this.liteTried = true;
+      void this.useLite();
+    }
   }
 
   private timeDetection(took: number) {
@@ -392,13 +404,9 @@ export class CameraSource implements InputSource {
       this.rateStart = performance.now();
       this.cameraFrames = this.detections = 0;
     }
+    this.timedFrames++;
     this.detections++;
     this.stats.detectMs += 0.1 * (took - this.stats.detectMs);
-    // After a warm-up, a laptop that can't run the full model at camera rate gets the lite one: a punch is only a
-    // few frames long, and frames matter more than the full model's extra accuracy.
-    if (++this.timedFrames === 90 && this.variant === 'full' && !POSE_PARAM && this.stats.detectMs > SLOW_DETECT_MS) {
-      void this.useLite();
-    }
   }
 
   /** A detection's landmarks -> a PoseFrame for the listeners. `picture`: the exact image it ran on (worker mode). */
@@ -432,7 +440,7 @@ export class CameraSource implements InputSource {
   private async useLite() {
     if (this.swapping) return;
     this.swapping = true;
-    console.warn(`[camera] pose model full takes ${this.stats.detectMs.toFixed(0)} ms per frame here; switching to lite`);
+    console.warn(`[camera] pose model full runs ${this.stats.detectFps.toFixed(0)} poses/s on the CPU here; switching to lite`);
     if (this.worker) {
       this.post(this.worker, { type: 'variant', variant: 'lite' });
       return; // the worker answers with 'variant'
