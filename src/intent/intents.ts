@@ -104,6 +104,13 @@ export type IntentConfig = {
   /** A strike's style gets one more look at its peak, at most this long after it was confirmed (see 'restyle'). */
   restyleMs: number;
   /**
+   * Telling punches apart at the peak (IntentReader.styleOf / classify). Straight: sideways travel under `side` (body
+   * units) and the elbow opening more than `ext`. Hook: a sideways sweep over `side`, or the fist going out (`hookOut`,
+   * share of the travel) with the elbow flared. Uppercut: rising (`upDir` of the travel), the fist rising `upRise`x the
+   * elbow, the forearm within `upTilt` degrees of vertical.
+   */
+  style: { side: number; ext: number; hookOut: number; upDir: number; upRise: number; upTilt: number };
+  /**
    * The learned move model as a gate and rescue on arm strikes (IntentReader.secondOpinion), on with `gate` 1. A rule
    * strike needs the model's p(rise) to reach `keep`; the model adds its own strike at p(rise) `on` -> `confirm`, and
    * re-arms below `off`. `rescue` 0: no strikes of its own, 1: only where the rules saw a wind-up start, 2: any.
@@ -136,6 +143,7 @@ export const DEFAULT_INTENT: IntentConfig = {
   tuckReach: 0.5,
   heavy: { windup: 1.2, holdMs: 250 },
   restyleMs: 200,
+  style: { side: 0.45, ext: 0.15, hookOut: 0.6, upDir: 0.6, upRise: 1.5, upTilt: 30 },
   model: { gate: 1, keep: 0.2, on: 0.6, confirm: 0.75, off: 0.2, rescue: 2, needHips: 1 },
   staleMs: 300,
 };

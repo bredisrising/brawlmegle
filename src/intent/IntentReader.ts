@@ -608,9 +608,10 @@ export class IntentReader {
   /** Straight, hook or uppercut from the strike's shape so far (the player's own examples decide, if calibrated). */
   private styleOf(def: LimbDef, s: LimbState, shoulder: Vec3): StrikeStyle {
     const dir = normalize(s.peak);
-    const ruleStyle: StrikeStyle = s.overhand ? 'hook' : def.kind === 'arm' && Math.abs(s.peak.x) <= 0.45 && (s.peakExt > len(s.peak) || s.peakExt > 0.15 || len(s.peak) < 0.6 * s.peakMidTravel)
+    const c = this.config.style;
+    const ruleStyle: StrikeStyle = s.overhand ? 'hook' : def.kind === 'arm' && Math.abs(s.peak.x) <= c.side && (s.peakExt > len(s.peak) || s.peakExt > c.ext || len(s.peak) < 0.6 * s.peakMidTravel)
       ? 'straight'
-      : classify(def.kind, dir, dir.x * def.side, s.peakTip, s.peakMid, s.peakMidOut, s.peak, s.peakMidRise, s.peakExt, s.peakElbow, s.peakTipSeen);
+      : classify(def.kind, dir, dir.x * def.side, s.peakTip, s.peakMid, s.peakMidOut, s.peak, s.peakMidRise, c, s.peakExt, s.peakElbow, s.peakTipSeen);
     return def.kind === 'arm' && this.matcher ? this.matcher.decide(strikeFeatures(def, s, shoulder), ruleStyle) : ruleStyle;
   }
 
@@ -924,25 +925,22 @@ function raisingGuard(body: Body, limb: LimbName, start: Vec3, end: Vec3, radius
   return startedLow && endsUp && (otherUp || otherRose);
 }
 
-/** An uppercut's forearm stands within this of vertical (radians); laid over further, a rising fist is a hook. */
-const UPPER_MAX_TILT = (30 * Math.PI) / 180;
-
-function classify(kind: 'arm' | 'leg', dir: Vec3, out: number, tip: Vec3, mid: Vec3, midOut: number, travel: Vec3, midRise: number, ext = 0, elbow = 180, tipSeen = true): StrikeStyle {
+function classify(kind: 'arm' | 'leg', dir: Vec3, out: number, tip: Vec3, mid: Vec3, midOut: number, travel: Vec3, midRise: number, c: IntentConfig['style'], ext = 0, elbow = 180, tipSeen = true): StrikeStyle {
   // Kick: the foot comes up near knee height. Knee strike: the knee rises with the foot tucked under it (or out of
   // view: the fight engine picks knee or kick from the distance anyway).
   if (kind === 'leg') return tipSeen && tip.y > mid.y - 0.3 ? 'kick' : 'knee';
   // A big sideways sweep is a hook (or a haymaker), however straight the arm.
-  if (Math.abs(travel.x) > 0.45 && Math.abs(out) > 0.6) return 'hook';
+  if (Math.abs(travel.x) > c.side && Math.abs(out) > c.hookOut) return 'hook';
   // Uppercut: the fist drives up much more than the elbow (a punch at the camera lifts the elbow more), with the forearm
   // standing up: fist over the elbow. A rising fist with the forearm laid over (swinging across the chest) is a hook,
   // the punch most real players throw (vision-labeled 1v1 rounds: 135 of 151 rising reads were hooks). The forearm's
   // tilt holds up when the camera is off to the side, where sideways travel doesn't.
-  if (dir.y > 0.6 && travel.y > 0.3 && travel.y > 1.5 * midRise) {
+  if (dir.y > c.upDir && travel.y > 0.3 && travel.y > c.upRise * midRise) {
     const tilt = Math.atan2(Math.abs(tip.x - mid.x), tip.y - mid.y);
-    return tilt > UPPER_MAX_TILT ? 'hook' : 'upper';
+    return tilt > (c.upTilt * Math.PI) / 180 ? 'hook' : 'upper';
   }
   // Smaller sideways swing with the elbow flared: a tight hook. A cross drifts inward but stays tucked.
-  if (Math.abs(out) > 0.6 && midOut > 0.05) return 'hook';
+  if (Math.abs(out) > c.hookOut && midOut > 0.05) return 'hook';
   // Fist sweeping across the body with the elbow staying bent (a cross straightens the elbow as it drifts in).
   const inward = -out * len(travel);
   if (inward > 0.2 && inward >= 0.8 * travel.y && ext < 0.1 && elbow < 100) return 'hook';
