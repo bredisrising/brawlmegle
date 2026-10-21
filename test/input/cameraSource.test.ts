@@ -20,7 +20,8 @@ beforeAll(async () => {
   ({ CameraSource } = await import('../../src/input/sources/CameraSource'));
 });
 
-const pose = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, z: 0, visibility: 1 }));
+// Shoulders apart: the person picker skips poses it can't size.
+const pose = Array.from({ length: 33 }, (_, i) => ({ x: i === 11 ? 0.6 : i === 12 ? 0.4 : 0.5, y: 0.5, z: 0, visibility: 1 }));
 
 describe('CameraSource frame loop', () => {
   it('keeps tracking after a detection error or a throwing listener', () => {

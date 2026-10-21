@@ -1,4 +1,4 @@
-import type { FightEvent, FighterState, ForgedFighter, ForgePreview, Hand, Phase, PlayerId, PoseFrame, Projectile, Stance } from '../types';
+import type { FightEvent, FighterState, ForgedFighter, ForgePreview, Hand, Phase, PlayerId, PoseFrame, Projectile, Stance, TrackerInfo } from '../types';
 import type { Intent } from '../intent/intents';
 
 /**
@@ -42,7 +42,8 @@ export type ClientMessage =
   | { type: 'presence'; visible: boolean }
   // The client reads its own player's moves from its own full-rate camera (the network only carries the result):
   | { type: 'intents'; intents: Intent[]; stance: Stance } // reliable: every frame that produced intents
-  | { type: 'stance'; stance: Stance }; // lossy: the continuous stance (guard, lean, tracked) on the other frames
+  | { type: 'stance'; stance: Stance } // lossy: the continuous stance (guard, lean, tracked) on the other frames
+  | { type: 'tracker'; info: TrackerInfo }; // what the client's camera tracks with, as each round starts (for the host's match recording)
 
 /** Host -> client, so the client UI knows what to show its player. */
 export type HostMessage =

@@ -15,6 +15,7 @@ import { IntentReader } from '../intent/IntentReader';
 import type { Intent } from '../intent/intents';
 import { InputHub, createLocalSource, preloadLocalInput, type InputSource } from '../input';
 import { MockSource } from '../input/sources/MockSource';
+import { trackerInfoOf } from '../input/poseHealth';
 import { captureScan, forgeBusy, forgeFighter, type ForgeOwner, type ScanFrames } from '../forge/forge';
 import { forgePreview, forgeStatus, onChange, samePreview, scanStatus } from '../forge/status';
 import { fetchServerFighters, maskedFighter, saveFighter, saveOwner } from '../forge/roster';
@@ -32,6 +33,7 @@ import { SpectatorSession } from './SpectatorSession';
 import type { HostMessage, MatchPlayer, MirrorEvent, MirrorFrame } from '../net/protocol';
 import { HostSession } from './HostSession';
 import { MatchRecorder, recordingEnabled } from './MatchRecorder';
+import { readPoses } from './readPoses';
 import { HighlightRecorder } from './HighlightRecorder';
 import { Commentary, TEMPLATES, fill, spoken, type Line } from './Commentary';
 import { NO_VOTES, localPlayerId, pushPopup, updatePlayer, useGameStore } from './store';
@@ -193,6 +195,8 @@ export class Game {
   private readonly cam = new CameraShare();
   /** Test hook: a camera stream to share when the local input has none (the mock input in dev and tests). */
   cameraOverride: MediaStream | null = null;
+  /** The local camera last told whether to use short exposure, and what (see tuneCamera). */
+  private tuned: { source: InputSource | null; on: boolean } = { source: null, on: false };
   /**
    * "Find a fight": this tab's matchmaker id, the fighter picked once and kept for every opponent (as host it's set up
    * as P1; as client it's sent as a pick), and the camera, kept running as the role flips between host and client.
@@ -375,6 +379,7 @@ export class Game {
       heard: () => mine() && (this.lastPeerAt = performance.now()),
       quickJoin: (code) => mine() && void this.joinQuick(code),
       cam: (hidden) => mine() && this.cam.remoteHidden(hidden),
+      tracker: (info) => mine() && this.recorder.tracker('p2', info),
       read: (intents, stance) => {
         this.remoteIntents.push(...intents);
         this.remoteStance = { stance: { ...stance, player: 'p2' }, at: performance.now() };
@@ -1247,6 +1252,7 @@ export class Game {
   private update = (dt: number, frozen: boolean) => {
     this.effects.update(dt);
     this.shareCamera();
+    this.tuneCamera();
     this.checkNext();
     this.watchPeer();
     if (this.replayIn > 0 && !frozen && (this.replayIn -= dt) <= 0) {
@@ -1295,10 +1301,12 @@ export class Game {
         continue;
       }
       // P2 on a client laptop that reads its own moves: use what it sent (a full-rate local read, no network
-      // jitter on the poses). Otherwise read the streamed poses here.
+      // jitter on the poses). Otherwise read the poses here: every one since the last tick (after a render hitch,
+      // several), so none skip the reader.
+      const frames = this.input.take(id);
+      for (const frame of frames) this.recorder.frame(id, frame);
       const remote = id === 'p2' ? this.takeRemoteRead() : null;
-      const frame = remote ? null : this.input.latest(id);
-      const out = remote ?? (frame ? this.intent[id].update(frame) : null);
+      const out = remote ?? readPoses(this.intent[id], frames, this.input.latest(id));
       if (out) {
         commands.push(...this.resolver.resolve(id, out.intents, this.fight));
         for (const i of out.intents) {
@@ -1332,7 +1340,6 @@ export class Game {
     // Hit-stop: the picture holds on the impact while the engine does (effects and camera shake keep going).
     // (Only mid-round: the K.O. hit's hit-stop never runs out, since the engine stops stepping.)
     const frozen = useGameStore.getState().phase === 'fighting' && this.fight.frozen;
-    for (const id of PLAYER_IDS) this.recorder.frame(id, this.cpu[id] ? null : this.input.latest(id));
     this.fireballs.sync(this.fight.projectiles());
     this.showMeters({ p1: this.fight.state('p1'), p2: this.fight.state('p2') });
     this.sendFrame(stances, frozen);
@@ -1363,12 +1370,26 @@ export class Game {
       { p1: { name: players.p1.name, cpu: !!this.cpu.p1 }, p2: { name: players.p2.name, cpu: !!this.cpu.p2 } },
       (cam?.video?.srcObject as MediaStream | null) ?? null,
     );
+    this.recorder.tracker('p1', trackerInfoOf(this.input.source('p1'))); // P2's comes from the client laptop
   }
 
   /** Hand this laptop's camera (whichever source tracks the player now) to the camera share. Cheap; every frame. */
   private shareCamera() {
     const video = this.localInputSource()?.video?.srcObject;
     this.cam.camera(video instanceof MediaStream ? video : this.cameraOverride);
+  }
+
+  /**
+   * Short exposure on this laptop's camera (less blur on every punch), except during the body scan: the forge's photos
+   * want the camera's own exposure. Cheap; every frame (it only tells the camera when something changed).
+   */
+  private tuneCamera() {
+    const { role, players } = useGameStore.getState();
+    const source = this.localInputSource() as (InputSource & { setShortExposure?: (on: boolean) => Promise<boolean> }) | null;
+    const on = players[localPlayerId(role)].status !== 'scanning';
+    if (source === this.tuned.source && on === this.tuned.on) return;
+    this.tuned = { source, on };
+    void source?.setShortExposure?.(on);
   }
 
   private async pollLink() {

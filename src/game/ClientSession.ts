@@ -1,4 +1,5 @@
 import { createLocalSource, type InputSource } from '../input';
+import { trackerInfoOf } from '../input/poseHealth';
 import { captureScan, forgeBusy } from '../forge/forge';
 import { saveOwner } from '../forge/roster';
 import { FORGE_STEPS, onChange, scanStatus } from '../forge/status';
@@ -275,6 +276,9 @@ export class ClientSession {
         const { screen, players } = useGameStore.getState();
         const cam = this.source as { video?: HTMLVideoElement } | null;
         if (msg.phase === 'fighting') this.clip.start((cam?.video?.srcObject as MediaStream | null) ?? null);
+        // The round's on: tell the host what this camera tracks with, for its match recording.
+        const tracker = msg.phase === 'fighting' && msg.countdown === 0 ? trackerInfoOf(this.source) : null;
+        if (tracker) this.send({ type: 'tracker', info: tracker });
         if (msg.phase === 'ko' || msg.phase === 'lobby') this.clip.stop('p2');
         useGameStore.setState({
           phase: msg.phase,
