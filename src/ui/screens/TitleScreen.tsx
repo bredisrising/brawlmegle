@@ -75,10 +75,11 @@ export function TitleScreen() {
 
       <div className="relative flex h-full flex-col justify-between gap-[clamp(1rem,3.5vh,2.5rem)] overflow-y-auto p-6 sm:px-12 sm:py-[clamp(1.25rem,4.5vh,3rem)]">
         <div className="animate-in-l">
-          <h1 className="font-display text-[clamp(3rem,min(10.5vw,15vh),10rem)] uppercase leading-[0.82] tracking-tighter">
+          {/* -ml: the B's own side bearing (0.068 em in Archivo Black), so its ink lines up with the tagline and the kings. */}
+          <h1 className="-ml-[0.068em] font-display text-[clamp(3rem,min(10.5vw,15vh),10rem)] uppercase leading-[0.82] tracking-tighter">
             Brawl<span className="text-hp">megle</span>
           </h1>
-          <p className="mt-[clamp(0.6rem,2.2vh,1.25rem)] inline-block bg-paper px-3 py-1.5 font-cond text-base font-extrabold uppercase tracking-[0.3em] text-ink sm:text-lg">
+          <p className="mt-[clamp(0.6rem,2.2vh,1.25rem)] inline-block bg-paper px-2.5 py-1 font-cond text-xs font-extrabold uppercase tracking-[0.28em] text-ink sm:text-sm">
             Get scanned. Get forged. Throw hands.
           </p>
           {mode !== 'leaderboard' && <Kings onOpen={() => setMode('leaderboard')} />}
