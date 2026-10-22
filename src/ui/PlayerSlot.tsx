@@ -4,6 +4,7 @@ import { ACCENT } from './accent';
 import { ArcadeButton, TextButton } from './ArcadeButton';
 import { CamToggle } from './CamToggle';
 import { Tips } from './Tips';
+import { BotCountdown } from './BotCountdown';
 import { ForgePreview } from './ForgePreview';
 import { ForgeSteps } from './ForgeSteps';
 import { PLAYER_COLORS } from '../game/constants';
@@ -207,6 +208,7 @@ function QuickSearch({ right, found, searching }: { right: boolean; found: boole
           <p className="max-w-sm font-cond text-base font-semibold uppercase tracking-[0.12em] text-paper/60">
             Stay on this screen: the fight starts as soon as someone's found.
           </p>
+          <BotCountdown />
           <CamChoice right={right} />
           <Tips align={right ? 'end' : 'start'} />
         </>

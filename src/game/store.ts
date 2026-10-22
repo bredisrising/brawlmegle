@@ -91,6 +91,8 @@ export interface GameState {
   quick: boolean;
   /** Matchmaking: looking for an opponent right now. */
   searching: boolean;
+  /** Matchmaking with nobody else around: when (performance.now() ms) a CPU steps in instead; null = not counting. */
+  botAt: number | null;
   /** After a K.O.: who wants a rematch (it happens when both do; a CPU always does). */
   votes: Record<PlayerId, boolean>;
   /** Matchmade fights: when (performance.now() ms) both go find a new opponent unless both voted; null = no countdown. */
@@ -188,6 +190,7 @@ export const useGameStore = create<GameState>(() => ({
   scan: null,
   quick: false,
   searching: false,
+  botAt: null,
   votes: NO_VOTES,
   nextAt: null,
   camHidden: savedCamHidden(),

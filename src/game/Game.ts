@@ -72,6 +72,8 @@ const NEXT_MS = 4000;
 /** ...measured from here when there's no replay to wait for (a time-out), or the replay never came. */
 const NEXT_AFTER_TIME_MS = 2000;
 const NEXT_REPLAY_BACKSTOP_MS = 12_000;
+/** "Find a fight" with nobody else looking: after this long, a labeled CPU (easy) fights them instead. */
+const BOT_AFTER_MS = 10_000;
 /** A tab hidden this long mid-match (switched away, minimized) has left it: the match is called off for both. */
 const AWAY_MS = 2000;
 /**
@@ -243,6 +245,8 @@ export class Game {
   private lastWatch = 0;
   private benchNote = 'You left the match';
   private giveUp = 0;
+  /** Matchmaking: the CPU stepping in if nobody turns up (botFill). */
+  private botTimer = 0;
   private titleBefore: string | null = null;
   /** Room code client: it called the round off because the host went quiet; it says "back" once the host is heard. */
   private hostWentQuiet = false;
@@ -360,7 +364,8 @@ export class Game {
         this.remoteVisible = true;
         this.lastPeerAt = performance.now();
         session.send({ type: 'presence', visible: document.visibilityState !== 'hidden' });
-        if (this.quick) useGameStore.setState({ searching: false });
+        clearTimeout(this.botTimer);
+        if (this.quick) useGameStore.setState({ searching: false, botAt: null });
         this.shareCamera();
         this.cam.connected();
         this.sendMatch();
@@ -423,6 +428,26 @@ export class Game {
     const session = this.openHost(q.player);
     await session.open();
     if (gen !== q.gen) return;
+    // Nobody else looking yet: don't leave them staring at a radar. A labeled CPU steps in after a while.
+    clearTimeout(this.botTimer);
+    useGameStore.setState({ botAt: performance.now() + BOT_AFTER_MS });
+    this.botTimer = window.setTimeout(() => this.botFill(gen), BOT_AFTER_MS);
+  }
+
+  /**
+   * Matchmaking: nobody turned up. Stop looking (so no stranger lands in the middle of the fight) and fight a labeled
+   * CPU instead. The K.O. screen's "Next opponent" looks for a person again.
+   */
+  private botFill(gen: number) {
+    const { connection, players, phase } = useGameStore.getState();
+    if (!this.quick || gen !== this.quick.gen || this.client || this.benched || connection === 'open') return;
+    if (phase !== 'lobby' || players.p1.status !== 'ready' || players.p2.status !== 'waiting') return;
+    this.hostSession?.dispose();
+    this.hostSession = null;
+    this.cam.attach(null, null);
+    useGameStore.setState({ searching: false, botAt: null });
+    this.notify("Nobody's online right now: warm up against the CPU");
+    void this.addCpuPlayer('p2', 'easy');
   }
 
   /** Matchmaking: the server sent us to a waiting player. This laptop becomes the client; fighter and camera come along. */
@@ -431,12 +456,13 @@ export class Game {
     if (!q?.choice) return;
     const gen = ++q.gen;
     const camera = q.camera ?? this.input.source('p1') ?? null;
+    clearTimeout(this.botTimer);
     this.hostSession?.dispose();
     this.hostSession = null;
     this.cam.attach(null, null);
     this.input.unassign('p1'); // the camera keeps running: the ClientSession streams it now
     this.clearMatch();
-    useGameStore.setState({ role: 'client', roomCode: code, searching: false, screen: 'game' });
+    useGameStore.setState({ role: 'client', roomCode: code, searching: false, botAt: null, screen: 'game' });
     const client = this.newClient(code, { source: camera ?? undefined, player: q.player, quick: true });
     this.client = client;
     try {
@@ -473,6 +499,13 @@ export class Game {
    */
   nextOpponent() {
     if (!this.quick) return;
+    // A CPU stood in (nobody was online): drop it and look for a person again.
+    if (this.cpu.p2 && !this.client) {
+      delete this.cpu.p2;
+      this.releaseRemote();
+      void this.search();
+      return;
+    }
     if (this.client) {
       this.client.leave();
       void this.rehost();
@@ -1279,6 +1312,7 @@ export class Game {
     clearInterval(this.linkTimer);
     clearInterval(this.awayTimer);
     clearTimeout(this.giveUp);
+    clearTimeout(this.botTimer);
     document.removeEventListener('visibilitychange', this.onVisibility);
     this.hostSession?.dispose();
     this.client?.dispose();
