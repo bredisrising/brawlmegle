@@ -77,7 +77,7 @@ The test page's script is a working client to copy from. Two things to keep: pro
 
 ## Deployed server
 
-- Matchmaker: `wss://54-149-60-196.sslip.io/ws`. Test page: https://54-149-60-196.sslip.io/
+- Matchmaker: `wss://brawlmegle.com/ws` (the old `wss://54-149-60-196.sslip.io/ws` still answers). Test page: https://brawlmegle.com/mm-test
 - TURN: `turn.54-149-60-196.sslip.io` (the matchmaker hands out the URLs and credentials, so the game never hard-codes them)
 - `sslip.io` is a free DNS service that turns a name like `54-149-60-196.sslip.io` into that IP, so we don't need a domain yet.
 - Tested from the DubHacks Wi-Fi: it blocks port 3478, but relaying over 443 works (about 32 ms round trip). From a home network, 3478 works too.

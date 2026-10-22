@@ -12,7 +12,7 @@ Read `SPEC.md` (what we're building) and `architecture.md` (how the code is laid
 
 ## The live site
 
-**https://brawlmegle.com/** (and **https://brawlmegle.vip/**) is the whole thing on one domain (AWS box, see `matchmaker/README.md`). The old name, https://54-149-60-196.sslip.io/, serves the same site (`matchmaker/deploy/add-domain.sh` adds names):
+**https://brawlmegle.com/** (and **https://brawlmegle.vip/**) is the whole thing on one domain (AWS box, see `matchmaker/README.md`). The old name, https://54-149-60-196.sslip.io/, redirects its pages to brawlmegle.com (its `/api/` and `/ws` still answer, for old tabs; `matchmaker/deploy/add-domain.sh` adds names):
 - `/` the game (static build of this repo), `/tuner/` move tester, `/scan/` scan test
 - `/api/` the forge (scan → fighter, usernames, the OpenAI key lives only on the server), `/ws` matchmaker
 - Locally, `npm run dev` uses the same shared forge and matchmaker by default, so fighters/usernames are the same everywhere.
@@ -23,11 +23,11 @@ Read `SPEC.md` (what we're building) and `architecture.md` (how the code is laid
 |---|---|---|
 | Game | `npm run dev` | http://localhost:5173/ (`?input=camera` for the webcam, `?pose=lite` on slow laptops) |
 | Intent tuner | `npm run dev` | http://localhost:5173/test/tuner/: live webcam → detected moves, live threshold sliders, record/replay clips |
-| Intent tuner (hosted) | `node scripts/build-tuner.mjs`, copy `dist/tuner` to the server's `/var/www/brawlegle/tuner` | https://54-149-60-196.sslip.io/tuner/ (works from any laptop, no install) |
+| Intent tuner (hosted) | `node scripts/build-tuner.mjs`, copy `dist/tuner` to the server's `/var/www/brawlegle/tuner` | https://brawlmegle.com/tuner/ (works from any laptop, no install) |
 | Scan test | `npm run dev` | http://localhost:5173/test/scan/: 360° turn → front/left/right frames, then forge (`?forge=URL`, `?timeout=s`, `?autoscan=1`) |
-| Scan test (hosted) | `node scripts/build-scan.mjs`, copy `dist/scan` to the server's `/var/www/brawlegle/scan` | https://54-149-60-196.sslip.io/scan/ (the forge must list that origin in `FORGE_ALLOWED_ORIGINS`) |
+| Scan test (hosted) | `node scripts/build-scan.mjs`, copy `dist/scan` to the server's `/var/www/brawlegle/scan` | https://brawlmegle.com/scan/ |
 | Forge server | `cd forge && npm start` | http://127.0.0.1:8787/ (dev page for likeness tests) |
-| Matchmaker | deployed at `wss://54-149-60-196.sslip.io/ws` | see `matchmaker/README.md` |
+| Matchmaker | deployed at `wss://brawlmegle.com/ws` | see `matchmaker/README.md` |
 | Tests | `npx vitest run` | intent accuracy on synthetic clips, recorded-clip runs |
 | Video → pose clip | `node test/pose/extract.mjs --model full video.mp4` | writes `video.full.jsonl` (needs Chrome; `CHROME_PATH` to override) |
 
