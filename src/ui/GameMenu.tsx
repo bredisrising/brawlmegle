@@ -110,7 +110,7 @@ export function GameMenu() {
             {connection === 'reconnecting' ? 'Reconnecting…' : `Watching ${roomCode ?? ''}`}
           </span>
         ) : connection && (
-          <span className={`bg-ink/80 px-3 py-1.5 font-cond text-xs font-bold uppercase tracking-[0.2em] ${tone}`} title={`Round trip to the other laptop${link?.address ? ` (from ${link.address})` : ''}`}>
+          <span className={`bg-ink/80 px-3 py-1.5 font-cond text-xs font-bold uppercase tracking-[0.2em] ${tone}`} title="Round trip to the other laptop">
             {connection === 'reconnecting' ? 'Reconnecting…' : `${PATH_LABEL[link?.path ?? 'internet']} ${rtt ?? '–'} ms`}
           </span>
         )}

@@ -3,7 +3,7 @@ import type { ChunkMessage, ClientMessage, HostMessage, SignalMessage } from './
 import type { Signaling } from './Signaling';
 import type { Role } from '../types';
 
-export type LinkStats = { rttMs: number | null; relay: boolean; path: 'cable' | 'lan' | 'internet' | 'relay'; address?: string };
+export type LinkStats = { rttMs: number | null; relay: boolean; path: 'cable' | 'lan' | 'internet' | 'relay' };
 
 type Message = ClientMessage | HostMessage;
 type ChannelName = 'poses' | 'control';
@@ -49,6 +49,11 @@ export class Peer {
   private readonly videoListeners = new Set<(stream: MediaStream | null) => void>();
   /** What the host asks the server for: a room for a code, or ("Find a fight") an opponent. */
   private hostRequest: SignalMessage = { type: 'host' };
+  /**
+   * "Find a fight": connect only through our TURN relay, so neither stranger ever gets the other's IP address (a
+   * direct P2P link hands each side the other's). Friends with a room code keep the direct, lower-latency path.
+   */
+  private relayOnly = false;
   /** This laptop's camera for the other one (null: nothing sent). Kept across connections. */
   private videoTrack: MediaStreamTrack | null = null;
   /** The other laptop's camera, while it sends one. */
@@ -82,7 +87,10 @@ export class Peer {
    */
   async host(opts: { quick?: string } = {}): Promise<string> {
     // "Find a fight": the server may answer with someone to join instead of a room (onQuickJoin; this resolves '').
-    if (opts.quick) this.hostRequest = { type: 'quick', player: opts.quick };
+    if (opts.quick) {
+      this.hostRequest = { type: 'quick', player: opts.quick };
+      this.relayOnly = true;
+    }
     this.signaling.onMessage((msg) => this.queueSignal(msg));
     // Losing signaling deletes the room on the server: open a new one (new code) so P2 can still rejoin.
     this.signaling.onDrop(() => void this.reopenRoom());
@@ -96,6 +104,7 @@ export class Peer {
 
   /** Client only. Resolves once both data channels are open. `player`: "Find a fight", the room is held for it. */
   async join(code: string, player?: string): Promise<void> {
+    this.relayOnly = !!player;
     await this.signaling.connect();
     const opened = this.whenOpen();
     this.signaling.onMessage((msg) => this.queueSignal(msg));
@@ -136,7 +145,7 @@ export class Peer {
     const adapter = local?.networkType ?? local?.networkAdapterType ?? '';
     const cable = lan && (adapter === 'ethernet' || /^169\.254\./.test(local?.address ?? ''));
     const path = relay ? 'relay' : cable ? 'cable' : lan ? 'lan' : 'internet';
-    return { rttMs: rtt === undefined ? null : Math.round(rtt * 1000), relay, path, address: local?.address };
+    return { rttMs: rtt === undefined ? null : Math.round(rtt * 1000), relay, path };
   }
 
   /** Host: send a message to every screen watching this room (through the signaling server, see Spectate). */
@@ -311,8 +320,12 @@ export class Peer {
     });
   }
 
+  private get iceTransportPolicy(): RTCIceTransportPolicy {
+    return this.relayOnly ? 'relay' : 'all';
+  }
+
   private createConnection(iceServers = config.iceServers) {
-    const pc = new RTCPeerConnection({ iceServers });
+    const pc = new RTCPeerConnection({ iceServers, iceTransportPolicy: this.iceTransportPolicy });
     pc.onicecandidate = (e) => {
       if (e.candidate) this.signaling.send({ type: 'signal', data: e.candidate.toJSON() });
     };
@@ -424,7 +437,8 @@ export class Peer {
       }
       if (msg.type === 'peer-joined') return await this.offer(msg.iceServers);
       // Arrives before the offer, so the fresh TURN credentials apply before ICE gathering starts.
-      if (msg.type === 'joined') pc?.setConfiguration({ iceServers: msg.iceServers });
+      // The relay-only policy goes along: a configuration without it would quietly reset it to 'all'.
+      if (msg.type === 'joined') pc?.setConfiguration({ iceServers: msg.iceServers, iceTransportPolicy: this.iceTransportPolicy });
       if (msg.type !== 'signal' || !pc) return;
 
       if ('type' in msg.data) {
