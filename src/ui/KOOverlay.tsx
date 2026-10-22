@@ -6,6 +6,7 @@ import { ArcadeButton, TextButton } from './ArcadeButton';
 import { useGame } from './GameContext';
 import { Tips } from './Tips';
 import { DeleteCode } from './DeleteCode';
+import { PLACEMENT, tierOf, type RatingChange } from '../forge/leaderboard';
 
 export function KOOverlay() {
   const game = useGame();
@@ -24,6 +25,8 @@ export function KOOverlay() {
   const talking = useGameStore((s) => s.caption !== null);
   // A human on the other laptop (not the CPU, which always says yes).
   const human = useGameStore((s) => s.connection === 'open');
+  // This laptop's player's rating, once the host has reported a round between two people.
+  const rating = useGameStore((s) => s.players[localPlayerId(s.role)].rating);
   if (phase !== 'ko') return null;
   if (replay) return <ReplayBars />;
   const accent = ACCENT[winner ?? 'p1'];
@@ -52,6 +55,8 @@ export function KOOverlay() {
           {winner ? `${winnerName} wins` : 'Draw'}
         </span>
       </div>
+
+      {rating && role !== 'spectator' && <RatingLine change={rating} />}
 
       <div className="animate-rise mt-[min(2rem,3.5vh)] flex flex-col items-center gap-4 [animation-delay:700ms]">
         {role !== 'spectator' && (
@@ -114,6 +119,31 @@ function ReplayBars() {
         <span className="animate-blink size-3 rounded-full bg-dmg" />
         Replay
       </div>
+    </div>
+  );
+}
+
+/**
+ * The rated round's payoff: how far the rating moved, where it stands, and the rank (or how far into the placement
+ * rounds). Finishing placement, or climbing into a new rank, gets its own line.
+ */
+function RatingLine({ change }: { change: RatingChange }) {
+  const delta = change.after - change.before;
+  const tier = tierOf(change.after);
+  const placed = change.rated === PLACEMENT;
+  const climbed = change.rated > PLACEMENT && delta > 0 && tierOf(change.before) !== tier;
+  return (
+    <div className="animate-rise mt-[min(1.25rem,2.5vh)] flex flex-col items-center gap-2 [animation-delay:600ms]">
+      <p className="flex items-baseline gap-3 bg-ink/85 px-4 py-1.5 font-cond text-lg font-extrabold uppercase tracking-[0.16em]">
+        <span className={delta >= 0 ? 'text-hp' : 'text-dmg'}>{delta >= 0 ? `+${delta}` : `−${-delta}`}</span>
+        <span className="font-display text-3xl tracking-tight text-paper">{change.after.toLocaleString('en-US')}</span>
+        <span className="text-paper/70">{change.rated >= PLACEMENT ? tier : `Placement ${change.rated}/${PLACEMENT}`}</span>
+      </p>
+      {(placed || climbed) && (
+        <p className="animate-slam bg-hp px-3 py-1 font-display text-xl uppercase tracking-tight text-ink [animation-delay:900ms]">
+          {placed ? `Ranked: ${tier}!` : `New rank: ${tier}!`}
+        </p>
+      )}
     </div>
   );
 }

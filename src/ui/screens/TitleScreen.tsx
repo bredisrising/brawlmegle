@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { compareRecords, emptyRecord, fetchRecords, fighterRecords, recentWinRate, totalMatches, winRate, type FighterRecord } from '../../forge/leaderboard';
+import { PLACEMENT, compareBy, emptyRecord, fetchRecords, fighterRecords, isRanked, ratingBoardReady, ratingOf, recentWinRate, tierOf, totalMatches, winRate, type FighterRecord, type SortKey } from '../../forge/leaderboard';
 import { listFighters } from '../../forge/roster';
 import type { ForgedFighter } from '../../types';
 import { Arrow, ArcadeButton, TextButton } from '../ArcadeButton';
@@ -151,10 +151,29 @@ export function TitleScreen() {
   );
 }
 
+/** The leaderboard's sort tabs, and what each ranks by. */
+const SORTS: { key: SortKey; label: string; says: string }[] = [
+  { key: 'rating', label: 'Rating', says: `Ranked by rating: people-vs-people fights only, ranked after ${PLACEMENT} fights.` },
+  { key: 'wins', label: 'Wins', says: 'Ranked by wins · last 7 · career win rate · fights played.' },
+  { key: 'winRate', label: 'Win rate', says: 'Ranked by career win rate, once a fighter has 5 fights.' },
+  { key: 'streak', label: 'Best streak', says: 'Ranked by the longest run of wins.' },
+  { key: 'fights', label: 'Fights', says: 'Ranked by fights played.' },
+];
+
+/** A fighter's rating and rank, or how far into their placement fights they are ('–' before any rated fight). */
+function ratingWords(record: FighterRecord) {
+  if (!record.rated) return { number: '–', rank: 'Unrated' };
+  return { number: ratingOf(record).toLocaleString('en-US'), rank: isRanked(record) ? tierOf(ratingOf(record)) : `Placement ${record.rated}/${PLACEMENT}` };
+}
+
 function Leaderboard(props: { fighters: ForgedFighter[] | null; records: Readonly<Record<string, FighterRecord>>; onBack: () => void; onDeleted: (id: string) => void }) {
   const { fighters, records, onBack, onDeleted } = props;
+  // Rating once enough players are ranked (a fresh start: everyone began at 1,000), wins until then; or the tab picked.
+  const [picked, setPicked] = useState<SortKey | null>(null);
+  const sort = picked ?? (ratingBoardReady(records) ? 'rating' : 'wins');
+  const order = compareBy(sort);
   const ranked = (fighters ?? []).map((fighter) => ({ fighter, record: records[fighter.id] ?? emptyRecord() }))
-    .sort((a, b) => compareRecords(a.record, b.record) || a.fighter.name.localeCompare(b.fighter.name));
+    .sort((a, b) => order(a.record, b.record) || a.fighter.name.localeCompare(b.fighter.name));
 
   return (
     <div className="absolute inset-0 z-20 grid place-items-center bg-ink/85 p-3 backdrop-blur-sm sm:p-6">
@@ -167,20 +186,38 @@ function Leaderboard(props: { fighters: ForgedFighter[] | null; records: Readonl
           <TextButton className="shrink-0 text-base sm:text-lg" onClick={onBack}>← Back</TextButton>
         </div>
         <div className="shrink-0 px-5 pt-4 sm:px-7">
-          <p className="font-cond text-xs font-bold uppercase tracking-[0.14em] text-paper/55 sm:text-sm">Ranked by wins · last 7 · career win rate · fights played.</p>
+          <div role="tablist" aria-label="Sort by" className="flex flex-wrap gap-1.5">
+            {SORTS.map((s) => (
+              <button
+                key={s.key}
+                type="button"
+                role="tab"
+                aria-selected={sort === s.key}
+                onClick={() => setPicked(s.key)}
+                className={`px-3 py-1 font-cond text-xs font-extrabold uppercase tracking-[0.16em] transition-colors sm:text-sm ${sort === s.key ? 'bg-hp text-ink' : 'bg-ink-3 text-paper/65 hover:text-paper'}`}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+          <p className="mt-2.5 font-cond text-xs font-bold uppercase tracking-[0.14em] text-paper/55 sm:text-sm">{SORTS.find((s) => s.key === sort)!.says}</p>
         </div>
         {!fighters ? (
           <p className="grid flex-1 place-items-center px-5 text-center font-cond text-xl font-bold uppercase tracking-[0.2em] text-paper/55">Loading records…</p>
         ) : (
           <div className="mx-5 mt-4 min-h-0 flex-1 overflow-y-auto border-t border-paper/15 sm:mx-7">
-            <Podium top={ranked.slice(0, 3)} />
+            <Podium top={ranked.slice(0, 3)} byRating={sort === 'rating'} />
             {ranked.map(({ fighter, record }, index) => (
-              <div key={fighter.id} className="grid grid-cols-[2.25rem_3rem_minmax(0,1fr)] items-center gap-2 border-b border-paper/15 py-3 sm:grid-cols-[3.5rem_3.5rem_minmax(0,1fr)_auto_auto_auto] sm:gap-5 sm:px-2">
+              <div key={fighter.id} className="grid grid-cols-[2.25rem_3rem_minmax(0,1fr)] items-center gap-2 border-b border-paper/15 py-3 sm:grid-cols-[3.5rem_3.5rem_minmax(0,1fr)_auto_auto_auto_auto] sm:gap-5 sm:px-2">
                 <span className={`font-display text-2xl ${index < 3 ? 'text-hp' : 'text-paper/45'} sm:text-3xl`}>#{index + 1}</span>
                 <Portrait fighter={fighter} zoom className="h-14 w-12 sm:h-[4.5rem] sm:w-14" />
                 <span className="min-w-0">
                   <span className="block truncate font-display text-xl uppercase leading-none tracking-tight sm:text-3xl">{fighter.name}</span>
-                  <span className="mt-1 block font-cond text-[0.68rem] font-bold uppercase tracking-[0.1em] text-paper/55 sm:text-xs sm:tracking-[0.15em]">{totalMatches(record)} fights · {record.bestStreak} best streak <span className="sm:hidden">· {record.wins}W / {record.losses}L / {record.draws}D · last 7: {recentWinRate(record)}% · career: {winRate(record)}%</span></span>
+                  <span className="mt-1 block font-cond text-[0.68rem] font-bold uppercase tracking-[0.1em] text-paper/55 sm:text-xs sm:tracking-[0.15em]">{totalMatches(record)} fights · {record.bestStreak} best streak <span className="sm:hidden">· {record.rated ? `${ratingWords(record).number} ${ratingWords(record).rank}` : 'unrated'} · {record.wins}W / {record.losses}L / {record.draws}D · last 7: {recentWinRate(record)}% · career: {winRate(record)}%</span></span>
+                </span>
+                <span className="hidden text-right sm:block">
+                  <span className={`block font-display text-2xl leading-none sm:text-3xl ${record.rated ? 'text-paper' : 'text-paper/30'}`}>{ratingWords(record).number}</span>
+                  <span className="mt-1 block font-cond text-[0.68rem] font-bold uppercase tracking-[0.12em] text-paper/55">{ratingWords(record).rank}</span>
                 </span>
                 <span className="hidden text-right font-cond text-sm font-bold uppercase tracking-[0.12em] text-paper/70 sm:block"><b className="text-hp">{record.wins}W</b> · {record.losses}L · {record.draws}D</span>
                 <span className="hidden text-right font-cond text-xs font-bold uppercase tracking-[0.1em] text-paper/70 sm:block"><b className="text-hp">L7</b> {recentWinRate(record)}%</span>
@@ -221,7 +258,7 @@ function Portrait({ fighter, className = '', zoom = false }: { fighter: ForgedFi
 }
 
 /** The top three as big posed cards: #1 in the middle and tallest, like a podium. Hidden on phones (the list has them). */
-function Podium({ top }: { top: { fighter: ForgedFighter; record: FighterRecord }[] }) {
+function Podium({ top, byRating }: { top: { fighter: ForgedFighter; record: FighterRecord }[]; byRating: boolean }) {
   if (top.length < 3 || !top.some(({ fighter }) => fighter.cardUrl)) return null;
   const order = [1, 0, 2];
   return (
@@ -238,7 +275,11 @@ function Podium({ top }: { top: { fighter: ForgedFighter; record: FighterRecord 
                 <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-ink via-ink/80 to-transparent px-3 pt-8 pb-2">
                   <span className="block truncate font-display text-2xl uppercase leading-none tracking-tight">{fighter.name}</span>
                   <span className="mt-1 block font-cond text-xs font-bold uppercase tracking-[0.14em] text-paper/70">
-                    <b className="text-hp">{record.wins}W</b> · {record.losses}L · {winRate(record)}%
+                    {byRating ? (
+                      <><b className="text-hp">{ratingWords(record).number}</b> · {ratingWords(record).rank}</>
+                    ) : (
+                      <><b className="text-hp">{record.wins}W</b> · {record.losses}L · {winRate(record)}%</>
+                    )}
                   </span>
                 </span>
               </div>
@@ -250,10 +291,6 @@ function Podium({ top }: { top: { fighter: ForgedFighter; record: FighterRecord 
   );
 }
 
-/**
- * The longest label in each menu (characters). Every label in a menu gets the size that fits that one in the menu's
- * width, so big screens don't cut "Play a friend" off and the items stay the same size.
- */
 /** The team, in the order they asked for, each linked to their LinkedIn. */
 const CREDITS = [
   { name: 'Ankit Malhotra', url: 'https://www.linkedin.com/in/ankit-m1' },
@@ -279,6 +316,10 @@ function Credits() {
   );
 }
 
+/**
+ * The longest label in each menu (characters). Every label in a menu gets the size that fits that one in the menu's
+ * width, so big screens don't cut "Play a friend" off and the items stay the same size.
+ */
 const MAIN_FIT = 'Play a friend'.length;
 const FRIEND_FIT = 'Join with a code'.length;
 

@@ -1,5 +1,6 @@
 import type { FightEvent, FighterState, ForgedFighter, ForgePreview, Hand, Phase, PlayerId, PoseFrame, Projectile, Stance, TrackerInfo } from '../types';
 import type { Intent } from '../intent/intents';
+import type { RatingChange } from '../forge/leaderboard';
 
 /**
  * Messages to/from the AWS signaling server (WebSocket). It only brokers the handshake.
@@ -65,7 +66,8 @@ export type HostMessage =
   | { type: 'abandon'; who: PlayerId } // the match was called off, no result: `who` walked away (tab hidden too long)
   | { type: 'presence'; visible: boolean }; // whether the host player's tab is visible (on connect and every change)
 
-export type MatchPlayer = { name: string; fighter: ForgedFighter | null; hp: number };
+/** `rating`: how the last round moved their rating (null or missing: unrated, or from an older host). */
+export type MatchPlayer = { name: string; fighter: ForgedFighter | null; hp: number; rating?: RatingChange | null };
 
 /** One tick of the host's fight, everything the director needs to draw it. */
 export type MirrorFrame = {

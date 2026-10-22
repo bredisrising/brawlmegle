@@ -22,7 +22,7 @@ import { captureScan, forgeBusy, forgeFighter, type ForgeOwner, type ScanFrames 
 import { forgePreview, forgeStatus, onChange, samePreview, scanStatus } from '../forge/status';
 import { fetchServerFighters, maskedFighter, saveFighter, saveOwner } from '../forge/roster';
 import { preloadModel } from '../forge/models';
-import { recordMatch } from '../forge/leaderboard';
+import { recordMatch, type RatingChange } from '../forge/leaderboard';
 import { config } from '../config';
 import {
   PLAYER_IDS, opponentOf,
@@ -289,6 +289,8 @@ export class Game {
       if (s.phase === 'countdown' && prev.phase !== 'countdown' && s.notice?.sticky) useGameStore.setState({ notice: null });
       // The watchdog starts counting from the start of the match.
       if (s.phase === 'countdown' && prev.phase !== 'countdown') this.lastPeerAt = performance.now();
+      // The last round's rating change belongs to its K.O. screen only.
+      if (prev.phase === 'ko' && s.phase !== 'ko') for (const id of PLAYER_IDS) if (s.players[id].rating) updatePlayer(id, { rating: null });
       if (prev.phase === 'ko' && s.phase !== 'ko' && (s.votes !== NO_VOTES || s.nextAt !== null)) {
         this.votes = NO_VOTES;
         this.nextAt = null;
@@ -300,7 +302,7 @@ export class Game {
         this.announceFinish(s.winner, s.ending);
         if (!this.mirroring) {
           // Only fights between two people go on the leaderboard: a round against the CPU counts for nobody.
-          if (!this.cpu.p1 && !this.cpu.p2) recordMatch(this.fighters, s.winner);
+          if (!this.cpu.p1 && !this.cpu.p2) void recordMatch(this.fighters, s.winner).then((rating) => this.showRating(rating));
           this.callFinish(s.winner, s.ending);
         }
       }
@@ -2042,11 +2044,18 @@ export class Game {
     const { players } = useGameStore.getState();
     const entry = (id: PlayerId): MatchPlayer => {
       const fighter = players[id].status === 'ready' ? this.fighters[id] : undefined;
-      return { name: players[id].name, fighter: fighter ? { ...fighter, brief: undefined } : null, hp: players[id].hp };
+      return { name: players[id].name, fighter: fighter ? { ...fighter, brief: undefined } : null, hp: players[id].hp, rating: players[id].rating };
     };
     const msg: HostMessage = { type: 'match', players: { p1: entry('p1'), p2: entry('p2') } };
     session.send(msg);
     session.cast(msg);
+  }
+
+  /** Host: how the round just reported moved both players' ratings, for the K.O. screen on both laptops. */
+  private showRating(rating: Record<PlayerId, RatingChange> | null) {
+    if (!rating || useGameStore.getState().phase !== 'ko') return;
+    for (const id of PLAYER_IDS) updatePlayer(id, { rating: rating[id] });
+    this.sendMatch();
   }
 
   /** Host: this tick's fight state, and anything that happened, to the client laptop. */
@@ -2083,6 +2092,9 @@ export class Game {
   private mirrorMatch(players: Record<PlayerId, MatchPlayer>) {
     for (const id of PLAYER_IDS) {
       const p = players[id];
+      // Ratings come from the host's report of the round, this laptop's own player's included.
+      const was = useGameStore.getState().players[id].rating;
+      if (p.rating?.after !== was?.after || p.rating?.before !== was?.before) updatePlayer(id, { rating: p.rating ?? null });
       // P2 is the client laptop's own player: its name and status come from its own setup messages. A watching screen
       // has no player of its own: both come from the host.
       if (this.spectator || id !== localPlayerId('client')) {

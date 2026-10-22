@@ -5,6 +5,7 @@ import { MAX_HP, PLAYER_NAMES } from './constants';
 import type { LinkStats } from '../net/Peer';
 import type { ScanView } from '../forge/scanGuide';
 import type { Bucket } from '../forge/scanBuckets';
+import type { RatingChange } from '../forge/leaderboard';
 
 /** Popup style. Game maps FightEvents onto these. */
 export type HitKind = 'light' | 'heavy' | 'blocked';
@@ -24,6 +25,8 @@ export interface PlayerState {
   portraitUrl: string | null;
   /** While forging: the stages the live preview shows (null when there's nothing to show). */
   forge: ForgePreview | null;
+  /** How the round just finished moved this player's rating (the K.O. screen shows it); null when it wasn't rated. */
+  rating: RatingChange | null;
 }
 
 export interface HitPopup {
@@ -149,6 +152,7 @@ const initialPlayer = (id: PlayerId): PlayerState => ({
   guardLock: 0,
   portraitUrl: null,
   forge: null,
+  rating: null,
 });
 
 export type DrillView = {

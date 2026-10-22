@@ -18,6 +18,9 @@ export type FighterRecord = {
   bestStreak: number;
   /** The last seven rounds, newest last: recent form, the leaderboard's tiebreaker. */
   recentResults: MatchResult[];
+  /** The player's rating (the server's Elo, shared by a username's fighters) and how many rated rounds it rests on. */
+  rating?: number;
+  rated?: number;
 };
 
 const RECENT = 7;
@@ -32,7 +35,8 @@ function toRecord(value: unknown): FighterRecord | null {
   const recent = Array.isArray(record.recentResults) && record.recentResults.every((r) => r === 'win' || r === 'loss' || r === 'draw')
     ? (record.recentResults as MatchResult[]).slice(-RECENT)
     : [];
-  return { wins: record.wins as number, losses: record.losses as number, draws: record.draws as number, streak: record.streak as number, bestStreak: record.bestStreak as number, recentResults: recent };
+  const rating = typeof record.rating === 'number' && Number.isFinite(record.rating) ? { rating: record.rating, rated: Number(record.rated) || 0 } : {};
+  return { wins: record.wins as number, losses: record.losses as number, draws: record.draws as number, streak: record.streak as number, bestStreak: record.bestStreak as number, recentResults: recent, ...rating };
 }
 
 function clean(stored: unknown): Record<string, FighterRecord> {
@@ -106,6 +110,49 @@ export function recentWinRate(record: FighterRecord) {
   return decided.length ? Math.round((decided.filter((r) => r === 'win').length / decided.length) * 100) : 0;
 }
 
+/** Ratings (the server's Elo): everyone started at 1,000 on 2026-10-21, and a player is ranked after PLACEMENT rated rounds. */
+export const START_RATING = 1000;
+export const PLACEMENT = 5;
+/** How one rated round moved a player's rating (the server's answer to POST /api/matches). */
+export type RatingChange = { before: number; after: number; rated: number };
+export const ratingOf = (record: FighterRecord) => record.rating ?? START_RATING;
+export const isRanked = (record: FighterRecord) => (record.rated ?? 0) >= PLACEMENT;
+
+/** Named ranks to climb, highest first. */
+const TIERS = [
+  { name: 'Champion', min: 1400 },
+  { name: 'Elite', min: 1250 },
+  { name: 'Contender', min: 1100 },
+  { name: 'Brawler', min: 950 },
+  { name: 'Rookie', min: -Infinity },
+] as const;
+export const tierOf = (rating: number) => TIERS.find((t) => rating >= t.min)!.name;
+
+/** The board sorts by rating once this many players are ranked; by wins until then (not a wall of 1,000s). */
+const RATING_BOARD_AFTER = 5;
+export const ratingBoardReady = (records: Readonly<Record<string, FighterRecord>>) => Object.values(records).filter(isRanked).length >= RATING_BOARD_AFTER;
+
+export type SortKey = 'rating' | 'wins' | 'winRate' | 'streak' | 'fights';
+/** Win rate only counts with this many fights behind it, or one lucky win would top the board at 100%. */
+const RATE_MIN = 5;
+const has = (record: FighterRecord) => Number(totalMatches(record) >= RATE_MIN);
+
+/** Leaderboard order for a sort tab; ties fall back to the wins order. */
+export function compareBy(key: SortKey): (a: FighterRecord, b: FighterRecord) => number {
+  switch (key) {
+    case 'rating':
+      return (a, b) => Number(isRanked(b)) - Number(isRanked(a)) || ratingOf(b) - ratingOf(a) || (b.rated ?? 0) - (a.rated ?? 0) || compareRecords(a, b);
+    case 'winRate':
+      return (a, b) => has(b) - has(a) || winRate(b) - winRate(a) || compareRecords(a, b);
+    case 'streak':
+      return (a, b) => b.bestStreak - a.bestStreak || compareRecords(a, b);
+    case 'fights':
+      return (a, b) => totalMatches(b) - totalMatches(a) || compareRecords(a, b);
+    default:
+      return compareRecords;
+  }
+}
+
 /** Leaderboard order: most wins, then recent form, then career win rate, then fights played. */
 export function compareRecords(a: FighterRecord, b: FighterRecord) {
   return b.wins - a.wins || recentWinRate(b) - recentWinRate(a) || winRate(b) - winRate(a) || totalMatches(b) - totalMatches(a);
@@ -113,9 +160,10 @@ export function compareRecords(a: FighterRecord, b: FighterRecord) {
 
 /**
  * Save one completed round between two people (rounds against the CPU aren't recorded: Game.ts doesn't call this, and
- * the server ignores a round with a side left out). The host is authoritative for network matches.
+ * the server ignores a round with a side left out). The host is authoritative for network matches. Resolves to how
+ * both players' ratings moved (null when the round wasn't rated, or the server couldn't be reached).
  */
-export function recordMatch(fighters: Partial<Record<PlayerId, ForgedFighter>>, winner: PlayerId | null) {
+export async function recordMatch(fighters: Partial<Record<PlayerId, ForgedFighter>>, winner: PlayerId | null): Promise<Record<PlayerId, RatingChange> | null> {
   const records = readRecords();
   for (const id of ['p1', 'p2'] as const) {
     const fighter = fighters[id];
@@ -130,13 +178,19 @@ export function recordMatch(fighters: Partial<Record<PlayerId, ForgedFighter>>, 
     } else records[fighter.id] = { ...previous, losses: previous.losses + 1, streak: 0, recentResults };
   }
   writeRecords(records);
-  if (!config.forgeApi) return;
+  if (!config.forgeApi) return null;
   const matchId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  void fetch(`${api()}/api/matches`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-forge-key': config.forgeKey },
-    body: JSON.stringify({ matchId, p1: fighters.p1?.id ?? null, p2: fighters.p2?.id ?? null, winner }),
-  }).catch(() => {});
+  try {
+    const res = await fetch(`${api()}/api/matches`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forge-key': config.forgeKey },
+      body: JSON.stringify({ matchId, p1: fighters.p1?.id ?? null, p2: fighters.p2?.id ?? null, winner }),
+    });
+    const body = (await res.json()) as { rating?: Record<PlayerId, RatingChange> | null };
+    return body.rating ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // Freshen the local copy once at startup, so roster tiles show the shared records.

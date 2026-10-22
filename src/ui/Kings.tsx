@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from 'react';
-import { compareRecords, fetchRecords, type FighterRecord } from '../forge/leaderboard';
+import { compareBy, fetchRecords, isRanked, ratingBoardReady, ratingOf, tierOf, type FighterRecord } from '../forge/leaderboard';
 import { listFighters } from '../forge/roster';
 import type { ForgedFighter } from '../types';
 
@@ -19,16 +19,21 @@ const TITLE = ['Reigning king', 'Contender', 'Contender'];
  */
 export function Kings({ onOpen }: { onOpen: () => void }) {
   const [kings, setKings] = useState<{ fighter: ForgedFighter; record: FighterRecord }[]>([]);
+  // The top three by rating once enough players are ranked (the leaderboard switches then too), by wins until then.
+  const [byRating, setByRating] = useState(false);
   const [turn, setTurn] = useState(0);
 
   useEffect(() => {
     let alive = true;
     void Promise.all([listFighters(), fetchRecords()]).then(([fighters, records]) => {
       if (!alive) return;
+      const rated = ratingBoardReady(records);
+      const order = compareBy(rated ? 'rating' : 'wins');
       const ranked = fighters
         .map((fighter) => ({ fighter, record: records[fighter.id] }))
-        .filter((k): k is { fighter: ForgedFighter; record: FighterRecord } => !!k.record && k.record.wins > 0)
-        .sort((a, b) => compareRecords(a.record, b.record) || a.fighter.name.localeCompare(b.fighter.name));
+        .filter((k): k is { fighter: ForgedFighter; record: FighterRecord } => !!k.record && (rated ? isRanked(k.record) : k.record.wins > 0))
+        .sort((a, b) => order(a.record, b.record) || a.fighter.name.localeCompare(b.fighter.name));
+      setByRating(rated);
       setKings(ranked.slice(0, KINGS));
     }).catch(() => {});
     return () => { alive = false; };
@@ -74,7 +79,11 @@ export function Kings({ onOpen }: { onOpen: () => void }) {
           </span>
           <span className="relative block truncate font-display text-[1.4rem] uppercase leading-none tracking-tight text-paper sm:text-[1.7rem]">{fighter.name}</span>
           <span className="relative mt-0.5 flex items-center gap-2 font-cond text-[0.68rem] font-bold uppercase tracking-[0.14em] text-paper/70 sm:text-xs">
-            <span><b className="text-[var(--metal)]">{record.wins}W</b> · {record.losses}L</span>
+            {byRating ? (
+              <span><b className="text-[var(--metal)]">{ratingOf(record).toLocaleString('en-US')}</b> · {tierOf(ratingOf(record))}</span>
+            ) : (
+              <span><b className="text-[var(--metal)]">{record.wins}W</b> · {record.losses}L</span>
+            )}
             {hot ? (
               <span className="flex items-center gap-1 text-low"><Flame className="h-3 w-auto" />{record.streak} straight</span>
             ) : (
