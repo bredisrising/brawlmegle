@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # The game site follows main: GitHub Actions tests and builds every push to main and publishes green builds to the
-# `site` branch (.github/workflows/site.yml). This puts a new one live, checked once a minute by a systemd timer.
+# `site` branch (.github/workflows/site.yml). This puts a new one live, checked every 30 s by a systemd timer (a check
+# that finds nothing new is one small request to GitHub for the branch's latest commit).
 #   sudo bash site-sync.sh install    # once: clone the site branch, install the timer
 #   sudo bash site-sync.sh            # one check (what the timer runs)
 #   sudo bash site-sync.sh rollback   # back to the previous build; that build stays off until a newer one arrives
@@ -26,11 +27,13 @@ ExecStart=/usr/local/bin/brawlegle-site-sync
 EOF
     cat > /etc/systemd/system/brawlegle-site-sync.timer <<EOF
 [Unit]
-Description=Brawlmegle: look for a new main build every minute
+Description=Brawlmegle: look for a new main build every 30 s
 
 [Timer]
-OnBootSec=1min
-OnUnitActiveSec=1min
+OnBootSec=30s
+OnUnitActiveSec=30s
+# systemd would otherwise fire up to a minute late to batch wakeups.
+AccuracySec=1s
 
 [Install]
 WantedBy=timers.target
@@ -53,10 +56,12 @@ EOF
     # One check at a time (the timer, or someone running it by hand).
     exec 9>/run/brawlegle-site-sync.lock
     flock -n 9 || exit 0
-    git -C "$SRC" fetch -q --depth 1 origin site
-    new=$(git -C "$SRC" rev-parse FETCH_HEAD)
+    # Just the branch's latest commit first; the build itself only downloads when it's new.
+    new=$(git ls-remote "$REPO" refs/heads/site | cut -f1)
+    [ -n "$new" ] || exit 0
     [ "$new" = "$(cat "$LIVE" 2>/dev/null || true)" ] && exit 0
     [ "$new" = "$(cat "$SKIP" 2>/dev/null || true)" ] && exit 0
+    git -C "$SRC" fetch -q --depth 1 origin site
     git -C "$SRC" reset -q --hard FETCH_HEAD
     rm -rf "$WWW/game.new"
     mkdir -p "$WWW/game.new"

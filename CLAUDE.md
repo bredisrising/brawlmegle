@@ -17,7 +17,7 @@ Read `SPEC.md` (what we're building) and `architecture.md` (how the code is laid
 - `/api/` the forge (scan → fighter, usernames, the OpenAI key lives only on the server), `/ws` matchmaker
 - Locally, `npm run dev` uses the same shared forge and matchmaker by default, so fighters/usernames are the same everywhere.
 - **The game follows `main`.** Every push to `main` runs the tests and the build in GitHub Actions (`.github/workflows/site.yml`);
-  a green build is published to the `site` branch, and the server puts it live within a minute
+  a green build is published to the `site` branch, and the server puts it live within 30 s
   (`matchmaker/deploy/site-sync.sh`, a systemd timer). A red build never ships. Roll back on the server with
   `sudo brawlegle-site-sync rollback`. The forge and matchmaker servers still deploy by hand. Try risky changes on a branch.
 
