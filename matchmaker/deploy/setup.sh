@@ -198,7 +198,7 @@ server {
   # Static dev tools (intent tuner, depth test, scan test) and a preview of the next game build (/next/: `vite build
   # --base /next/`), each copied to /var/www/brawlegle/<name>/.
   # Without the slash they'd fall through to the game below: send /next to the test build, and so on.
-  location ~ ^/(tuner|depth|scan|next)\$ {
+  location ~ ^/(tuner|depth|scan|next|stats)\$ {
     return 301 https://\$host/\$1/\$is_args\$args;
   }
   location ~ ^/(tuner|depth|scan|next)/ {
