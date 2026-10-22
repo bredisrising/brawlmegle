@@ -214,9 +214,9 @@ export const TEMPLATES = {
   ],
 } as const satisfies Record<string, readonly Line[]>;
 
-/** How the commentators say a fighter's name: "bred (CPU hard)" is just "Bred", "Nana Knuckles (BOT)" "Nana Knuckles". */
+/** How the commentators say a fighter's name: "bred (CPU hard)" is just "Bred", "Nana Knuckles (BOT 900)" "Nana Knuckles". */
 export function spoken(name: string) {
-  const bare = name.replace(/\s*\((?:cpu|bot)[^)]*\)\s*$/i, '').trim();
+  const bare = name.replace(/\s*\((?:cpu|bot|guest)[^)]*\)\s*$/i, '').trim();
   return bare ? bare[0].toUpperCase() + bare.slice(1) : name;
 }
 

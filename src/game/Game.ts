@@ -18,7 +18,7 @@ import { readingConfig, type Intent } from '../intent/intents';
 import { InputHub, createLocalSource, preloadLocalInput, type InputSource } from '../input';
 import { MockSource } from '../input/sources/MockSource';
 import { trackerInfoOf } from '../input/poseHealth';
-import { captureScan, forgeBusy, forgeFighter, type ForgeOwner, type ScanFrames } from '../forge/forge';
+import { captureScan, forgeBusy, forgeFighter, type ForgeOwner, type OwnerProof, type ScanFrames } from '../forge/forge';
 import { forgePreview, forgeStatus, onChange, samePreview, scanStatus } from '../forge/status';
 import { fetchServerFighters, maskedFighter, saveFighter, saveOwner } from '../forge/roster';
 import { preloadModel } from '../forge/models';
@@ -108,9 +108,9 @@ const ARENA_FLOOR = new THREE.Vector3(0, 0.01, 0);
 
 /** What the player picked on the avatar screen. */
 export type FighterChoice =
-  | { kind: 'scan'; name: string; username?: string } // consented: scan + forge + save under their username
+  | { kind: 'scan'; name: string; username?: string; proof?: OwnerProof } // consented: scan + forge + save under their username (proof: a rescan of their own)
   | { kind: 'masked'; name: string } // declined: masked mystery fighter, no scan
-  | { kind: 'existing'; fighter: ForgedFighter };
+  | { kind: 'existing'; fighter: ForgedFighter; guest?: boolean }; // guest: someone else's fighter, played for fun (unrated)
 
 /**
  * Host-side orchestrator. Wires the pipeline and runs the phase state machine:
@@ -260,6 +260,8 @@ export class Game {
   private lastWatch = 0;
   private benchNote = 'You left the match';
   private giveUp = 0;
+  /** Who's playing someone else's fighter (a guest): their rounds count for nobody, and make no highlights. */
+  private guest: Record<PlayerId, boolean> = { p1: false, p2: false };
   /** Matchmaking: the bot stepping in if nobody turns up (botFill), which one it'll be, and the last one fought. */
   private botTimer = 0;
   private nextBot: Bot | null = null;
@@ -317,7 +319,8 @@ export class Game {
         this.announceFinish(s.winner, s.ending);
         if (!this.mirroring) {
           // Only fights between two people go on the leaderboard: a round against the CPU counts for nobody.
-          if (!this.cpu.p1 && !this.cpu.p2) void recordMatch(this.fighters, s.winner).then((rating) => this.showRating(rating));
+          // ...and only as themselves: someone playing another player's fighter (a guest) counts for nobody either.
+          if (!this.cpu.p1 && !this.cpu.p2 && !this.guest.p1 && !this.guest.p2) void recordMatch(this.fighters, s.winner).then((rating) => this.showRating(rating));
           this.callFinish(s.winner, s.ending);
         }
       }
@@ -1138,6 +1141,7 @@ export class Game {
    */
   private async setupPlayer(id: PlayerId, choice: FighterChoice, source: InputSource = createLocalSource(), scan?: Promise<ScanFrames>) {
     const name = choice.kind === 'existing' ? choice.fighter.name : choice.name;
+    this.guest[id] = choice.kind === 'existing' && !!choice.guest;
     delete this.cpu[id]; // a real player takes the slot
     if (choice.kind !== 'existing' || choice.fighter.id !== 'test') this.testSlots.delete(id);
     const gen = ++this.setupGen[id];
@@ -1145,7 +1149,7 @@ export class Game {
     if (choice.kind === 'existing') preloadModel(choice.fighter.glbUrl, 'high')?.catch(() => {});
     if (this.practiceLevel && id === 'p1') this.prepareCpu(name);
     try {
-      updatePlayer(id, { name, status: 'scanning', statusDetail: 'Starting camera' });
+      updatePlayer(id, { name: this.guest[id] ? `${name} (guest)` : name, status: 'scanning', statusDetail: 'Starting camera' });
       await source.start();
       this.lifetime.signal.throwIfAborted();
       this.input.assign(id, source);
@@ -1179,7 +1183,7 @@ export class Game {
         let owner: ForgeOwner | null = null;
         const onOwner = (o: ForgeOwner) => ((owner = o), this.handOwner(o, name, remote, false));
         const ownerDone = () => owner && this.handOwner(owner, name, remote, true);
-        const forging = forgeFighter(name, frames, (f) => (show(forgeStatus(f)), preview(f)), { username: choice.username, signal, onOwner });
+        const forging = forgeFighter(name, frames, (f) => (show(forgeStatus(f)), preview(f)), { username: choice.username, proof: choice.proof, signal, onOwner });
         const skipped = new Promise<null>((resolve) => (this.skipForge[id] = () => resolve(null)));
         const done = await Promise.race([forging, skipped]);
         delete this.skipForge[id];
@@ -1280,7 +1284,8 @@ export class Game {
   private keepFighter(choice: FighterChoice, fighter: ForgedFighter) {
     if (!this.quick) return;
     const masked = choice.kind === 'masked' || fighter.id.startsWith('stand-in-') || fighter.status !== 'ready';
-    this.quick.choice = masked ? { kind: 'masked', name: fighter.name } : { kind: 'existing', fighter: { ...fighter, brief: undefined } };
+    const guest = choice.kind === 'existing' && choice.guest;
+    this.quick.choice = masked ? { kind: 'masked', name: fighter.name } : { kind: 'existing', fighter: { ...fighter, brief: undefined }, guest };
   }
 
   /** K.O. screen "Rematch": a vote. The rematch starts once both players have voted (the host counts them). */
@@ -1614,6 +1619,7 @@ export class Game {
 
   /** Host: P2's player left (went back to the title, or never came back). Free the slot so someone else can join. */
   private releaseRemote() {
+    this.guest.p2 = false;
     this.away.delete('p2');
     if (useGameStore.getState().notice?.sticky) useGameStore.setState({ notice: null });
     const id: PlayerId = 'p2';
@@ -1864,7 +1870,7 @@ export class Game {
    */
   private startHighlight(finish: FightEvent) {
     const { training, players } = useGameStore.getState();
-    if (this.mirroring || training || this.cpu.p1 || this.cpu.p2 || !HighlightRecorder.supported()) return;
+    if (this.mirroring || training || this.cpu.p1 || this.cpu.p2 || this.guest.p1 || this.guest.p2 || !HighlightRecorder.supported()) return;
     const side = (id: PlayerId) => ({ id: this.fighters[id]?.id, name: players[id].name.replace(/\s*\(CPU[^)]*\)$/, ''), cpu: !!this.cpu[id] });
     const winner = finish.attacker;
     this.highlight.start(this.renderer.renderer.domElement, {

@@ -288,9 +288,9 @@ export class HostSession {
   }
 
   private async toChoice(msg: Choice): Promise<FighterChoice> {
-    if (msg.type === 'pick') return { kind: 'existing', fighter: await this.findFighter(msg.fighterId) };
+    if (msg.type === 'pick') return { kind: 'existing', fighter: await this.findFighter(msg.fighterId), guest: !!msg.guest };
     if (msg.consent === 'masked') return { kind: 'masked', name: msg.name };
-    return { kind: 'scan', name: msg.name, username: msg.username };
+    return { kind: 'scan', name: msg.name, username: msg.username, proof: typeof msg.ticket === 'string' ? { ticket: msg.ticket } : undefined };
   }
 
   /** Roster first; the client may have found a newer one by username on the shared forge. */

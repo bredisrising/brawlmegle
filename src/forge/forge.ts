@@ -66,8 +66,45 @@ export async function findProfile(username: string, api = config.forgeApi, timeo
   // Bounded, so the name screen never waits forever on a hung request before it lets you scan.
   const res = await fetch(`${trimSlash(api)}/api/profiles/${encodeURIComponent(u)}`, { signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) return null;
-  const body = (await res.json()) as { fighter: Record<string, unknown> | null };
-  return body.fighter ? toForgedFighter(body.fighter) : null;
+  const body = (await res.json()) as { fighter: Record<string, unknown> | null; owned?: boolean };
+  if (!body.fighter) return null;
+  const fighter = toForgedFighter(body.fighter);
+  if (body.owned) fighter.claimed = true;
+  return fighter;
+}
+
+/**
+ * Proof that a username is this player's, for rescanning under it (the server refuses an owned username without it):
+ * the owner key this browser kept from the scan, the code shown after the forge, or a one-time ticket (rescanTicket).
+ */
+export type OwnerProof = { id: string; key: string } | { id: string; code: string } | { ticket: string };
+
+/** "It's me" on another laptop: the code from after the forge says which fighter is theirs. Throws the server's reason. */
+export async function claimFighter(code: string, api = config.forgeApi): Promise<{ id: string; name: string; username: string | null }> {
+  const res = await fetch(`${trimSlash(api)}/api/fighters/claim`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-forge-key': config.forgeKey },
+    body: JSON.stringify({ code }),
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(await errorText(res));
+  return (await res.json()) as { id: string; name: string; username: string | null };
+}
+
+/**
+ * A one-time pass to rescan under this username on another laptop's forge (a friend's room): the host gets the ticket,
+ * never this browser's owner key or code. Null if the server says no.
+ */
+export async function rescanTicket(username: string, proof: OwnerProof, api = config.forgeApi): Promise<string | null> {
+  if (!api) return null;
+  const res = await fetch(`${trimSlash(api)}/api/fighters/ticket`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-forge-key': config.forgeKey },
+    body: JSON.stringify({ username, proof }),
+    signal: AbortSignal.timeout(8000),
+  }).catch(() => null);
+  if (!res?.ok) return null;
+  return ((await res.json()) as { ticket?: string }).ticket ?? null;
 }
 
 /** Null if the forge server would take a scan right now, else why not (busy, over its limits). Unreachable: null. */
@@ -104,7 +141,7 @@ export async function submitForge(name: string, frames: ScanFrames, api = config
 }
 
 /** submitForge, plus the owner key and delete code (null from an older forge that doesn't issue them). */
-export async function startForge(name: string, frames: ScanFrames, api = config.forgeApi, username?: string, timeoutMs = 45_000): Promise<{ id: string; owner: ForgeOwner | null }> {
+export async function startForge(name: string, frames: ScanFrames, api = config.forgeApi, username?: string, timeoutMs = 45_000, proof?: OwnerProof): Promise<{ id: string; owner: ForgeOwner | null }> {
   if (!api) {
     await wait(300);
     const id = `mock-${Date.now()}`;
@@ -116,7 +153,7 @@ export async function startForge(name: string, frames: ScanFrames, api = config.
   const res = await fetch(`${trimSlash(api)}/api/forge`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-forge-key': config.forgeKey },
-    body: JSON.stringify({ name, username, frames: present, ...(config.forgeQuality ? { quality: config.forgeQuality } : {}) }),
+    body: JSON.stringify({ name, username, frames: present, ...(proof ? { proof } : {}), ...(config.forgeQuality ? { quality: config.forgeQuality } : {}) }),
     signal: AbortSignal.timeout(timeoutMs),
   }).catch((err: Error) => {
     throw new Error(`Couldn't reach the forge: ${err.message}`);
@@ -184,6 +221,8 @@ export function toForgedFighter(raw: Record<string, unknown>, fallbackName = '')
   const step = STEPS.includes(raw.step as ForgedFighter['step'] & string) ? (raw.step as ForgedFighter['step']) : undefined;
   const fighter: ForgedFighter = { id: String(raw.id ?? ''), name: str(raw.name) ?? fallbackName, status };
   if (step) fighter.step = step;
+  const username = str(raw.username);
+  if (username) fighter.username = username;
   for (const key of ['glbUrl', 'cardUrl', 'sheetUrl', 'error', 'sheetPartialUrl', 'previewVoxelsUrl', 'previewMeshUrl'] as const) {
     const value = str(raw[key]);
     if (value) fighter[key] = value;
@@ -213,6 +252,8 @@ export type ForgeOptions = {
   signal?: AbortSignal;
   /** Saves the fighter under this username on the server. */
   username?: string;
+  /** Proves the username is theirs (needed when someone already owns it: a rescan). */
+  proof?: OwnerProof;
   /** The owner key and delete code, as soon as the forge has started (once; not from an older forge server). */
   onOwner?: (owner: ForgeOwner) => void;
 };
@@ -226,9 +267,9 @@ export async function forgeFighter(
   name: string,
   frames: ScanFrames,
   onProgress?: (fighter: ForgedFighter) => void,
-  { api = config.forgeApi, pollMs = 1500, timeoutMs = 5 * 60_000, requestTimeoutMs = 10_000, signal, username, onOwner }: ForgeOptions = {},
+  { api = config.forgeApi, pollMs = 1500, timeoutMs = 5 * 60_000, requestTimeoutMs = 10_000, signal, username, proof, onOwner }: ForgeOptions = {},
 ): Promise<ForgedFighter> {
-  const { id, owner } = await startForge(name, frames, api, username);
+  const { id, owner } = await startForge(name, frames, api, username, undefined, proof);
   if (owner) onOwner?.(owner);
   const started = Date.now();
   let last: ForgedFighter = { id, name, status: 'scanning' };

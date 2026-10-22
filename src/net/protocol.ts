@@ -29,8 +29,10 @@ export type SignalMessage =
 export type ClientMessage =
   | { type: 'hello'; version: number }
   | { type: 'pose'; frame: PoseFrame } // "poses" channel: unordered, no retransmits
-  | { type: 'profile'; name: string; consent: 'save' | 'masked'; username?: string } // after 'Scan new'; username: the forge saves the fighter under it
-  | { type: 'pick'; fighterId: string } // after 'Choose existing'
+  // After 'Scan new'; username: the forge saves the fighter under it; ticket: a rescan of their own username (the
+  // server's one-time pass: their owner key never leaves their laptop).
+  | { type: 'profile'; name: string; consent: 'save' | 'masked'; username?: string; ticket?: string }
+  | { type: 'pick'; fighterId: string; guest?: boolean } // after 'Choose existing'; guest: someone else's fighter, unrated
   | { type: 'scan'; frames: [front: string, left: string, right: string] } // base64 JPEGs
   | { type: 'rematch' } // from the K.O. screen on the client laptop
   | { type: 'skip' } // "fight now": don't wait for P2's forge, use a stand-in until it's done

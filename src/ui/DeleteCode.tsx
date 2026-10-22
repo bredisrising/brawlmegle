@@ -2,8 +2,9 @@ import { localPlayerId, useGameStore } from '../game/store';
 import { TextButton } from './ArcadeButton';
 
 /**
- * After a forge: the fighter's delete code, to screenshot, until "Got it". The forge hands it out once; it deletes the
- * fighter from any laptop (Leaders, or the memory card: "Delete a fighter with a code").
+ * After a forge: the fighter's code, to screenshot, until "Got it". The forge hands it out once. It proves the fighter
+ * is theirs on another laptop ("It's me" on the username step) and deletes it from any laptop (Leaders, or the memory
+ * card: "Delete a fighter with a code").
  *   row: one line (the lobby's bottom strip, the K.O. screen in place of the tips);
  *   card: stacked (the client laptop's screen).
  */
@@ -20,12 +21,12 @@ export function DeleteCode({ layout = 'card' }: { layout?: 'row' | 'card' }) {
     >
       <span className="flex flex-col">
         <span className="font-cond text-xs font-extrabold uppercase tracking-[0.25em] text-hp">
-          Your delete code{code.name ? ` · ${code.name}` : ''}
+          Your fighter code{code.name ? ` · ${code.name}` : ''}
         </span>
         <span className="select-text whitespace-nowrap font-display text-2xl tracking-[0.06em] text-paper">{code.code}</span>
       </span>
       <span className={`text-sm font-medium leading-snug text-paper/70 ${row ? 'min-w-48 max-w-[17rem] flex-1' : ''}`}>
-        Screenshot it: it deletes your scan photos and fighter for good, from any laptop (Leaders).
+        Screenshot it: it proves this fighter is yours on another laptop, and deletes it for good from any laptop.
       </span>
       <TextButton className="text-sm" onClick={() => useGameStore.setState({ deleteCode: null })}>
         Got it

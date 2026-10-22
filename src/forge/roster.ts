@@ -1,6 +1,6 @@
 import { config } from '../config';
 import type { ForgedFighter } from '../types';
-import { toForgedFighter, type ForgeOwner } from './forge';
+import { normalizeUsername, toForgedFighter, type ForgeOwner, type OwnerProof } from './forge';
 import { forgetRecord } from './leaderboard';
 
 /**
@@ -110,6 +110,61 @@ export function saveOwner(owner: Pick<ForgeOwner, 'id' | 'key'>, name: string) {
   writeOwned({ ...readOwned(), [owner.id]: { id: owner.id, key: owner.key, name, createdAt: Date.now() } });
 }
 
+/**
+ * Fighters claimed on this browser with the code from after their forge ("It's me" on another laptop), by fighter id:
+ * { code, username, name }. Apart from owner keys: a code isn't a key, and "Delete my fighter" lists only keys.
+ */
+const CLAIM_KEY = 'brawlegle.claimed';
+type Claim = { id: string; code: string; username: string | null; name: string };
+
+function readClaims(): Record<string, Claim> {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(CLAIM_KEY) ?? '{}');
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+    const out: Record<string, Claim> = {};
+    for (const [id, v] of Object.entries(raw as Record<string, Record<string, unknown>>)) {
+      if (id && v && typeof v.code === 'string' && v.code) {
+        out[id] = { id, code: v.code, username: typeof v.username === 'string' ? v.username : null, name: typeof v.name === 'string' ? v.name : '' };
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** Remember a fighter claimed here with its code (claimFighter said whose it is). */
+export function saveClaim(claim: Claim) {
+  try {
+    localStorage.setItem(CLAIM_KEY, JSON.stringify({ ...readClaims(), [claim.id]: { code: claim.code, username: claim.username, name: claim.name } }));
+  } catch {
+    // Storage blocked: it lasts until the page closes (the code still works next time).
+  }
+}
+
+/**
+ * Proof that `fighter` is this player's, or null: the owner key (scanned here) or the code (claimed here), for it or
+ * for an earlier fighter under the same username (a rescan elsewhere is still their username).
+ */
+export function ownerProof(fighter: Pick<ForgedFighter, 'id' | 'username'>): OwnerProof | null {
+  const owned = readOwned();
+  const claims = readClaims();
+  if (owned[fighter.id]) return { id: fighter.id, key: owned[fighter.id].key };
+  if (claims[fighter.id]) return { id: fighter.id, code: claims[fighter.id].code };
+  const username = fighter.username;
+  if (!username) return null;
+  const key = Object.values(owned).find((o) => normalizeUsername(o.name) === username);
+  if (key) return { id: key.id, key: key.key };
+  const claim = Object.values(claims).find((c) => c.username === username);
+  return claim ? { id: claim.id, code: claim.code } : null;
+}
+
+/**
+ * Whether this player may fight as `fighter` for real (rated, records): it's theirs (ownerProof), or nobody's (a house
+ * fighter or a bot, with no username). Anyone else's plays as a guest.
+ */
+export const isMine = (fighter: Pick<ForgedFighter, 'id' | 'username'>) => !fighter.username || ownerProof(fighter) !== null;
+
 /** Fighters this browser holds an owner key for, newest first. */
 export function ownedFighters(): OwnedFighter[] {
   return Object.values(readOwned()).sort((a, b) => b.createdAt - a.createdAt);
@@ -121,6 +176,15 @@ export function forgetFighter(id: string) {
   if (owned[id]) {
     delete owned[id];
     writeOwned(owned);
+  }
+  const claims = readClaims();
+  if (claims[id]) {
+    delete claims[id];
+    try {
+      localStorage.setItem(CLAIM_KEY, JSON.stringify(Object.fromEntries(Object.values(claims).map(({ id: c, ...rest }) => [c, rest]))));
+    } catch {
+      // Storage blocked: nothing was kept.
+    }
   }
   try {
     const saved = readSaved();

@@ -141,6 +141,8 @@ export type FightEvent = {
 export type ForgedFighter = {
   id: string;
   name: string; // typed in by the player before the scan
+  username?: string; // the username it's saved under (players' forged fighters; not house fighters or bots)
+  claimed?: boolean; // from a username lookup: someone owns that username, so rescanning it needs their proof
   status: 'scanning' | 'forging' | 'ready' | 'failed';
   step?: 'brief' | 'sheet' | 'warmup' | 'model' | 'cleanup' | 'rig';
   glbUrl?: string; // 1 m tall; forged models use Mixamo bones, static test models may be unrigged

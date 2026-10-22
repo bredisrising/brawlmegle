@@ -1,6 +1,6 @@
 import { createLocalSource, type InputSource } from '../input';
 import { trackerInfoOf } from '../input/poseHealth';
-import { captureScan, forgeBusy } from '../forge/forge';
+import { captureScan, forgeBusy, rescanTicket } from '../forge/forge';
 import { saveOwner } from '../forge/roster';
 import { FORGE_STEPS, onChange, scanStatus } from '../forge/status';
 import { Peer } from '../net/Peer';
@@ -147,11 +147,13 @@ export class ClientSession {
         this.source = source;
       }
 
+      // A rescan of their own username: the host's forge gets a one-time ticket, never this laptop's owner key or code.
+      const ticket = choice.kind === 'scan' && choice.proof && choice.username ? await rescanTicket(choice.username, choice.proof) : null;
       this.setup =
         choice.kind === 'existing'
-          ? [{ type: 'pick', fighterId: choice.fighter.id }]
+          ? [{ type: 'pick', fighterId: choice.fighter.id, ...(choice.guest ? { guest: true } : {}) }]
           : choice.kind === 'scan'
-            ? [{ type: 'profile', name, consent: 'save', username: choice.username }]
+            ? [{ type: 'profile', name, consent: 'save', username: choice.username, ...(ticket ? { ticket } : {}) }]
             : [{ type: 'profile', name, consent: 'masked' }];
       this.confirmed = false;
       this.setup.forEach((msg) => this.send(msg));

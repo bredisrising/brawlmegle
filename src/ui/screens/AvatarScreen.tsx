@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { findProfile, normalizeUsername, wakeForge } from '../../forge/forge';
-import { listFighters, ownedFighters } from '../../forge/roster';
+import { claimFighter, findProfile, normalizeUsername, wakeForge } from '../../forge/forge';
+import { isMine, listFighters, ownedFighters, ownerProof, saveClaim } from '../../forge/roster';
 import { DeleteWithCode, MyFighters } from '../DeleteFighter';
 import { preloadModel } from '../../forge/models';
 import { fighterRecord, totalMatches, winRate } from '../../forge/leaderboard';
@@ -206,11 +206,19 @@ function NameStep({ player }: { player: PlayerId }) {
   // Still looking this username up: Enter must not start a (paid) scan for someone who already has a fighter.
   const checking = !!username && found === undefined;
 
+  // Whose it is: theirs (this browser scanned it, or claimed it with its code), someone else's (taken), or nobody's yet
+  // (from before owner keys: free to rescan). A claim re-renders so `mine` is read again.
+  const [claiming, setClaiming] = useState(false);
+  const [, claimed] = useState(0);
+  const mine = found ? isMine(found) : false;
+  const taken = !!found && !mine && !!found.claimed;
+  useEffect(() => setClaiming(false), [username]);
+
   const scan = (e: FormEvent) => {
     e.preventDefault();
     if (checking) return;
-    if (found && !rescan) return game.chooseFighter({ kind: 'existing', fighter: found });
-    if (trimmed) game.chooseFighter({ kind: 'scan', name: trimmed, username: trimmed });
+    if (found && !rescan) return game.chooseFighter({ kind: 'existing', fighter: found, guest: !mine });
+    if (trimmed && !taken) game.chooseFighter({ kind: 'scan', name: trimmed, username: trimmed, proof: (found && ownerProof(found)) || undefined });
   };
 
   return (
@@ -243,15 +251,29 @@ function NameStep({ player }: { player: PlayerId }) {
           <div className="flex gap-5">
             {found.cardUrl && <img src={found.cardUrl} alt="" className="aspect-[2/3] w-32 shrink-0 object-cover" />}
             <div>
-              <span className="bg-hp px-2 py-1 font-cond text-xs font-extrabold uppercase tracking-[0.25em] text-ink">Welcome back</span>
+              <span className="bg-hp px-2 py-1 font-cond text-xs font-extrabold uppercase tracking-[0.25em] text-ink">
+                {mine ? 'Welcome back' : taken ? "Someone's fighter" : 'Up for grabs'}
+              </span>
               <p className="mt-4 font-display text-3xl uppercase leading-[0.95] tracking-tight">{found.name}</p>
-              <p className="mt-3 text-paper/65">Your fighter is on the memory card{found.glbUrl ? ', 3D model and all' : ''}.</p>
+              <p className="mt-3 text-paper/65">
+                {mine
+                  ? `Your fighter is on the memory card${found.glbUrl ? ', 3D model and all' : ''}.`
+                  : taken
+                    ? "This name belongs to whoever scanned it. Fight as them for fun (it won't count), or prove it's you."
+                    : "Nobody's claimed this name yet. Fight as them for fun (it won't count), or rescan to make it yours."}
+              </p>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-x-8 gap-y-4">
-            <ArcadeButton type="submit">Fight as {found.name}</ArcadeButton>
-            <TextButton onClick={() => setRescan(true)}>Rescan me</TextButton>
+            <ArcadeButton type="submit">{mine ? `Fight as ${found.name}` : `Fight as ${found.name} · guest`}</ArcadeButton>
+            {taken ? (
+              <TextButton onClick={() => setClaiming(true)}>It's me</TextButton>
+            ) : (
+              <TextButton onClick={() => setRescan(true)}>{mine ? 'Rescan me' : 'Rescan: make it mine'}</TextButton>
+            )}
           </div>
+          {taken && claiming && <ClaimCode fighter={found} onClaimed={() => claimed((n) => n + 1)} />}
+          {taken && <p className="font-cond text-sm font-semibold uppercase tracking-[0.12em] text-paper/45">Or type a different username to make your own.</p>}
         </div>
       ) : (
       <div className="animate-in-r flex flex-col gap-6 border-2 border-paper/15 bg-ink p-6 [animation-delay:200ms] sm:p-8">
@@ -273,6 +295,57 @@ function NameStep({ player }: { player: PlayerId }) {
       </div>
       )}
     </form>
+  );
+}
+
+/** "It's me": the code shown after their forge proves this fighter is theirs, on this laptop too (it's remembered). */
+function ClaimCode({ fighter, onClaimed }: { fighter: ForgedFighter; onClaimed: () => void }) {
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const claim = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      const got = await claimFighter(code);
+      if (got.username !== fighter.username) throw new Error(got.username ? `That code is for ${got.username}'s fighter.` : "That code isn't for this fighter.");
+      saveClaim({ id: got.id, code, username: got.username, name: got.name });
+      onClaimed();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  // Inside the username form: Enter here claims instead of submitting it (which would fight as a guest).
+  return (
+    <div className="flex flex-col gap-2">
+      <label htmlFor="fighter-code" className="font-cond text-xs font-bold uppercase tracking-[0.25em] text-paper/55">
+        Your fighter code, from after your scan
+      </label>
+      <div className="flex flex-wrap items-stretch gap-3">
+        <input
+          id="fighter-code"
+          autoFocus
+          value={code}
+          onChange={(e) => setCode(e.target.value.toUpperCase().slice(0, 24))}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            void claim();
+          }}
+          placeholder="ABCD-EFGH-JKMN-PQRS"
+          autoComplete="off"
+          spellCheck={false}
+          className="min-w-0 flex-1 bg-paper px-3 py-2 font-mono text-lg uppercase tracking-[0.1em] text-ink outline-none placeholder:text-ink/25"
+        />
+        <ArcadeButton type="button" onClick={() => void claim()} disabled={busy || code.replace(/[^A-Z0-9]/g, '').length < 16}>
+          {busy ? 'Checking…' : "That's me"}
+        </ArcadeButton>
+      </div>
+      {error && <p role="alert" className="border-l-4 border-dmg bg-ink-2 px-3 py-2 text-sm font-semibold">{error}</p>}
+    </div>
   );
 }
 
@@ -369,6 +442,9 @@ function RosterStep({ player }: { player: PlayerId }) {
             {fighters.length} fighters
           </span>
         </div>
+        <p className="-mt-2 font-cond text-xs font-semibold uppercase tracking-[0.14em] text-paper/45">
+          Someone else's fighter plays as a guest: just for fun, it doesn't count.
+        </p>
         {/* auto-rows-max: a row keeps its card's full height and the grid scrolls. With plain auto rows, a grid taller than
             its box squeezed every row (the cards are overflow-hidden, so they could shrink) and the cards overlapped. */}
         <div className="grid min-h-0 auto-rows-max grid-cols-2 content-start gap-2 overflow-y-auto pr-1 sm:grid-cols-3 lg:grid-cols-4">
@@ -381,7 +457,7 @@ function RosterStep({ player }: { player: PlayerId }) {
               accent={accent.bg}
               delay={i * 40}
               onFocus={() => setFocused(f)}
-              onPick={() => game.chooseFighter({ kind: 'existing', fighter: f })}
+              onPick={() => game.chooseFighter({ kind: 'existing', fighter: f, guest: !isMine(f) })}
             />
           ))}
         </div>
