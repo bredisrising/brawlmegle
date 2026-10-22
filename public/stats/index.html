@@ -614,7 +614,7 @@
               "div",
               { class: "bar", title: `${names[i.key] ?? i.key}: ${i.n}` },
               h("span", { class: "name" }, names[i.key] ?? i.key),
-              h("span", { class: "track" }, h("span", { class: "fill", style: `display:block;width:${(100 * i.n) / max}%;background:${color}` })),
+              h("span", { class: "track" }, h("span", { class: "fill", style: `display:block;width:${(100 * i.n) / max}%;background:${color}${i.n ? "" : ";min-width:0"}` })),
               h("span", { class: "num" }, fmt(i.n), " ", h("small", {}, pct(i.n, sum))),
             ),
           ),
