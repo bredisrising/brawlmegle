@@ -361,6 +361,7 @@ export class Game {
       rematch: () => this.vote('p2'),
       connected: () => {
         if (!mine()) return;
+        if (this.quick && this.cpu.p2) this.challengerArrives();
         this.remoteVisible = true;
         this.lastPeerAt = performance.now();
         session.send({ type: 'presence', visible: document.visibilityState !== 'hidden' });
@@ -435,19 +436,24 @@ export class Game {
   }
 
   /**
-   * Matchmaking: nobody turned up. Stop looking (so no stranger lands in the middle of the fight) and fight a labeled
-   * CPU instead. The K.O. screen's "Next opponent" looks for a person again.
+   * Matchmaking: nobody turned up. A labeled CPU fights them meanwhile, and the room stays open: whoever looks next is
+   * sent here and takes the CPU's place (challengerArrives). The K.O. screen's "Next opponent" looks afresh.
    */
   private botFill(gen: number) {
     const { connection, players, phase } = useGameStore.getState();
     if (!this.quick || gen !== this.quick.gen || this.client || this.benched || connection === 'open') return;
     if (phase !== 'lobby' || players.p1.status !== 'ready' || players.p2.status !== 'waiting') return;
-    this.hostSession?.dispose();
-    this.hostSession = null;
-    this.cam.attach(null, null);
     useGameStore.setState({ searching: false, botAt: null });
-    this.notify("Nobody's online right now: warm up against the CPU");
+    this.notify("Nobody's online yet: warm up against the CPU till someone shows up");
     void this.addCpuPlayer('p2', 'easy');
+  }
+
+  /** Matchmaking: a person joined while this player fought the stand-in CPU. Arcade rules: the challenger takes over. */
+  private challengerArrives() {
+    delete this.cpu.p2;
+    this.releaseRemote();
+    useGameStore.setState({ connection: 'open' }); // releaseRemote clears it, but they're right here
+    this.notify('Here comes a new challenger!');
   }
 
   /** Matchmaking: the server sent us to a waiting player. This laptop becomes the client; fighter and camera come along. */
