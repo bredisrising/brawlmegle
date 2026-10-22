@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { config } from '../config';
+import { track, trackOnce } from '../analytics';
 import { useGameStore } from '../game/store';
 import { cameraErrorText } from '../input/sources/CameraSource';
 import { ArcadeButton, TextButton } from './ArcadeButton';
@@ -71,12 +72,15 @@ export function TitleCam() {
       stream.current = s;
       if (ref.current) ref.current.srcObject = s;
       if (asked) rememberIntro();
+      trackOnce('cam_on', { asked });
       setStep('live');
     } catch (err) {
       if (gone.current) return;
-      if (!asked) return setStep('off'); // no camera or no permission: the fight asks again, and says why
+      const why = err instanceof Error ? err.name : 'unknown';
+      if (!asked) return trackOnce('cam_fail', { why, asked }), setStep('off'); // no camera or no permission: the fight asks again, and says why
       // Closing the browser's box without answering isn't a block: just ask again.
       const state = await cameraPermission();
+      track('cam_fail', { why: state === 'prompt' ? 'closed' : why, asked, blocked: state === 'denied' });
       setError(state === 'denied' ? BLOCKED : state === 'prompt' ? '' : cameraErrorText(err));
       setStep('ask');
     }
@@ -91,6 +95,7 @@ export function TitleCam() {
         if (gone.current) return;
         if (state === 'granted' || (state !== 'denied' && seenIntro())) return void open(false);
         if (state === 'denied') setError(BLOCKED);
+        trackOnce('cam_ask', { blocked: state === 'denied' });
         setStep('ask');
       });
     }
@@ -106,6 +111,7 @@ export function TitleCam() {
   if (config.input !== 'camera') return null;
   const asking = step === 'ask' || step === 'waiting';
   const later = () => {
+    trackOnce('cam_later');
     notNow = true;
     setStep('off');
   };

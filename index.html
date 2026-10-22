@@ -25,17 +25,35 @@
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:image" content="https://brawlmegle.com/og.jpg?v=3" />
     <link rel="canonical" href="https://brawlmegle.com/" />
+    <!--
+      Google Analytics 4, on the real site only (not local dev, ?analytics=0 or automated test browsers). The game's
+      own moments (camera, scans, matches) go through it too, from src/analytics.ts. Visitors from the EU, the UK and
+      Switzerland get no analytics cookies (consent mode: GA counts them without storing anything) since there's no
+      cookie banner.
+    -->
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag() {
+        dataLayer.push(arguments);
+      }
+      if (/(^|\.)brawlmegle\.(com|vip)$/.test(location.hostname) && !/[?&]analytics=0/.test(location.search) && !navigator.webdriver) {
+        var tag = document.createElement('script');
+        tag.async = true;
+        tag.src = 'https://www.googletagmanager.com/gtag/js?id=G-PYC8FQ33KT';
+        document.head.appendChild(tag);
+        gtag('consent', 'default', {
+          analytics_storage: 'denied', ad_storage: 'denied', ad_user_data: 'denied', ad_personalization: 'denied',
+          region: ['AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE', 'IS', 'LI', 'NO', 'GB', 'CH'],
+        });
+        // The owners' own visits (a browser that opened /stats/) are "internal": a GA data filter can drop them.
+        try {
+          if (localStorage.getItem('brawlmegle.owner') === '1') gtag('set', { traffic_type: 'internal' });
+        } catch (e) {}
+        gtag('js', new Date());
+        gtag('config', 'G-PYC8FQ33KT');
+      }
+    </script>
   </head>
-
-  <!-- Google tag (gtag.js) -->
-  <script async src="https://www.googletagmanager.com/gtag/js?id=G-PYC8FQ33KT"></script>
-  <script>
-    window.dataLayer = window.dataLayer || [];
-    function gtag(){dataLayer.push(arguments);}
-    gtag('js', new Date());
-
-    gtag('config', 'G-PYC8FQ33KT');
-  </script>
 
   <body>
     <div id="root"></div>

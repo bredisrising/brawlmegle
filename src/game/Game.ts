@@ -40,7 +40,8 @@ import { HighlightRecorder } from './HighlightRecorder';
 import { pickBot, type Bot } from './bots';
 import { Commentary, TEMPLATES, fill, spoken, type Line } from './Commentary';
 import { NO_VOTES, localPlayerId, pushPopup, updatePlayer, useGameStore, type DrillView } from './store';
-import { BREAK, NO_WINS, Rounds, roundWinner } from './rounds';
+import { BREAK, NO_WINS, Rounds, roundWinner, type Wins } from './rounds';
+import { mark, secsSince, track, type Params } from '../analytics';
 
 /** Round length (each of the best of three): shorter at a demo booth (`?demo=1`). */
 const ROUND = config.demo ? 30 : ROUND_SECONDS;
@@ -266,6 +267,8 @@ export class Game {
   private botTimer = 0;
   private nextBot: Bot | null = null;
   private lastBot: string | null = null;
+  /** Analytics: who the match on now is against (matchFacts at its start), so its end or walk-off says the same. */
+  private tracking: Params | null = null;
   private titleBefore: string | null = null;
   /** Room code client: it called the round off because the host went quiet; it says "back" once the host is heard. */
   private hostWentQuiet = false;
@@ -311,9 +314,15 @@ export class Game {
         this.announceFinish(s.winner, s.ending);
         if (!this.mirroring) this.callRound(s.winner);
       }
+      // Left mid-match (walked away, the opponent left, back to the lobby): it never got its K.O. screen.
+      if (s.phase === 'lobby' && this.tracking && (prev.phase === 'countdown' || prev.phase === 'fighting' || prev.phase === 'break')) {
+        track('match_quit', { ...this.tracking, round: prev.round, secs: secsSince('match') });
+        this.tracking = null;
+      }
       // The next round's call (ROUND 2, FINAL ROUND): both fighters are back on their marks.
       if (s.phase === 'countdown' && prev.phase === 'break') this.freshRound(false);
       if (s.phase === 'ko' && prev.phase !== 'ko') {
+        this.trackMatchEnd(s.winner, s.ending, s.round, s.wins);
         if (!this.mirroring) this.startVotes(s.ending);
         void this.recorder.stop({ winner: s.winner, ending: s.ending });
         this.announceFinish(s.winner, s.ending);
@@ -333,7 +342,14 @@ export class Game {
       }
       if (s.countdown === 0 && !this.mirroring && recordingEnabled()) this.startRecording();
       // A new match.
-      if (s.countdown === COUNTDOWN_FROM) this.freshRound(true);
+      if (s.countdown === COUNTDOWN_FROM) {
+        this.freshRound(true);
+        if (!this.spectator) {
+          this.tracking = this.matchFacts();
+          track('fight_start', { ...this.tracking, again: prev.phase === 'ko' });
+          mark('match');
+        }
+      }
     });
     for (const id of PLAYER_IDS) this.views[id].onLand = (at) => this.effects.burst(at, 'dust');
     // Ping: how the link between the two laptops is doing, every couple of seconds.
@@ -365,6 +381,7 @@ export class Game {
    * laptop connects, HostSession streams its poses into p2 and sets p2 up from what it sends.
    */
   async host() {
+    if (!this.practiceLevel) track('play', { mode: 'room' });
     const session = this.openHost();
     const code = await session.open();
     useGameStore.setState({ role: 'host', roomCode: code || null, screen: 'avatar' });
@@ -378,6 +395,7 @@ export class Game {
       rematch: () => this.vote('p2'),
       connected: () => {
         if (!mine()) return;
+        if (this.quick) track('matched', { as: 'host', waited: secsSince('search'), over_bot: !!this.cpu.p2 });
         if (this.quick && this.cpu.p2) this.challengerArrives();
         this.remoteVisible = true;
         this.lastPeerAt = performance.now();
@@ -427,6 +445,7 @@ export class Game {
    * pairs this laptop with a stranger: one waits as the host, the other joins it like Connect does.
    */
   findFight() {
+    track('play', { mode: 'find_fight' });
     this.quick = { player: playerId(), choice: null, camera: null, gen: 0 };
     useGameStore.setState({ quick: true, role: 'host', roomCode: null, screen: 'avatar' });
   }
@@ -442,6 +461,8 @@ export class Game {
       return;
     }
     const gen = ++q.gen;
+    track('search');
+    mark('search');
     useGameStore.setState({ searching: true, connection: null, roomCode: null });
     const session = this.openHost(q.player);
     await session.open();
@@ -465,6 +486,7 @@ export class Game {
     if (phase !== 'lobby' || players.p1.status !== 'ready' || players.p2.status !== 'waiting') return;
     const bot = this.nextBot ?? pickBot(this.myRating(), this.lastBot);
     this.lastBot = bot.fighter.id;
+    track('bot_in', { bot: bot.fighter.id.replace(/^bot-/, ''), waited: secsSince('search') });
     useGameStore.setState({ searching: false, botAt: null });
     this.notify("Nobody's online yet: fight a bot till someone shows up");
     void this.addCpuPlayer('p2', bot.level, bot);
@@ -508,6 +530,7 @@ export class Game {
       return;
     }
     if (gen !== q.gen || this.client !== client) return client.dispose();
+    track('matched', { as: 'client', waited: secsSince('search') });
     await client.choose(q.choice);
   }
 
@@ -534,6 +557,7 @@ export class Game {
    */
   nextOpponent() {
     if (!this.quick) return;
+    track('next');
     // A CPU stood in (nobody was online): drop it and look for a person again.
     if (this.cpu.p2 && !this.client) {
       delete this.cpu.p2;
@@ -940,6 +964,7 @@ export class Game {
 
   /** Title screen: "Practice". Hosts as usual (a friend can still join), and P2 is a CPU once P1 is ready. */
   async practice(level: CpuLevel | 'dummy' = 'normal') {
+    track('play', level === 'dummy' ? { mode: 'training' } : { mode: 'cpu', level });
     this.practiceLevel = level;
     useGameStore.setState({ training: level === 'dummy' });
     this.prepareCpu();
@@ -961,6 +986,7 @@ export class Game {
       console.warn('VITE_SIGNAL_URL not set: the client flow runs offline on this laptop');
     }
     useGameStore.setState({ role: 'client', roomCode: code, screen: 'avatar' });
+    track('play', { mode: 'join' });
   }
 
   /**
@@ -987,6 +1013,7 @@ export class Game {
     await session.connect();
     this.spectator = session;
     useGameStore.setState({ role: 'spectator', roomCode: session.code, connection: 'open', screen: 'game' });
+    track('play', { mode: 'watch' });
   }
 
   /** This laptop draws someone else's fight (the client laptop, or a watching screen) instead of running one. */
@@ -997,6 +1024,9 @@ export class Game {
   /** Avatar screen: the player on THIS laptop scanned, went masked, or picked a saved fighter. */
   async chooseFighter(choice: FighterChoice) {
     if (choice.kind === 'existing') preloadModel(choice.fighter.glbUrl, 'high')?.catch(() => {});
+    const kind = choice.kind !== 'existing' ? choice.kind : choice.guest ? 'guest' : choice.fighter.username ? 'saved' : 'house';
+    track('fighter', { kind });
+    if (choice.kind === 'scan') (track('scan_start'), mark('scan'));
     const { role } = useGameStore.getState();
     useGameStore.setState({ screen: role === 'client' ? 'client' : 'game' });
     // A connected client only scans + streams; the host forges and runs the fight.
@@ -1166,6 +1196,7 @@ export class Game {
         const frames = await (scan ?? this.localScan(source, show, signal, () => gen === this.setupGen[id]));
         // Say what the scan got: a partial scan still forges, the missing sides are filled in.
         const got = frames.filter(Boolean).length;
+        if (id === 'p1') (track('scan_sent', { sides: got, secs: secsSince('scan') }), mark('forge'));
         updatePlayer(id, { status: 'forging', statusDetail: got === 1 && frames[0] ? 'Forging from your front photo' : got < 3 ? `Got ${got} of 3 sides, forging anyway` : 'Forging fighter' });
         // The fighter goes by the player's username; the brief's playful nickname stays in brief.name for flavor.
         // Show the design (card, else the sheet) as soon as it exists: the 3D model takes another minute or so.
@@ -1187,6 +1218,7 @@ export class Game {
         const skipped = new Promise<null>((resolve) => (this.skipForge[id] = () => resolve(null)));
         const done = await Promise.race([forging, skipped]);
         delete this.skipForge[id];
+        if (id === 'p1') track('forge_done', { ok: done ? done.status === 'ready' : null, skipped: !done, secs: secsSince('forge') });
         if (done) {
           ownerDone();
           fighter = done;
@@ -1250,6 +1282,7 @@ export class Game {
       console.error(err);
       // Say what actually broke (camera denied, nobody in view, forge down...), not just "something".
       const reason = err instanceof Error ? err.message : String(err);
+      if (id === 'p1') track('setup_fail', { kind: choice.kind, why: reason });
       updatePlayer(id, { status: 'waiting', statusDetail: `Couldn't set up your fighter: ${reason}`, forge: null });
       const { role } = useGameStore.getState();
       if (id === localPlayerId(role)) useGameStore.setState({ screen: 'avatar' });
@@ -1291,6 +1324,7 @@ export class Game {
   /** K.O. screen "Rematch": a vote. The rematch starts once both players have voted (the host counts them). */
   voteRematch() {
     if (this.spectator) return;
+    track('rematch');
     if (this.client) {
       this.client.requestRematch();
       useGameStore.setState((s) => ({ votes: { ...s.votes, p2: true } }));
@@ -1611,6 +1645,7 @@ export class Game {
    */
   /** Back to the title screen (a fresh page). The client laptop tells the host first, so its slot opens up. */
   toTitle() {
+    track('title');
     this.stopDrill();
     this.client?.leave();
     // A moment for the message to go out before the page (and its connection) goes away.
@@ -1642,6 +1677,7 @@ export class Game {
   }
 
   changeFighter() {
+    track('change_fighter');
     if (this.client || this.spectator) return void window.location.reload();
     const id = localPlayerId(useGameStore.getState().role);
     this.stopReplay();
@@ -2135,6 +2171,39 @@ export class Game {
     if (!rating || useGameStore.getState().phase !== 'ko') return;
     for (const id of PLAYER_IDS) updatePlayer(id, { rating: rating[id] });
     this.sendMatch();
+  }
+
+  /**
+   * Analytics (src/analytics.ts): who this laptop's player is fighting. A matchmaking bot (which one), the CPU, the
+   * training dummy, a stranger, or a friend's room; and whether they play someone else's fighter (a guest).
+   */
+  private matchFacts(): Params {
+    const me = localPlayerId(useGameStore.getState().role);
+    const bot = this.fighters.p2?.id.startsWith('bot-') ? this.fighters.p2.id.slice(4) : null;
+    const opp = useGameStore.getState().training ? 'training' : this.cpu.p2 ? (bot ? 'bot' : 'cpu') : this.quick ? 'stranger' : 'friend';
+    return { opp, bot: this.cpu.p2 ? bot : null, level: opp === 'cpu' ? this.practiceLevel : null, guest: this.guest[me] };
+  }
+
+  /** Analytics: a match is over, from this laptop's side: the result, how it went, and how the laptop and link held up. */
+  private trackMatchEnd(winner: PlayerId | null, ending: 'ko' | 'time' | null, rounds: number, wins: Wins) {
+    if (this.spectator) return;
+    const { role, link } = useGameStore.getState();
+    const me = localPlayerId(role);
+    const pose = poseRateOf(this.localInputSource());
+    const facts = this.tracking ?? this.matchFacts();
+    this.tracking = null;
+    track('match_end', {
+      ...facts,
+      result: !winner ? 'draw' : winner === me ? 'win' : 'loss',
+      score: `${wins[me]}-${wins[opponentOf(me)]}`,
+      ending,
+      rounds,
+      secs: secsSince('match'),
+      pose_fps: pose ? Math.round(pose.detectFps) : null,
+      quality: this.renderer.governor.level,
+      rtt: link?.rttMs ?? null,
+      path: link?.path ?? null,
+    });
   }
 
   /** Host: this tick's fight state, and anything that happened, to the client laptop. */
