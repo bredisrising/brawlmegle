@@ -137,11 +137,17 @@ export type SortKey = 'rating' | 'wins' | 'winRate' | 'streak' | 'fights';
 const RATE_MIN = 5;
 const has = (record: FighterRecord) => Number(totalMatches(record) >= RATE_MIN);
 
+/**
+ * Rating tab groups: ranked players, then those still placing, then anyone without a rated fight (whose 1,000 is only
+ * the starting point, so it must not outrank a 978 earned in real fights).
+ */
+const standing = (record: FighterRecord) => (isRanked(record) ? 2 : (record.rated ?? 0) > 0 ? 1 : 0);
+
 /** Leaderboard order for a sort tab; ties fall back to the wins order. */
 export function compareBy(key: SortKey): (a: FighterRecord, b: FighterRecord) => number {
   switch (key) {
     case 'rating':
-      return (a, b) => Number(isRanked(b)) - Number(isRanked(a)) || ratingOf(b) - ratingOf(a) || (b.rated ?? 0) - (a.rated ?? 0) || compareRecords(a, b);
+      return (a, b) => standing(b) - standing(a) || ratingOf(b) - ratingOf(a) || (b.rated ?? 0) - (a.rated ?? 0) || compareRecords(a, b);
     case 'winRate':
       return (a, b) => has(b) - has(a) || winRate(b) - winRate(a) || compareRecords(a, b);
     case 'streak':

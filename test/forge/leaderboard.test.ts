@@ -28,6 +28,12 @@ describe('ratings on the leaderboard', () => {
     expect(sorted).toEqual([high, low, placing]);
   });
 
+  it('puts a player with real rated fights above everyone still on the starting 1,000', () => {
+    const placing = rec({ rating: 978, rated: 3, wins: 8, losses: 10 });
+    const unrated = rec({ wins: 40, losses: 2 });
+    expect([unrated, placing].sort(board.compareBy('rating'))).toEqual([placing, unrated]);
+  });
+
   it("doesn't let one lucky win top the win-rate tab", () => {
     const lucky = rec({ wins: 1 });
     const steady = rec({ wins: 6, losses: 2 });
