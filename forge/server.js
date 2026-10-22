@@ -13,6 +13,7 @@
  *                                another laptop's forge (a friend's room), so the owner key itself never leaves this browser
  *   POST /api/highlights         video/webm body + x-highlight-meta  ->  the highlight (see "Highlights" below)
  *   GET  /api/highlights         ->  { highlights: newest first }
+ *   POST /api/moments, GET /api/stats  ->  the owners' stats page (see stats.js)
  *
  * Usernames are a light "log in": type yours on any laptop and your fighter comes back. A username someone owns (their
  * browser kept the owner key, or they have the code from after the forge) can't be rescanned without that proof, so
@@ -29,6 +30,7 @@ import { fileURLToPath } from "node:url";
 import { runForge, models, commentate, speak, voiceKey, wantGpu, gpuWantedAt } from "./pipeline.js";
 import { available as rigCheckAvailable } from "./rigcheck.js";
 import { adminKey, matchesHash, newOwner, normalizeCode, publicFighter, purgeFighter, sha256 } from "./owner.js";
+import { createStats, readSmall, statsKeyMatches } from "./stats.js";
 
 if (!process.env.OPENAI_API_KEY) {
   console.error("OPENAI_API_KEY is missing. Put it in the repo root .env");
@@ -143,6 +145,25 @@ function withRatings(all) {
   }
   return out;
 }
+
+// The owners' stats page (stats.js): the game's moments in FORGE_DATA/stats/, and who's online in matchmaking (the
+// matchmaker's /health on this machine, once a minute). FORGE_STATS_KEY unlocks GET /api/stats; unset, it's off.
+const STATS_KEY = process.env.FORGE_STATS_KEY ?? "";
+const MATCHMAKER_HEALTH = process.env.MATCHMAKER_HEALTH_URL ?? "http://127.0.0.1:3000/health";
+const stats = createStats({ dir: new URL("stats/", DATA), tz: process.env.STATS_TZ || undefined, keepDays: Number(process.env.STATS_KEEP_DAYS ?? 180) });
+stats.prune();
+setInterval(() => stats.prune(), 6 * 3_600_000).unref();
+/** The matchmaker's counts right now ({ clients, quick, rooms, hosted, ... }), or null when it doesn't answer. */
+async function matchmakerHealth() {
+  try {
+    const res = await fetch(MATCHMAKER_HEALTH, { signal: AbortSignal.timeout(2000) });
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null;
+  }
+}
+if (STATS_KEY) setInterval(() => void matchmakerHealth().then((h) => h && stats.recordOnline(h)), 60_000).unref();
+const statsTries = limiter(120, 10 * 60_000);
 
 const seenMatches = new Set();
 const matchesAllowed = (() => {
@@ -386,7 +407,7 @@ async function handle(req, res) {
   }
   if (req.method === "OPTIONS") {
     res.setHeader("access-control-allow-methods", "GET, POST");
-    res.setHeader("access-control-allow-headers", "content-type, x-forge-key, x-highlight-meta");
+    res.setHeader("access-control-allow-headers", "content-type, x-forge-key, x-highlight-meta, x-stats-key");
     // Chrome/Edge ask before a public https page (the hosted scan page) talks to this machine's localhost.
     if (req.headers["access-control-request-private-network"] && origin && ALLOWED_ORIGINS.includes(origin)) {
       res.setHeader("access-control-allow-private-network", "true");
@@ -418,6 +439,31 @@ async function handle(req, res) {
     return json(res, 200, { ok: true, ...deleted });
   }
   if (parts[0] === "api" && parts[1] === "highlights") return handleHighlights(req, res, parts, base);
+
+  // The game's moments (src/analytics.ts, a beacon: text/plain, no key). Whatever's wrong with one, it's only counting.
+  if (req.method === "POST" && url.pathname === "/api/moments") {
+    let body = null;
+    try {
+      body = JSON.parse(await readSmall(req));
+    } catch {}
+    stats.record(body);
+    res.writeHead(204);
+    return res.end();
+  }
+  // The owners' stats page (public/stats/index.html in the game): the report, with the stats key.
+  if (req.method === "GET" && url.pathname === "/api/stats") {
+    if (!STATS_KEY) return json(res, 404, { error: "not found" });
+    if (!statsTries()) return json(res, 429, { error: "too many tries, wait a few minutes" });
+    if (!statsKeyMatches(req.headers["x-stats-key"], STATS_KEY)) return json(res, 403, { error: "bad stats key" });
+    const report = stats.report({
+      days: url.searchParams.get("days") ?? 7,
+      owners: url.searchParams.get("owners") === "1",
+      live: await matchmakerHealth(),
+      facts: { fighters: [...fighters.values()], roster: current().length, ratings, highlights: highlights.length },
+    });
+    res.setHeader("cache-control", "no-store");
+    return json(res, 200, report);
+  }
 
   if (req.method === "GET" && parts[0] === "api" && parts[1] === "profiles" && parts.length === 3) {
     let raw = "";
