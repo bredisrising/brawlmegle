@@ -137,6 +137,7 @@ export function TitleScreen() {
           </div>
         </div>
       </div>
+      {mode !== 'leaderboard' && <Credits />}
       {mode === 'leaderboard' && (
         <Leaderboard
           fighters={fighters}
@@ -252,6 +253,31 @@ function Podium({ top }: { top: { fighter: ForgedFighter; record: FighterRecord 
  * The longest label in each menu (characters). Every label in a menu gets the size that fits that one in the menu's
  * width, so big screens don't cut "Play a friend" off and the items stay the same size.
  */
+/** The team, in the order they asked for, each linked to their LinkedIn. */
+const CREDITS = [
+  { name: 'Ankit Malhotra', url: 'https://www.linkedin.com/in/ankit-m1' },
+  { name: 'Adrian Alupoaei', url: 'https://www.linkedin.com/in/adrian-alupoaei/' },
+  { name: 'Adwaith Renjith', url: 'https://www.linkedin.com/in/adwaithrenjith/' },
+  { name: 'Dylan Chen', url: 'https://www.linkedin.com/in/dlanchenn/' },
+];
+
+/** "Made by" along the bottom edge, in the page's padding under the reel (laptops and up; phones have no room). */
+function Credits() {
+  return (
+    <p className="pointer-events-auto absolute bottom-[clamp(0.2rem,1.1vh,0.9rem)] left-12 z-10 hidden items-center gap-x-3 font-cond text-[11px] font-bold uppercase tracking-[0.18em] text-paper/45 md:flex">
+      <span>Made by</span>
+      {CREDITS.map((c, i) => (
+        <span key={c.url} className="flex items-center gap-x-3">
+          {i > 0 && <span aria-hidden className="text-paper/25">·</span>}
+          <a href={c.url} target="_blank" rel="noreferrer" className="text-paper/70 underline-offset-4 transition-colors hover:text-hp hover:underline">
+            {c.name}
+          </a>
+        </span>
+      ))}
+    </p>
+  );
+}
+
 const MAIN_FIT = 'Play a friend'.length;
 const FRIEND_FIT = 'Join with a code'.length;
 
