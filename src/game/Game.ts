@@ -66,8 +66,15 @@ const REPLAY_HOLD = 0.8;
 const REPLAY_DELAY = 1.2;
 type ReplayFrame = MirrorFrame & { live: Record<PlayerId, PoseFrame | null>; events: MirrorEvent[] };
 /** Roughly head height between the two fighters. */
-/** How long a fresh forge shows itself off in the forging card (textured, then the rig flashes) before it's ready. */
-const REVEAL_MS = 2200;
+/**
+ * A fresh forge's finish: once its model is in, the forging card paints it in, flashes the rig and calls it forged
+ * (~1.5 s, ForgePreview), and the player gets this long (from the model being in) to admire it before it's ready and
+ * the fight can start. Shorter when the opponent is already waiting.
+ */
+const REVEAL_MS = 3800;
+const REVEAL_WAITING_MS = 3000;
+/** ...plus this for P2 on the other laptop: it hears of the model a moment later, then loads it itself. */
+const REVEAL_REMOTE_MS = 1000;
 /** Matchmade fights: after the K.O. screen comes back from the replay, this long to vote for a rematch. */
 const NEXT_MS = 4000;
 /** ...measured from here when there's no replay to wait for (a time-out), or the replay never came. */
@@ -1182,13 +1189,25 @@ export class Game {
       } else {
         fighter = choice.fighter;
       }
-      // A fresh forge shows itself off in the forging card (textured, then the rig flashes) while its model loads.
+      // A fresh forge shows itself off in the forging card: its model loads there too, then paints in, rigs, forged...
       const forge = useGameStore.getState().players[id].forge;
-      const reveal = revealGlb && forge ? (updatePlayer(id, { forge: { ...forge, glbUrl: revealGlb } }), wait(REVEAL_MS)) : null;
+      const reveal = revealGlb && forge ? (updatePlayer(id, { forge: { ...forge, glbUrl: revealGlb } }), true) : false;
       if (gen !== this.setupGen[id]) return; // the player left (or chose again) while it forged
-      await Promise.all([this.loadFighter(id, fighter), reveal]);
+      // ...and holds on the finished fighter so the player can take it in. "Fight now" (skipForgeWait) ends it.
+      let endReveal = () => {};
+      const revealEnded = new Promise<void>((resolve) => (endReveal = resolve));
+      if (reveal) this.skipForge[id] = endReveal;
+      await this.loadFighter(id, fighter);
       this.lifetime.signal.throwIfAborted();
       if (gen !== this.setupGen[id]) return;
+      if (reveal) {
+        const waiting = useGameStore.getState().players[opponentOf(id)].status === 'ready';
+        const hold = (waiting ? REVEAL_WAITING_MS : REVEAL_MS) + (scan ? REVEAL_REMOTE_MS : 0);
+        await Promise.race([wait(hold), revealEnded]);
+        if (this.skipForge[id] === endReveal) delete this.skipForge[id];
+        this.lifetime.signal.throwIfAborted();
+        if (gen !== this.setupGen[id]) return;
+      }
 
       this.spawn(id);
       updatePlayer(id, { status: 'ready', statusDetail: '', portraitUrl: fighter.cardUrl ?? null, forge: null });

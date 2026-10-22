@@ -3,6 +3,7 @@ import { camView } from '../game/CameraShare';
 import { useGameStore } from '../game/store';
 import { ACCENT } from './accent';
 import { CamToggle } from './CamToggle';
+import { useClientStage } from './screens/ClientScreen';
 
 /**
  * The opponent's camera, Omegle style: a framed picture in the bottom-right corner, in their
@@ -21,6 +22,7 @@ export function OpponentCam() {
   const opponent = role === 'client' ? 'p1' : 'p2';
   const name = useGameStore((s) => s.players[opponent].name);
   const ready = useGameStore((s) => s.players[opponent].status === 'ready');
+  const stage = useClientStage();
 
   if ((role !== 'host' && role !== 'client') || connection !== 'open' || cutscene) return null;
   if (screen !== 'game' && screen !== 'client') return null;
@@ -29,12 +31,18 @@ export function OpponentCam() {
   // Bottom right (above the menu chips), whoever the opponent is: clear of the HUD, the combo counter (28% down, on
   // the attacker's side), this laptop's own camera (bottom left) and the fighters. The client's waiting screen: top right.
   // The switch is always on the frame, mid-round too: turning the camera off should never mean digging through a menu.
-  const place = screen === 'client' ? 'right-6 top-6 flex-col sm:right-10' : 'bottom-[5.5rem] right-3 flex-col-reverse sm:right-4';
+  // While this laptop's forge has the right half as its stage: bottom left, under the player's column.
+  const place =
+    screen !== 'client'
+      ? 'bottom-[5.5rem] right-3 flex-col-reverse items-end sm:right-4'
+      : stage
+        ? 'bottom-6 left-6 flex-col-reverse items-start sm:left-14'
+        : 'right-6 top-6 flex-col items-end sm:right-10';
 
   return (
     <div
       data-testid="opponent-cam"
-      className={`pointer-events-none fixed z-30 flex w-[clamp(9rem,15vw,14rem)] items-end gap-1 ${place} animate-rise`}
+      className={`pointer-events-none fixed z-30 flex w-[clamp(9rem,15vw,14rem)] gap-1 ${place} animate-rise`}
     >
       <div className={`cut w-full ${accent.bg} p-[3px] [--cut:10px]`}>
         <div className="cut relative aspect-[4/3] overflow-hidden bg-ink [--cut:8px]">
@@ -56,7 +64,7 @@ export function OpponentCam() {
           )}
         </div>
       </div>
-      <div className={`flex flex-wrap items-center gap-x-2 gap-y-1 justify-end`}>
+      <div className={`flex flex-wrap items-center gap-x-2 gap-y-1 ${stage ? 'justify-start' : 'justify-end'}`}>
         {view.sending && (
           <span className="flex items-center gap-1.5 bg-ink/85 px-2 py-1 font-cond text-[10px] font-bold uppercase tracking-[0.15em] text-paper/80" title="Your opponent sees a small copy of your camera">
             <span className="animate-blink size-1.5 rounded-full bg-dmg" />

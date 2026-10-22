@@ -1,4 +1,4 @@
-import { useGameStore } from '../game/store';
+import { localPlayerId, useGameStore } from '../game/store';
 import { TextButton } from './ArcadeButton';
 
 /**
@@ -36,7 +36,8 @@ export function DeleteCode({ layout = 'card' }: { layout?: 'row' | 'card' }) {
 
 /** The lobby (after a forge, before the fight): the code along the bottom, clear of the player panels. */
 export function DeleteCodeStrip() {
-  const lobby = useGameStore((s) => s.phase === 'lobby' && !s.walkout);
+  // Not over the forge's finish (the code arrives as the forge does): once the fighter's in.
+  const lobby = useGameStore((s) => s.phase === 'lobby' && !s.walkout && s.players[localPlayerId(s.role)].status !== 'forging');
   if (!lobby) return null;
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-3 z-30 flex justify-center px-4 sm:bottom-4">

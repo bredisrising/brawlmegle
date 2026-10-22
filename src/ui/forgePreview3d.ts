@@ -17,9 +17,9 @@ export const PREVIEW_H = 512;
 const FPS = 12;
 /** Seconds for one stage to sweep in over the last (bottom to top); the paint goes faster, it's the finale. */
 const SWEEP = 1.2;
-const PAINT_SWEEP = 0.7;
+export const PAINT_SWEEP = 0.7;
 /** The rig flashes right after the paint is on, for this long (s). */
-const RIG_FLASH = 0.8;
+export const RIG_FLASH = 0.8;
 /** Turntable speed, rad/s (stepped by the frame rate). */
 const SPIN = 0.9;
 /**
@@ -31,6 +31,7 @@ const TRELLIS_YAW = 0;
 export interface ForgePreviewView {
   showVoxels(url: string): Promise<void>;
   showClay(url: string): Promise<void>;
+  /** Resolves once the finished fighter is in and its paint starts sweeping up (the card times its finish from it). */
   showFinal(url: string): Promise<void>;
   dispose(): void;
 }
