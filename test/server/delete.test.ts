@@ -260,6 +260,44 @@ describe('delete-fighter.mjs (admin)', () => {
     expect(script(data, port, 'nobody').status).toBe(1);
   });
 
+  type Rated = { rating: Record<'p1' | 'p2', { before: number; after: number; rated: number }> | null; duplicate?: boolean };
+
+  it('rates rounds between two people, and a rescan keeps the rating', async () => {
+    const s = await startForge();
+    const rico = await s.forge({ username: 'rico' });
+    const dyl = await s.forge({ username: 'dyl' });
+    const first = (await (await s.post('/api/matches', { matchId: 'r1', p1: rico.id, p2: dyl.id, winner: 'p1' })).json()) as Rated;
+    expect(first.rating).toEqual({ p1: { before: 1000, after: 1020, rated: 1 }, p2: { before: 1000, after: 980, rated: 1 } });
+    // The same round reported twice moves nothing.
+    expect(await (await s.post('/api/matches', { matchId: 'r1', p1: rico.id, p2: dyl.id, winner: 'p1' })).json()).toMatchObject({ duplicate: true });
+    // A rescan under the same username is the same player: the rating carries over.
+    const again = await s.forge({ username: 'rico' });
+    const records = (await (await fetch(`${s.base}/api/records`)).json()) as { records: Record<string, { rating?: number; rated?: number }> };
+    expect(records.records[again.id]).toMatchObject({ rating: 1020, rated: 1 });
+    const draw = (await (await s.post('/api/matches', { matchId: 'r2', p1: dyl.id, p2: again.id, winner: null })).json()) as Rated;
+    expect(draw.rating?.p2.before).toBe(1020);
+    expect(draw.rating?.p1.after).toBeGreaterThan(980); // the lower-rated side gains from a draw
+  });
+
+  it("doesn't rate someone against their own rescan, or a stand-in", async () => {
+    const s = await startForge();
+    const a = await s.forge({ username: 'rico' });
+    const b = await s.forge({ username: 'rico' });
+    expect(((await (await s.post('/api/matches', { matchId: 's1', p1: a.id, p2: b.id, winner: 'p1' })).json()) as Rated).rating).toBeNull();
+    expect(((await (await s.post('/api/matches', { matchId: 's2', p1: a.id, p2: 'stand-in-x', winner: 'p1' })).json()) as Rated).rating).toBeNull();
+  });
+
+  it("drops a player's rating with their last fighter", async () => {
+    const s = await startForge();
+    const rico = await s.forge({ username: 'rico' });
+    const dyl = await s.forge({ username: 'dyl' });
+    await s.post('/api/matches', { matchId: 'd1', p1: rico.id, p2: dyl.id, winner: 'p1' });
+    expect((await s.del(rico.id, rico.ownerKey)).status).toBe(200);
+    const ratings = JSON.parse(fs.readFileSync(path.join(s.data, 'ratings.json'), 'utf8')) as Record<string, { rating: number }>;
+    expect(ratings['u:rico']).toBeUndefined();
+    expect(ratings['u:dyl']).toMatchObject({ rating: 980 });
+  });
+
   it('deletes on disk by id when the server is stopped', () => {
     const data = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-del-'));
     seed(data, { id: 'a-1', name: 'ann', createdAt: 1 }, ['front.jpg', 'card.png']);

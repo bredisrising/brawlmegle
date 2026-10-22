@@ -95,6 +95,50 @@ function saveRecords() {
     console.warn("records save failed:", err.message);
   }
 }
+// Ratings (Elo) for the leaderboard: one per player, by username so a rescan keeps it (else by fighter id). Only
+// rounds between two people move them, and everyone started at START_RATING on 2026-10-21. FORGE_DATA/ratings.json.
+const RATINGS_FILE = new URL("ratings.json", DATA);
+const START_RATING = 1000;
+/** @type {Record<string, {rating: number, rated: number}>} */
+let ratings = {};
+try {
+  ratings = JSON.parse(fs.readFileSync(RATINGS_FILE, "utf8"));
+} catch {}
+function saveRatings() {
+  try {
+    fs.writeFileSync(RATINGS_FILE, JSON.stringify(ratings));
+  } catch (err) {
+    console.warn("ratings save failed:", err.message);
+  }
+}
+const ratingKey = (f) => (f.username ? `u:${f.username}` : `f:${f.id}`);
+/** Elo's K: bigger over a player's first ten rated rounds, so a newcomer finds their level fast. */
+const kFactor = (rated) => (rated < 10 ? 40 : 24);
+
+/** One rated round: both players' ratings move by Elo (a draw scores half). Returns each side's before and after. */
+function rateRound(a, b, winner) {
+  const ra = ratings[ratingKey(a)] ?? { rating: START_RATING, rated: 0 };
+  const rb = ratings[ratingKey(b)] ?? { rating: START_RATING, rated: 0 };
+  const expected = 1 / (1 + 10 ** ((rb.rating - ra.rating) / 400));
+  const score = !winner ? 0.5 : winner === "p1" ? 1 : 0;
+  const na = { rating: Math.round(ra.rating + kFactor(ra.rated) * (score - expected)), rated: ra.rated + 1 };
+  const nb = { rating: Math.round(rb.rating + kFactor(rb.rated) * (expected - score)), rated: rb.rated + 1 };
+  ratings[ratingKey(a)] = na;
+  ratings[ratingKey(b)] = nb;
+  saveRatings();
+  return { p1: { before: ra.rating, after: na.rating, rated: na.rated }, p2: { before: rb.rating, after: nb.rating, rated: nb.rated } };
+}
+
+/** Records with each fighter's player rating on it (the leaderboard sorts by it once enough players are rated). */
+function withRatings(all) {
+  const out = { ...all };
+  for (const f of fighters.values()) {
+    const r = ratings[ratingKey(f)];
+    if (r && out[f.id]) out[f.id] = { ...out[f.id], rating: r.rating, rated: r.rated };
+  }
+  return out;
+}
+
 const seenMatches = new Set();
 const matchesAllowed = (() => {
   const times = [];
@@ -194,6 +238,12 @@ function deleteFighter(fighter) {
   deletedIds.add(fighter.id);
   for (const kind of ["card", "sheet"]) webpCopies.delete(`${fighter.id}/${kind}.webp`);
   const gone = purgeFighter(DATA, fighter.id, { records, highlights });
+  // The player's rating goes with their last fighter (a username with an earlier fighter left keeps it).
+  const key = ratingKey(fighter);
+  if (ratings[key] && ![...fighters.values()].some((f) => ratingKey(f) === key)) {
+    delete ratings[key];
+    saveRatings();
+  }
   console.log(`deleted fighter ${fighter.id.slice(0, 8)}: ${gone.files} files, record ${gone.record ? "removed" : "none"}, ${gone.highlights} highlights`);
   return gone;
 }
@@ -397,11 +447,13 @@ async function handle(req, res) {
     return json(res, 200, { ok: true, id: fighter.id, name: fighter.name });
   }
 
-  // Leaderboard: every fighter's record. A rescan's record carries the earlier fighters' under that username too.
-  if (req.method === "GET" && url.pathname === "/api/records") return json(res, 200, { records: withLineage(records) });
+  // Leaderboard: every fighter's record and its player's rating. A rescan's record carries the earlier fighters' under
+  // that username too.
+  if (req.method === "GET" && url.pathname === "/api/records") return json(res, 200, { records: withRatings(withLineage(records)) });
 
   // The host reports a finished round. Only rounds between two people count: a round with a side left out (the CPU,
   // which wears someone else's fighter) is ignored. Only forged fighters on this server get records (not stand-ins).
+  // The answer says how both players' ratings moved (null when the round wasn't rated), for the K.O. screen.
   if (req.method === "POST" && url.pathname === "/api/matches") {
     if (ACCESS_KEY && req.headers["x-forge-key"] !== ACCESS_KEY) return json(res, 403, { error: "bad forge key" });
     if (!matchesAllowed()) return json(res, 429, { error: "slow down" });
@@ -427,9 +479,13 @@ async function handle(req, res) {
       else records[id] = { ...r, losses: r.losses + 1, streak: 0, recentResults };
     }
     saveRecords();
+    // Rated only between two fighters forged here, of two different players (not someone against their own rescan).
+    const [a, b] = [fighters.get(body.p1), fighters.get(body.p2)];
+    const rating = a && b && ratingKey(a) !== ratingKey(b) ? rateRound(a, b, winner) : null;
     // One line per counted round, so the standings can be rebuilt from the log if they ever need fixing.
-    console.log(`match ${body.p1.slice(0, 8)} vs ${body.p2.slice(0, 8)}: ${winner ?? "draw"}`);
-    return json(res, 200, { ok: true });
+    const moved = rating ? ` (${rating.p1.before}->${rating.p1.after}, ${rating.p2.before}->${rating.p2.after})` : "";
+    console.log(`match ${body.p1.slice(0, 8)} vs ${body.p2.slice(0, 8)}: ${winner ?? "draw"}${moved}`);
+    return json(res, 200, { ok: true, rating });
   }
 
   // Commentators: one or two LLM-written lines for a moment of the fight (SPEC "Commentators").
