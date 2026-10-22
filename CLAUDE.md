@@ -13,7 +13,7 @@ Read `SPEC.md` (what we're building) and `architecture.md` (how the code is laid
 ## The live site
 
 **https://brawlmegle.com/** (and **https://brawlmegle.vip/**) is the whole thing on one domain (AWS box, see `matchmaker/README.md`). The old name, https://54-149-60-196.sslip.io/, redirects its pages to brawlmegle.com (its `/api/` and `/ws` still answer, for old tabs; `matchmaker/deploy/add-domain.sh` adds names):
-- `/` the game (static build of this repo), `/tuner/` move tester, `/scan/` scan test
+- `/` the game (static build of this repo), `/tuner/` move tester, `/scan/` scan test, `/stats/` the owners' stats (open `/stats/#key=<FORGE_STATS_KEY from the root .env>` once per browser)
 - `/api/` the forge (scan → fighter, usernames, the OpenAI key lives only on the server), `/ws` matchmaker
 - Locally, `npm run dev` uses the same shared forge and matchmaker by default, so fighters/usernames are the same everywhere.
 - **The game follows `main`.** Every push to `main` runs the tests and the build in GitHub Actions (`.github/workflows/site.yml`);
@@ -39,6 +39,7 @@ Read `SPEC.md` (what we're building) and `architecture.md` (how the code is laid
 ## Rules
 
 - API keys live in the root `.env` (gitignored) and only the forge server reads them. Never put a key in browser code or a `VITE_` variable.
+- Analytics: the game reports moments (camera, scans, matches) through `track()` in `src/analytics.ts`, to GA4 and the forge (`forge/stats.js`). Plain facts only: never a name, username, photo or anything typed. A new moment goes in both lists (a test checks).
 - The fight engine is pure TypeScript: no Three.js, no React, no randomness.
 - The camera reports intent; it never decides a hit. Tracked poses go through `src/intent/` (preprocess → IntentReader); the engine decides outcomes.
 - Thresholds live in `DEFAULT_INTENT` (`src/intent/intents.ts`). Tune them in the tuner, then paste the copied config back.
