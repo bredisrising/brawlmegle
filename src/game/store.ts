@@ -6,6 +6,7 @@ import type { LinkStats } from '../net/Peer';
 import type { ScanView } from '../forge/scanGuide';
 import type { Bucket } from '../forge/scanBuckets';
 import type { RatingChange } from '../forge/leaderboard';
+import { NO_WINS, type Wins } from './rounds';
 
 /** Popup style. Game maps FightEvents onto these. */
 export type HitKind = 'light' | 'heavy' | 'blocked';
@@ -62,6 +63,12 @@ export interface GameState {
   timeLeft: number | null;
   /** How the round ended: a K.O., or the clock ran out (winner = more HP left, null = draw). */
   ending: 'ko' | 'time' | null;
+  /**
+   * Best of three (game/rounds.ts): the round being fought (or just over), and the rounds each player has won so far.
+   * Between rounds (phase 'break') `winner` and `ending` are that round's; once the match is over ('ko'), the match's.
+   */
+  round: number;
+  wins: Wins;
   players: Record<PlayerId, PlayerState>;
   popups: HitPopup[];
   /** Bumped on big hits to retrigger the screen-flash animation. */
@@ -177,6 +184,8 @@ export const useGameStore = create<GameState>(() => ({
   winner: null,
   timeLeft: null,
   ending: null,
+  round: 1,
+  wins: NO_WINS,
   players: Object.fromEntries(PLAYER_IDS.map((id) => [id, initialPlayer(id)])) as Record<PlayerId, PlayerState>,
   popups: [],
   flashKey: 0,

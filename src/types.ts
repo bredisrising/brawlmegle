@@ -12,7 +12,8 @@ export const opponentOf = (id: PlayerId): PlayerId => (id === 'p1' ? 'p2' : 'p1'
 /** host: runs the fight. client: the other player's laptop. spectator: a screen that only watches (no camera). */
 export type Role = 'host' | 'client' | 'spectator';
 
-export type Phase = 'lobby' | 'countdown' | 'fighting' | 'ko';
+/** 'break': between two rounds of a match (best of three); 'ko': the match is over. */
+export type Phase = 'lobby' | 'countdown' | 'fighting' | 'break' | 'ko';
 
 /** waiting -> scanning (camera/vision) -> forging (hero image + 3D model) -> ready */
 export type PlayerStatus = 'waiting' | 'scanning' | 'forging' | 'ready';
@@ -111,6 +112,8 @@ export type FighterState = {
   /** Guard left, 0..FIGHT.guardMax, and frames until a crushed guard works again (0 = it works). */
   guard?: number;
   guardLock?: number;
+  /** Frames since this fighter showed a wind-up tell ('anticipate') while free, up to FIGHT.tellFrames (for the CPU). */
+  tell?: number;
 };
 
 /** A fireball in flight, for the director. */

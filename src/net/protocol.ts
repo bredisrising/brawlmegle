@@ -50,7 +50,9 @@ export type ClientMessage =
 export type HostMessage =
   | { type: 'welcome'; player: PlayerId }
   | { type: 'roster'; fighters: ForgedFighter[] } // saved fighters for 'Choose existing'
-  | { type: 'phase'; phase: Phase; countdown: number | null; winner?: PlayerId | null; ending?: 'ko' | 'time' | null }
+  // Between rounds (phase 'break') winner and ending are the round's; at 'ko', the match's. round / wins: the match so
+  // far (best of three); missing from an older host, which plays one round.
+  | { type: 'phase'; phase: Phase; countdown: number | null; winner?: PlayerId | null; ending?: 'ko' | 'time' | null; round?: number; wins?: Record<PlayerId, number> }
   // The fight itself, so the client laptop shows it too (see Game's mirror):
   | { type: 'match'; players: Record<PlayerId, MatchPlayer> } // who's fighting as what; on connect and whenever it changes
   | { type: 'frame'; frame: MirrorFrame } // every sim tick while a fight is on ("poses" channel: lossy)

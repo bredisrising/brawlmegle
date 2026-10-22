@@ -73,6 +73,8 @@ export class SpectatorSession {
           countdown: msg.countdown,
           ...(msg.winner !== undefined ? { winner: msg.winner } : {}),
           ...(msg.ending !== undefined ? { ending: msg.ending } : {}),
+          ...(msg.round !== undefined ? { round: msg.round } : {}),
+          ...(msg.wins ? { wins: msg.wins } : {}),
         });
         break;
       case 'match':

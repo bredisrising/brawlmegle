@@ -13,7 +13,7 @@ First there was Omegle: talking to strangers. Then there was Omoggle: talking an
 5. Each scanning player turns slowly in front of their camera for about 10 seconds, and three frames get captured.
 6. While their fighter forges (expect 2–4 minutes; measure it), they move around freely as a stock mannequin. A quick tutorial teaches guard, jab, cross, block and slip, and measures their reach and speed.
 7. The forged fighters swap in. VS cards, then the walk-in, then 3, 2, 1, FIGHT.
-8. A 60-second fight with real punches. K.O., a slow-motion replay, then a rematch button.
+8. A best-of-three fight (40-second rounds) with real punches. The match-winning K.O., a slow-motion replay, then a rematch button.
 
 A judge slot is about 5 minutes and the forge eats most of it. So scan the judge first and pitch while it forges, and keep pre-forged house fighters ready as opponents.
 

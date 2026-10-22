@@ -14,6 +14,8 @@ export function KOOverlay() {
   const winner = useGameStore((s) => s.winner);
   const winnerName = useGameStore((s) => (s.winner ? s.players[s.winner].name : ''));
   const ending = useGameStore((s) => s.ending);
+  // Best of three: the match's score next to who won it (not after a single round, as in Training).
+  const wins = useGameStore((s) => s.wins);
   const replay = useGameStore((s) => s.replay);
   const role = useGameStore((s) => s.role);
   const quick = useGameStore((s) => s.quick);
@@ -54,6 +56,15 @@ export function KOOverlay() {
         <span className="slant -ml-1 bg-paper px-6 py-3 font-display text-3xl uppercase tracking-tight text-ink [--slant:10px] sm:text-5xl">
           {winner ? `${winnerName} wins` : 'Draw'}
         </span>
+        {wins.p1 + wins.p2 > 1 && (
+          <span className="slant -ml-1 grid place-items-center bg-ink px-5 font-display text-3xl tracking-tight [--slant:10px] sm:text-5xl" aria-label={`${wins.p1} rounds to ${wins.p2}`}>
+            <span>
+              <span className="text-p1">{wins.p1}</span>
+              <span className="px-1 text-paper/70">–</span>
+              <span className="text-p2">{wins.p2}</span>
+            </span>
+          </span>
+        )}
       </div>
 
       {rating && role !== 'spectator' && <RatingLine change={rating} />}

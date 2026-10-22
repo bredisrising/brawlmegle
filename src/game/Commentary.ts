@@ -201,6 +201,12 @@ export const TEMPLATES = {
     { voice: 'A', text: "[impressed] That's how you close it out! {w} with the finish!" },
   ],
   time: [{ voice: 'A', text: '[shouting] Time! {w} takes it on points!' }],
+  // A round of the three, not the match: short, the breather after it is.
+  round: [
+    { voice: 'A', text: '[shouting] {w} takes the round!' },
+    { voice: 'A', text: '[excited] That round goes to {w}!' },
+  ],
+  roundDraw: [{ voice: 'A', text: '[shouting] An even round! They both take it!' }],
   draw: [{ voice: 'A', text: "[shouting] Time! We've got a draw!" }],
   intro: [
     { voice: 'A', text: '[shouting] {a} versus {d}! Here we go!' },

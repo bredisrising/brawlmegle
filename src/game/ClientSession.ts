@@ -279,12 +279,14 @@ export class ClientSession {
         // The round's on: tell the host what this camera tracks with, for its match recording.
         const tracker = msg.phase === 'fighting' && msg.countdown === 0 ? trackerInfoOf(this.source) : null;
         if (tracker) this.send({ type: 'tracker', info: tracker });
-        if (msg.phase === 'ko' || msg.phase === 'lobby') this.clip.stop('p2');
+        if (msg.phase === 'ko' || msg.phase === 'break' || msg.phase === 'lobby') this.clip.stop('p2');
         useGameStore.setState({
           phase: msg.phase,
           countdown: msg.countdown,
           ...(msg.winner !== undefined ? { winner: msg.winner } : {}),
           ...(msg.ending !== undefined ? { ending: msg.ending } : {}),
+          ...(msg.round !== undefined ? { round: msg.round } : {}),
+          ...(msg.wins ? { wins: msg.wins } : {}),
           // Once the fight starts, this laptop shows it too.
           ...(msg.phase !== 'lobby' && screen === 'client' && players[PLAYER].status === 'ready' ? { screen: 'game' as const } : {}),
         });
