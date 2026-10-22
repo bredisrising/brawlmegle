@@ -21,6 +21,11 @@ type Attack = {
   blocked: boolean;
   /** Loaded up big: slower and harder, and a guard raised just in time parries it (FIGHT.heavy*, parry*). */
   heavy: boolean;
+  /** A punch read off the camera: it lands FIGHT.readStartup frames after the confirm, whatever the move. */
+  read: boolean;
+  /** The tick it started, and whether the guard was up the tick before (see guardFirst). */
+  startedAt: number;
+  guardBefore: boolean;
 };
 type Fighter = {
   x: number;
@@ -46,11 +51,11 @@ type Fighter = {
   guard: number;
   guardLock: number;
   sinceGuard: number;
-  /** Whether the guard was up before the current attack started (see guardFirst). */
-  guardWas: boolean;
   /** The guard last tick, and the tick it last went up (a parry needs it raised just in time). */
   guardPrev: boolean;
   guardUpAt: number;
+  /** The tick of the last wind-up tell ('anticipate'), -1 once it turned into a swing. Never decides anything. */
+  tellAt: number;
 };
 
 const DT = 1 / 60;
@@ -105,6 +110,7 @@ export class FightEngine {
       x: f.x, hp: f.hp, stamina: f.stamina, phase: f.phase, move: a?.move, frame: f.frame,
       hand: a?.hand, height: a?.height, length, heavy: a?.heavy, evade: f.evade?.kind, evadeDir: f.evade?.dir, meter: f.meter,
       guard: f.guard, guardLock: f.guardLock,
+      tell: f.phase === 'idle' && f.tellAt >= 0 && this.tick - f.tellAt <= FIGHT.tellFrames ? this.tick - f.tellAt : undefined,
     };
   }
 
@@ -165,7 +171,9 @@ export class FightEngine {
     } else if (c.kind === 'defend' && (c.move === 'slip' || c.move === 'duck')) {
       if (f.phase === 'idle' || f.phase === 'recovery') f.evade = { kind: c.move, frames: FIGHT.evadeFrames, dir: c.dir };
     }
-    // Blocking comes from Stance.guard every tick; 'anticipate' is for the director.
+    // Blocking comes from Stance.guard every tick. 'anticipate' is for the director, and shows in the state for the
+    // CPU (a wind-up it can see coming); it never changes an outcome.
+    if (c.kind === 'anticipate') f.tellAt = this.tick;
   }
 
   private start(id: PlayerId, c: AttackCommand, events: FightEvent[]) {
@@ -187,14 +195,19 @@ export class FightEngine {
     // A heavy (loaded up and held, then thrown) hits harder but comes out slower, so the other player can see it
     // coming. Other punches' wind-up adds nothing (it used to scale every punch's damage, a hidden coin flip).
     const heavy = PUNCHES.has(c.move) && Boolean(c.heavy);
+    const slower = (gassed ? FIGHT.gassedStartup : 0) + mash * FIGHT.mashStartup + (heavy ? FIGHT.heavyStartup : 0);
+    // A punch the reader confirmed (it comes with a head start: its wind-up has been on screen since the motion began)
+    // lands right away: the player's real fist is already on its way, and by the time the picture gets to the screen
+    // it's out. Only what the player chose or earned slows it (a heavy, mashing, being tired). Legs and the CPU's
+    // punches keep their startup, less the head start.
+    const read = PUNCHES.has(c.move) && Number.isFinite(c.headStart);
     f.attack = {
       move: c.move,
       hand: c.hand,
       spec,
-      startup: Math.max(
-        Math.min(FIGHT.minStartup, spec.startup),
-        spec.startup + (gassed ? FIGHT.gassedStartup : 0) + mash * FIGHT.mashStartup + (heavy ? FIGHT.heavyStartup : 0) - clamp(finiteOr(c.headStart ?? 0, 0), 0, FIGHT.maxHeadStart),
-      ),
+      startup: read
+        ? Math.min(FIGHT.readStartup, spec.startup) + slower
+        : Math.max(Math.min(FIGHT.minStartup, spec.startup), spec.startup + slower - clamp(finiteOr(c.headStart ?? 0, 0), 0, FIGHT.maxHeadStart)),
       scale: speed * (heavy ? windup * FIGHT.heavyDamage : 1) * (gassed ? FIGHT.gassedDamage : 1) * (1 - mash * FIGHT.mashDamage),
       height: c.height,
       lunge: this.lungeFor(c, spec),
@@ -202,9 +215,13 @@ export class FightEngine {
       landed: false,
       blocked: false,
       heavy,
+      read,
+      startedAt: this.tick,
+      guardBefore: f.guardPrev,
     };
     f.phase = 'startup';
     f.frame = 0;
+    f.tellAt = -1;
     f.evade = null;
     f.stamina = Math.max(0, f.stamina - spec.stamina);
     if (c.move === 'fireball') f.meter = 0;
@@ -227,7 +244,8 @@ export class FightEngine {
     const a = f.attack;
     if (f.phase !== 'startup' || !a || a.hand !== c.hand || a.move === c.move || !PUNCHES.has(a.move)) return;
     const spec = MOVES[c.move];
-    a.startup = Math.max(f.frame + 1, a.startup + spec.startup - a.spec.startup);
+    // A read punch's startup doesn't depend on the move (see start).
+    if (!a.read) a.startup = Math.max(f.frame + 1, a.startup + spec.startup - a.spec.startup);
     a.move = c.move;
     a.spec = spec;
   }
@@ -393,21 +411,22 @@ export class FightEngine {
 
   /**
    * Hands going up into a guard look like a punch to the camera for a moment (real block moments: 64 of 101 read a
-   * strike first). So a guard that comes up while a punch is barely started wins: the punch is called off (its stamina
-   * back) and the fighter blocks. A punch thrown from a guard that was already up isn't affected.
+   * strike first). So a guard that comes up within FIGHT.guardCancelFrames of a punch starting wins, as long as the
+   * punch hasn't connected: it's called off (its stamina back, whiffed or not) and the fighter blocks. A read punch is
+   * already active by then, so this also reaches into its active and recovery frames. A punch thrown from a guard that
+   * was already up isn't affected (and a real punch takes the hand out of the guard for longer than this).
    */
   private guardFirst(id: PlayerId, stance: Stance | undefined) {
     const f = this.fighters[id];
     const guard = Boolean(stance?.guard);
     const a = f.attack;
-    if (guard && !f.guardWas && f.phase === 'startup' && a && PUNCHES.has(a.move) && f.frame <= FIGHT.guardCancelFrames && f.guardLock === 0) {
+    const swinging = f.phase === 'startup' || f.phase === 'active' || f.phase === 'recovery';
+    if (guard && swinging && a && !a.guardBefore && !a.landed && !a.blocked && PUNCHES.has(a.move) && this.tick - a.startedAt <= FIGHT.guardCancelFrames && f.guardLock === 0) {
       f.stamina = Math.min(FIGHT.maxStamina, f.stamina + a.spec.stamina);
       f.attack = null;
       f.queue = [];
       this.idle(f);
     }
-    // Remembered per attack: the guard only cancels a punch if it wasn't up when the punch started.
-    if (f.phase !== 'startup') f.guardWas = guard;
     if (guard && !f.guardPrev) f.guardUpAt = this.tick;
     f.guardPrev = guard;
   }
@@ -559,7 +578,7 @@ function fresh(x: number): Fighter {
   return {
     x, hp: FIGHT.maxHp, stamina: FIGHT.maxStamina, phase: 'idle', frame: 0,
     attack: null, stun: 0, evade: null, queue: [], chain: 0, meter: 0, mash: 0, lastLanded: false, lastAttackAt: -1, sinceAttack: 10,
-    guard: FIGHT.guardMax, guardLock: 0, sinceGuard: 10, guardWas: false, guardPrev: false, guardUpAt: -Infinity,
+    guard: FIGHT.guardMax, guardLock: 0, sinceGuard: 10, guardPrev: false, guardUpAt: -Infinity, tellAt: -1,
   };
 }
 

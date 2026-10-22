@@ -163,6 +163,8 @@ export class IntentReader {
   private pendingCore: Record<'jump' | 'duck' | 'dodge', number> = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
   /** Last time each arm was throwing a strike. Punching moves the head; that isn't a dodge or a duck. */
   private lastArmStrike: Record<'armL' | 'armR', number> = { armL: -Infinity, armR: -Infinity };
+  /** When each arm's last strike went out (see oneAtATime). */
+  private lastStrikeAt: Record<'armL' | 'armR', number> = { armL: -Infinity, armR: -Infinity };
   /** Last time either hand moved fast, read as a strike or not, and last time one really swung (config.handsCalm). */
   private lastArmBurst = -Infinity;
   private lastArmSwing = -Infinity;
@@ -181,7 +183,8 @@ export class IntentReader {
   /** When the rules last saw each arm start a strike (config.model.rescue 1 only rescues those). */
   private ruleOnsetAt: Record<'armL' | 'armR', number> = { armL: -Infinity, armR: -Infinity };
 
-  constructor(player: PlayerId, config: IntentConfig = DEFAULT_INTENT) {
+  /** `weights`: the move model to use (tests score held-out players with models that never saw them). */
+  constructor(player: PlayerId, config: IntentConfig = DEFAULT_INTENT, private readonly weights = moveWeights as unknown as MoveModelWeights) {
     this.player = player;
     this.config = config;
     this.pre = new PosePreprocessor(config.preprocess);
@@ -216,6 +219,7 @@ export class IntentReader {
     this.lastCore = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
     this.pendingCore = { jump: -Infinity, duck: -Infinity, dodge: -Infinity };
     this.lastArmStrike = { armL: -Infinity, armR: -Infinity };
+    this.lastStrikeAt = { armL: -Infinity, armR: -Infinity };
     this.lastArmBurst = -Infinity;
     this.lastArmSwing = -Infinity;
     this.headRest = null;
@@ -256,7 +260,23 @@ export class IntentReader {
     this.bothArmsTogether(body.t, intents);
     this.updateCore(body, intents);
     if (this.config.model.gate) this.secondOpinion(body, intents);
+    this.oneAtATime(intents);
     return { commands: toCommands(this.player, intents), stance: this.stance, intents, body, debug: this.debug };
+  }
+
+  /**
+   * The same arm can't strike twice within `arm.refractoryMs` (confirm to confirm): that's one swing read twice (the
+   * model's strike and then the rules' a beat later, or the reverse). Real punches with one arm come at least ~270 ms
+   * apart (5% of the labeled ones); 7 of the 37 fakes that followed a strike with the same arm came within 150 (1 real read).
+   */
+  private oneAtATime(out: Intent[]) {
+    const gap = this.config.arm.refractoryMs ?? 0;
+    for (let i = 0; i < out.length; i++) {
+      const x = out[i];
+      if (x.kind !== 'strike' || (x.limb !== 'armL' && x.limb !== 'armR')) continue;
+      if (x.t - this.lastStrikeAt[x.limb] < gap) out[i] = { kind: 'cancel', limb: x.limb, t: x.t, reason: 'not a punch' };
+      else this.lastStrikeAt[x.limb] = x.t;
+    }
   }
 
   /**
@@ -433,6 +453,9 @@ export class IntentReader {
       // Punches don't travel down: an arm straightening as the hand drops (back to the lap) isn't a strike.
       const goingDown = def.kind === 'arm' && !s.overhand && s.peak.y < -0.15 && s.peak.y < -0.5 * len(s.peak);
       const reason = s.peakDisp < needed || (def.kind === 'leg' && lift < this.config.legRise) ? 'too small'
+        // Still not a strike this long after it started: the arm moved too slowly for a punch (real fists are out 140–210
+        // ms in), and a hit landing now would come long after the player's (real play: mostly fakes).
+        : def.kind === 'arm' && t - s.since > (cfg.lateMs ?? Infinity) ? 'too slow'
         : legs && this.supportLeg(name, t) ? 'support leg'
         : def.kind === 'arm' && this.kicking(t) ? 'not a punch'
         : goingDown ? 'going down'
@@ -544,7 +567,7 @@ export class IntentReader {
       if (this.gate) (this.moveModel?.reset(), (this.gate = null));
       return;
     }
-    this.moveModel ??= new MoveModel(moveWeights as unknown as MoveModelWeights);
+    this.moveModel ??= new MoveModel(this.weights);
     this.gate ??= new GateRescue({ ...GATE_DEFAULTS, keep: m.keep, on: m.on, confirm: m.confirm, off: m.off });
     const scores = this.moveModel.update(body);
     const added: Intent[] = [];

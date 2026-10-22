@@ -29,6 +29,7 @@ Read `SPEC.md` (what we're building) and `architecture.md` (how the code is laid
 | Forge server | `cd forge && npm start` | http://127.0.0.1:8787/ (dev page for likeness tests) |
 | Matchmaker | deployed at `wss://brawlmegle.com/ws` | see `matchmaker/README.md` |
 | Tests | `npx vitest run` | intent accuracy on synthetic clips, recorded-clip runs |
+| Scoreboard | `npm run scoreboard` (`-- --save a.json`, `--compare a.json`, `--folds`) | the reader on the 509 labeled hackathon strikes: recall, fakes/min, style, onset → tell / confirm / hit on screen, per punch type. Data is off-repo (`HACKATHON_DIR`); `--folds` scores each person with a move model that never saw them |
 | Video → pose clip | `node test/pose/extract.mjs --model full video.mp4` | writes `video.full.jsonl` (needs Chrome; `CHROME_PATH` to override) |
 
 ## Rules

@@ -20,7 +20,10 @@ export type ReadModel = {
   perceiveMs: number;
   /** Real motion -> the engine gets the strike (camera, pose, reader confirm). */
   pipelineMs: number;
-  /** Frames of wind-up already shown when the strike arrives (onset -> confirm, ~80 ms). */
+  /**
+   * Frames of wind-up already shown when the strike arrives (onset -> confirm, ~80 ms). Any value marks a camera-read
+   * punch, which lands FIGHT.readStartup frames after it arrives.
+   */
   headStart: number;
   /** A read punch comes out as another punch this often (style errors). */
   wrongStyle: number;
