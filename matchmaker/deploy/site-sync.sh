@@ -50,6 +50,9 @@ EOF
     ;;
 
   sync)
+    # One check at a time (the timer, or someone running it by hand).
+    exec 9>/run/brawlegle-site-sync.lock
+    flock -n 9 || exit 0
     git -C "$SRC" fetch -q --depth 1 origin site
     new=$(git -C "$SRC" rev-parse FETCH_HEAD)
     [ "$new" = "$(cat "$LIVE" 2>/dev/null || true)" ] && exit 0
