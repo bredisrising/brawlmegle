@@ -271,7 +271,7 @@ describe('delete-fighter.mjs (admin)', () => {
     // The same round reported twice moves nothing.
     expect(await (await s.post('/api/matches', { matchId: 'r1', p1: rico.id, p2: dyl.id, winner: 'p1' })).json()).toMatchObject({ duplicate: true });
     // A rescan under the same username is the same player: the rating carries over.
-    const again = await s.forge({ username: 'rico' });
+    const again = await s.forge({ username: 'rico', proof: { id: rico.id, key: rico.ownerKey } });
     const records = (await (await fetch(`${s.base}/api/records`)).json()) as { records: Record<string, { rating?: number; rated?: number }> };
     expect(records.records[again.id]).toMatchObject({ rating: 1020, rated: 1 });
     const draw = (await (await s.post('/api/matches', { matchId: 'r2', p1: dyl.id, p2: again.id, winner: null })).json()) as Rated;
@@ -282,7 +282,7 @@ describe('delete-fighter.mjs (admin)', () => {
   it("doesn't rate someone against their own rescan, or a stand-in", async () => {
     const s = await startForge();
     const a = await s.forge({ username: 'rico' });
-    const b = await s.forge({ username: 'rico' });
+    const b = await s.forge({ username: 'rico', proof: { id: a.id, key: a.ownerKey } });
     expect(((await (await s.post('/api/matches', { matchId: 's1', p1: a.id, p2: b.id, winner: 'p1' })).json()) as Rated).rating).toBeNull();
     expect(((await (await s.post('/api/matches', { matchId: 's2', p1: a.id, p2: 'stand-in-x', winner: 'p1' })).json()) as Rated).rating).toBeNull();
   });
@@ -296,6 +296,55 @@ describe('delete-fighter.mjs (admin)', () => {
     const ratings = JSON.parse(fs.readFileSync(path.join(s.data, 'ratings.json'), 'utf8')) as Record<string, { rating: number }>;
     expect(ratings['u:rico']).toBeUndefined();
     expect(ratings['u:dyl']).toMatchObject({ rating: 980 });
+  });
+
+  it("won't let anyone rescan under someone else's username", async () => {
+    const s = await startForge();
+    const rico = await s.forge({ username: 'rico' });
+    const scan = (proof?: unknown) => s.post('/api/forge', { name: 'rico', username: 'Rico', frames: [JPEG], proof });
+    const taken = await scan();
+    expect(taken.status).toBe(403);
+    expect(await taken.json()).toMatchObject({ taken: true });
+    expect((await scan({ id: rico.id, key: 'not-it' })).status).toBe(403);
+    // The owner's browser key, or the code from after the forge, proves it.
+    expect((await scan({ id: rico.id, key: rico.ownerKey })).status).toBe(202);
+    expect((await scan({ id: rico.id, code: rico.deleteCode.toLowerCase() })).status).toBe(202);
+    const profile = (await (await fetch(`${s.base}/api/profiles/rico`)).json()) as { owned: boolean };
+    expect(profile.owned).toBe(true);
+  });
+
+  it('lets a username from before owner keys be claimed by whoever rescans it', async () => {
+    const data = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-del-'));
+    seed(data, { id: 'old-1', name: 'oldie', username: 'oldie', status: 'ready', createdAt: 1 }, ['card.png']);
+    const s = await startForge({}, data);
+    expect(((await (await fetch(`${s.base}/api/profiles/oldie`)).json()) as { owned: boolean }).owned).toBe(false);
+    const mine = await s.forge({ username: 'oldie' });
+    // ...and from then on it's theirs.
+    expect((await s.post('/api/forge', { name: 'x', username: 'oldie', frames: [JPEG] })).status).toBe(403);
+    expect((await s.post('/api/forge', { name: 'x', username: 'oldie', frames: [JPEG], proof: { id: mine.id, key: mine.ownerKey } })).status).toBe(202);
+  });
+
+  it('claims a fighter on another laptop with its code', async () => {
+    const s = await startForge();
+    const rico = await s.forge({ username: 'rico' });
+    const res = await s.post('/api/fighters/claim', { code: rico.deleteCode });
+    expect(await res.json()).toEqual({ ok: true, id: rico.id, name: 'A', username: 'rico' });
+    expect((await s.post('/api/fighters/claim', { code: 'ABCD-EFGH-JKMN-PQRS' })).status).toBe(403);
+    expect((await s.post('/api/fighters/claim', { code: 'nope' })).status).toBe(400);
+  });
+
+  it('rescans through a friend\'s laptop with a one-time ticket, never the key', async () => {
+    const s = await startForge();
+    const rico = await s.forge({ username: 'rico' });
+    expect((await s.post('/api/fighters/ticket', { username: 'rico', proof: { id: rico.id, key: 'wrong' } })).status).toBe(403);
+    const { ticket } = (await (await s.post('/api/fighters/ticket', { username: 'rico', proof: { id: rico.id, key: rico.ownerKey } })).json()) as { ticket: string };
+    // A ticket can't mint another ticket, works once, and only for its username.
+    expect((await s.post('/api/fighters/ticket', { username: 'rico', proof: { ticket } })).status).toBe(403);
+    const other = (await (await s.post('/api/fighters/ticket', { username: 'rico', proof: { id: rico.id, key: rico.ownerKey } })).json()) as { ticket: string };
+    await s.forge({ username: 'dyl' });
+    expect((await s.post('/api/forge', { name: 'x', username: 'dyl', frames: [JPEG], proof: { ticket: other.ticket } })).status).toBe(403);
+    expect((await s.post('/api/forge', { name: 'x', username: 'rico', frames: [JPEG], proof: { ticket } })).status).toBe(202);
+    expect((await s.post('/api/forge', { name: 'x', username: 'rico', frames: [JPEG], proof: { ticket } })).status).toBe(403);
   });
 
   it('deletes on disk by id when the server is stopped', () => {

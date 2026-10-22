@@ -8,10 +8,15 @@
  *   GET  /api/profiles/:username ->  { username, fighter: latest ready fighter | null, forging: id | null }
  *   POST /api/fighters/:id/delete { key }  ->  { ok, id, name }: deletes the fighter for good (403 wrong key, 404 gone)
  *   POST /api/fighters/delete    { code }  ->  { ok, id, name }: the same, with the delete code shown after the forge
+ *   POST /api/fighters/claim     { code }  ->  { ok, id, name, username }: "it's me" on another laptop (the code proves it)
+ *   POST /api/fighters/ticket    { username, proof }  ->  { ticket }: a one-time pass to rescan under that username from
+ *                                another laptop's forge (a friend's room), so the owner key itself never leaves this browser
  *   POST /api/highlights         video/webm body + x-highlight-meta  ->  the highlight (see "Highlights" below)
  *   GET  /api/highlights         ->  { highlights: newest first }
  *
- * Usernames are a light "log in": type yours on any laptop and your fighter comes back. Fighters are saved
+ * Usernames are a light "log in": type yours on any laptop and your fighter comes back. A username someone owns (their
+ * browser kept the owner key, or they have the code from after the forge) can't be rescanned without that proof, so
+ * nobody takes over another player's name; anyone else picking that fighter plays it as a guest. Fighters are saved
  * under FORGE_DATA (default data/) in <id>/. A dev page for testing likeness is at /.
  * When exposed publicly, set FORGE_ACCESS_KEY (clients send it as x-forge-key) and keep the hourly/daily caps.
  */
@@ -223,6 +228,27 @@ function withLineage(all) {
 
 /** Delete tries, owner key and delete code apart, so someone guessing codes can't lock out an owner with a key. */
 const deleteAllowed = { key: limiter(Number(process.env.FORGE_MAX_DELETES ?? 30), 10 * 60_000), code: limiter(Number(process.env.FORGE_MAX_DELETES ?? 30), 10 * 60_000) };
+/** A username's fighters, newest first. */
+const lineageOf = (username) => [...fighters.values()].filter((f) => f.username === username).sort((a, b) => b.createdAt - a.createdAt);
+/** Whether anyone can prove they own this username (fighters from before owner keys have no key or code: free to claim). */
+const isClaimed = (lineage) => lineage.some((f) => f.ownerKeyHash || f.deleteCodeHash);
+/** Rescan tickets ("ticket" -> { username, until }): single use, a few minutes. */
+const tickets = new Map();
+const TICKET_MS = 10 * 60_000;
+/**
+ * Whether `proof` shows its sender owns this username: { id, key } (the scanning browser's owner key), { id, code }
+ * (the code from after the forge) for one of its fighters, or { ticket } issued for it (used up here).
+ */
+function provesOwner(lineage, username, proof) {
+  if (typeof proof?.ticket === "string") {
+    const t = tickets.get(proof.ticket);
+    tickets.delete(proof.ticket);
+    return !!t && t.username === username && t.until > Date.now();
+  }
+  const f = lineage.find((x) => x.id === proof?.id);
+  return !!f && (matchesHash(proof.key, f.ownerKeyHash) || matchesHash(normalizeCode(proof.code) ?? "", f.deleteCodeHash));
+}
+
 /** Fighters deleted since the server started: a K.O. clip of a fight that was still on when it went isn't kept. */
 const deletedIds = new Set();
 const ADMIN_KEY_HASH = sha256(adminKey(DATA));
@@ -404,7 +430,7 @@ async function handle(req, res) {
     // A hidden fighter (a broken rig set aside) doesn't come back on a username "log in" either.
     const ready = mine.find((f) => f.status === "ready" && !f.hidden);
     const forging = mine.find((f) => f.status === "forging" || f.status === "scanning");
-    return json(res, 200, { username, fighter: ready ? view(ready, base) : null, forging: forging?.id ?? null });
+    return json(res, 200, { username, fighter: ready ? view(ready, base) : null, forging: forging?.id ?? null, owned: isClaimed(mine) });
   }
 
   /** Every forge spends OpenAI credits and GPU time: cap them. Null when there's room. */
@@ -419,6 +445,45 @@ async function handle(req, res) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/fighters") return json(res, 200, current().map((f) => view(f, base)));
+
+  // "It's me" on another laptop: the code from after the forge proves the fighter is theirs (that browser keeps it).
+  if (req.method === "POST" && url.pathname === "/api/fighters/claim") {
+    if (ACCESS_KEY && req.headers["x-forge-key"] !== ACCESS_KEY) return json(res, 403, { error: "bad forge key" });
+    if (!deleteAllowed.code()) return json(res, 429, { error: "too many tries, wait a few minutes" });
+    let body;
+    try {
+      body = await readJson(req);
+    } catch (err) {
+      return json(res, err.status ?? 400, { error: err.message });
+    }
+    const code = normalizeCode(body?.code);
+    if (!code) return json(res, 400, { error: "a fighter code is 16 letters and digits, like ABCD-EFGH-JKMN-PQRS" });
+    let fighter;
+    // Every fighter is checked (no early exit), each compare in constant time.
+    for (const f of fighters.values()) if (matchesHash(code, f.deleteCodeHash) && !fighter) fighter = f;
+    if (!fighter) return json(res, 403, { error: "that code doesn't match any fighter" });
+    return json(res, 200, { ok: true, id: fighter.id, name: fighter.name, username: fighter.username ?? null });
+  }
+
+  // A rescan through another laptop's forge (a friend's room): the owner proves it here and hands that laptop only a
+  // one-time ticket, never their owner key or code.
+  if (req.method === "POST" && url.pathname === "/api/fighters/ticket") {
+    if (ACCESS_KEY && req.headers["x-forge-key"] !== ACCESS_KEY) return json(res, 403, { error: "bad forge key" });
+    if (!deleteAllowed.key()) return json(res, 429, { error: "too many tries, wait a few minutes" });
+    let body;
+    try {
+      body = await readJson(req);
+    } catch (err) {
+      return json(res, err.status ?? 400, { error: err.message });
+    }
+    const username = normalizeUsername(body?.username);
+    if (!username || typeof body?.proof?.ticket === "string" || !provesOwner(lineageOf(username), username, body?.proof)) return json(res, 403, { error: "not your username" });
+    const now = Date.now();
+    for (const [t, v] of tickets) if (v.until <= now) tickets.delete(t);
+    const ticket = crypto.randomBytes(24).toString("base64url");
+    tickets.set(ticket, { username, until: now + TICKET_MS });
+    return json(res, 200, { ticket });
+  }
 
   // "Delete my fighter": with the owner key the scanning browser kept, or the delete code from the screenshot.
   if (req.method === "POST" && parts[0] === "api" && parts[1] === "fighters" && parts.at(-1) === "delete" && parts.length <= 4) {
@@ -564,6 +629,12 @@ async function handle(req, res) {
       uploading--;
     }
     if (!body || typeof body !== "object") return json(res, 400, { error: "send a JSON object" });
+    // Someone else's username can't be taken over by rescanning under it: an owned name needs its owner's proof.
+    const wanted = normalizeUsername(body.username);
+    if (wanted) {
+      const lineage = lineageOf(wanted);
+      if (isClaimed(lineage) && !provesOwner(lineage, wanted, body.proof)) return json(res, 403, { error: "that username belongs to someone else", taken: true });
+    }
     const frames = Array.isArray(body.frames) ? body.frames.map(decodeImage) : [];
     if (frames.length < 1 || frames.length > 3 || frames.includes(null)) {
       return json(res, 400, { error: "frames must be 1 to 3 JPEG or PNG images, base64 or data URLs" });
