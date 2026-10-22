@@ -15,7 +15,8 @@ certbot certonly --webroot -w /var/www/acme --cert-name "$NAME" "${args[@]}" \
   --agree-tos --register-unsafely-without-email --non-interactive --keep-until-expiring --quiet
 
 # Same site as the main server block, with this name and certificate. nginx picks it by the TLS name (SNI).
-SRC=/etc/nginx/sites-available/brawlegle-https.conf
+# The full site (the old sslip.io name now only redirects to brawlmegle.com, so it's no template).
+SRC=/etc/nginx/sites-available/brawlmegle-com-https.conf
 DST=/etc/nginx/sites-available/$NAME-https.conf
 sed -E -e "s#^(\s*server_name ).*;#\1$*;#" -e "s#/etc/letsencrypt/live/[^/]+/#/etc/letsencrypt/live/$NAME/#g" "$SRC" > "$DST"
 ln -sf "$DST" "/etc/nginx/sites-enabled/$NAME-https.conf"

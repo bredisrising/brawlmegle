@@ -101,11 +101,20 @@ export const FIGHT = {
   /** Punches in a row that can cancel each other's recovery (see FightEngine.chainable). */
   maxChain: 4,
   /**
-   * A strike's wind-up already shown on screen (from the reader's first sign of the motion) counts toward its
-   * startup, up to this many frames, but never below minStartup: what you threw lands sooner, still readable.
+   * A punch the reader confirmed is active this many frames after the confirm (2: the tick after), whatever the move:
+   * the player's fist is already on its way (real straights peak ~140 ms after they start, the reader confirms ~40 ms
+   * in, and camera + pose + display add ~125 ms more). The opponent reads it from the wind-up the fighter has shown
+   * since the motion started. Heavies, mashing and being tired still add their frames on top.
+   */
+  readStartup: 2,
+  /**
+   * Everything else (legs, the CPU's punches): a wind-up already shown on screen counts toward the startup, up to this
+   * many frames, but never below minStartup.
    */
   maxHeadStart: 8,
   minStartup: 3,
+  /** A wind-up tell ('anticipate') shows in FighterState.tell this long, while the fighter is free (the CPU reads it). */
+  tellFrames: 36,
   /** Super meter: filled by landing hits (and a little by taking them or blocking); a full one is a fireball. */
   maxMeter: 100,
   meterOnHit: 12,

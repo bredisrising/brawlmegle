@@ -197,9 +197,15 @@ server {
   }
   # Static dev tools (intent tuner, depth test, scan test) and a preview of the next game build (/next/: `vite build
   # --base /next/`), each copied to /var/www/brawlegle/<name>/.
+  # Without the slash they'd fall through to the game below: send /next to the test build, and so on.
+  location ~ ^/(tuner|depth|scan|next)\$ {
+    return 301 https://\$host/\$1/\$is_args\$args;
+  }
   location ~ ^/(tuner|depth|scan|next)/ {
     root /var/www/brawlegle;
     try_files \$uri \$uri/ /\$1/index.html;
+    # Test builds and tools change often: always check for a newer page.
+    add_header Cache-Control "no-cache";
   }
   # Matchmaker extras (health, training-sample uploads, its WebRTC test page at /mm-test).
   location = /health { proxy_pass http://127.0.0.1:3000; }

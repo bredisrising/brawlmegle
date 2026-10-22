@@ -31,6 +31,11 @@ type LevelSpec = {
    * reaction time could never land: this stands in for "half expecting it", and only fires on defendChance.
    */
   reflex: Span;
+  /**
+   * Ticks from seeing the opponent's wind-up tell to covering up. A player's punch the reader confirms is active a tick
+   * or two later (FIGHT.readStartup), so against players the tell is all there is to react to.
+   */
+  tellReflex: Span;
   defendChance: number;
   punishChance: number;
   /** Chance to cover up for a moment after taking a hit, or while backing off. */
@@ -51,15 +56,17 @@ type LevelSpec = {
 };
 
 const LEVELS: Record<CpuLevel, LevelSpec> = {
-  easy: { react: [27, 34], reflex: [8, 13], defendChance: 0.2, punishChance: 0.3, shellChance: 0.2, cooldown: [150, 240], telegraph: [26, 36], still: 120, comboChance: 0.12, power: 0.85, heavyChance: 0.3, parryChance: 0.1 },
-  normal: { react: [15, 24], reflex: [5, 10], defendChance: 0.42, punishChance: 0.6, shellChance: 0.4, cooldown: [96, 168], telegraph: [16, 24], still: 75, comboChance: 0.3, power: 1, heavyChance: 0.25, parryChance: 0.35 },
-  hard: { react: [10, 16], reflex: [3, 8], defendChance: 0.62, punishChance: 0.85, shellChance: 0.55, cooldown: [60, 120], telegraph: [11, 16], still: 50, comboChance: 0.45, power: 1, heavyChance: 0.2, parryChance: 0.55 },
+  easy: { react: [27, 34], reflex: [8, 13], tellReflex: [4, 8], defendChance: 0.2, punishChance: 0.3, shellChance: 0.2, cooldown: [150, 240], telegraph: [26, 36], still: 120, comboChance: 0.12, power: 0.85, heavyChance: 0.3, parryChance: 0.1 },
+  normal: { react: [15, 24], reflex: [5, 10], tellReflex: [2, 6], defendChance: 0.42, punishChance: 0.6, shellChance: 0.4, cooldown: [96, 168], telegraph: [16, 24], still: 75, comboChance: 0.3, power: 1, heavyChance: 0.25, parryChance: 0.35 },
+  hard: { react: [10, 16], reflex: [3, 8], tellReflex: [1, 4], defendChance: 0.62, punishChance: 0.85, shellChance: 0.55, cooldown: [60, 120], telegraph: [11, 16], still: 50, comboChance: 0.45, power: 1, heavyChance: 0.2, parryChance: 0.55 },
 };
 
 /** Where it hovers when not attacking (m): just outside an unlunged jab (0.85). */
 const COMFORT = 1.0;
 /** Farther out while getting its breath back. */
 const REST_DISTANCE = 1.25;
+/** How long it covers up for a wind-up tell it saw (a read punch lands within a few ticks of the tell, or never). */
+const COVER_TICKS = 16;
 /** Extra ticks of tell before a heavy. */
 const HEAVY_TELL = 12;
 /** Never start anything that would leave stamina below this (gassed is below FIGHT.gassedBelow). */
@@ -84,7 +91,7 @@ const COMBOS: Record<CpuLevel, [AttackMove[], number][]> = {
 
 type Mode = 'neutral' | 'windup' | 'attack' | 'retreat' | 'rest';
 type Defense = 'block' | 'slip' | 'duck';
-type Reaction = { at: number; kind: 'defend'; move: AttackMove; defense: Defense } | { at: number; kind: 'punish'; looks: number };
+type Reaction = { at: number; kind: 'defend'; move: AttackMove; defense: Defense } | { at: number; kind: 'punish'; looks: number } | { at: number; kind: 'cover' };
 
 export class Cpu {
   private readonly opponent: PlayerId;
@@ -152,6 +159,7 @@ export class Cpu {
     this.reactions = this.reactions.filter((r) => r.at > tick);
     for (const r of due) {
       if (r.kind === 'defend') evaded = this.defend(r, me, opp, commands, tick, t) || evaded;
+      else if (r.kind === 'cover') this.guardUntil = Math.max(this.guardUntil, tick + COVER_TICKS);
       else this.punish(r, me, opp, d, commands, tick, t);
     }
 
@@ -240,6 +248,10 @@ export class Cpu {
   /** Notices what changed since last tick and schedules reactions. */
   private watch(engine: FightEngine, me: FighterState, opp: FighterState, d: number, tick: number) {
     const prev = this.seen;
+    // A wind-up tell close enough to land: cover up (only while it isn't attacking itself; the stance sees to that).
+    if (opp.tell === 0 && d <= MOVES.cross.range + 0.45 && this.rng() < this.spec.defendChance) {
+      this.reactions.push({ at: tick + this.int(this.spec.tellReflex), kind: 'cover' });
+    }
     const swingStarted = opp.phase === 'startup' && (prev?.phase !== 'startup' || opp.frame < prev.frame);
     if (swingStarted && opp.move) {
       const move = opp.move as AttackMove;

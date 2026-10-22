@@ -130,7 +130,7 @@ export class HostSession {
         this.hooks.watched?.();
       }),
       useGameStore.subscribe((s, prev) => {
-        if (s.phase !== prev.phase || s.countdown !== prev.countdown || s.winner !== prev.winner || s.ending !== prev.ending) this.sendPhase();
+        if (s.phase !== prev.phase || s.countdown !== prev.countdown || s.winner !== prev.winner || s.ending !== prev.ending || s.round !== prev.round || s.wins !== prev.wins) this.sendPhase();
         if (s.players[REMOTE] !== prev.players[REMOTE]) this.sendFighter();
       }),
     );
@@ -325,11 +325,11 @@ export class HostSession {
 
   private sendPhase(force = false) {
     if (!this.peer.connected && !this.watching) return;
-    const { phase, countdown, winner, ending } = useGameStore.getState();
-    const key = `${phase}:${countdown}:${winner}:${ending}`;
+    const { phase, countdown, winner, ending, round, wins } = useGameStore.getState();
+    const key = `${phase}:${countdown}:${winner}:${ending}:${round}:${wins.p1}:${wins.p2}`;
     if (!force && key === this.lastPhase) return;
     this.lastPhase = key;
-    const msg: HostMessage = { type: 'phase', phase, countdown, winner, ending };
+    const msg: HostMessage = { type: 'phase', phase, countdown, winner, ending, round, wins };
     this.send(msg);
     this.cast(msg);
   }

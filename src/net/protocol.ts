@@ -12,7 +12,7 @@ export type SignalMessage =
   | { type: 'room'; code: string; iceServers: RTCIceServer[] } // server -> host: room code to show on screen
   | { type: 'join'; code: string; player?: string } // client -> server (player: "Find a fight", the room is held for it)
   // "Find a fight": wait as a host (the server answers 'room'), or join the waiting host it names.
-  | { type: 'quick'; player: string } // player -> server
+  | { type: 'quick'; player: string; pool?: string } // player -> server; pool: a separate queue (config.matchPool)
   | { type: 'quick-join'; code: string } // server -> player: join this room by code
   | { type: 'joined'; code: string; iceServers: RTCIceServer[] } // server -> client, before the offer
   | { type: 'peer-joined'; iceServers: RTCIceServer[] } // server -> host: create the connection and send the offer
@@ -50,7 +50,9 @@ export type ClientMessage =
 export type HostMessage =
   | { type: 'welcome'; player: PlayerId }
   | { type: 'roster'; fighters: ForgedFighter[] } // saved fighters for 'Choose existing'
-  | { type: 'phase'; phase: Phase; countdown: number | null; winner?: PlayerId | null; ending?: 'ko' | 'time' | null }
+  // Between rounds (phase 'break') winner and ending are the round's; at 'ko', the match's. round / wins: the match so
+  // far (best of three); missing from an older host, which plays one round.
+  | { type: 'phase'; phase: Phase; countdown: number | null; winner?: PlayerId | null; ending?: 'ko' | 'time' | null; round?: number; wins?: Record<PlayerId, number> }
   // The fight itself, so the client laptop shows it too (see Game's mirror):
   | { type: 'match'; players: Record<PlayerId, MatchPlayer> } // who's fighting as what; on connect and whenever it changes
   | { type: 'frame'; frame: MirrorFrame } // every sim tick while a fight is on ("poses" channel: lossy)

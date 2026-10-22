@@ -40,9 +40,12 @@ import { HighlightRecorder } from './HighlightRecorder';
 import { pickBot, type Bot } from './bots';
 import { Commentary, TEMPLATES, fill, spoken, type Line } from './Commentary';
 import { NO_VOTES, localPlayerId, pushPopup, updatePlayer, useGameStore, type DrillView } from './store';
+import { BREAK, NO_WINS, Rounds, roundWinner } from './rounds';
 
-/** Round length: shorter at a demo booth (`?demo=1`). */
-const ROUND = config.demo ? 45 : ROUND_SECONDS;
+/** Round length (each of the best of three): shorter at a demo booth (`?demo=1`). */
+const ROUND = config.demo ? 30 : ROUND_SECONDS;
+/** FINAL ROUND holds a little longer than ROUND N before FIGHT. */
+const FINAL_CALL_SECONDS = 1.4;
 
 /** What drives a CPU slot: the real CPU, or Training's dummy. */
 type Brain = { think(engine: FightEngine, tick: number): CpuOutput; reset(): void };
@@ -97,7 +100,7 @@ const WAITING_TEXT = 'Opponent found, waiting for them to come back…';
 const playerId = () => (crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** Big moments with a template line ready for each side (Commentary TEMPLATES). */
-const MOMENTS = ['first', 'counter', 'combo', 'guardBreak', 'guardCrush', 'parry', 'danger', 'ko', 'time'] as const;
+const MOMENTS = ['first', 'counter', 'combo', 'guardBreak', 'guardCrush', 'parry', 'danger', 'ko', 'time', 'round'] as const;
 type Moment = (typeof MOMENTS)[number];
 
 const ARENA_CENTER = new THREE.Vector3(0, 0.5, 0);
@@ -114,7 +117,8 @@ export type FighterChoice =
  *
  *   InputHub -> IntentReader (per player) -> FightEngine -> FighterView / Effects / store
  *
- *   lobby --(both ready)--> countdown --> fighting --(K.O.)--> ko --(rematch)--> countdown
+ *   lobby --(both ready)--> countdown --> fighting --(K.O. or time)--> break --> countdown (ROUND 2) --> ...
+ *                                                  \--(the match's decided: best of three)--> ko --(rematch)--> countdown
  *
  * Only the host runs the fight. A client laptop hands off to ClientSession, which just scans + streams.
  */
@@ -143,6 +147,9 @@ export class Game {
   private cpuPick: { opponent: string; fighter: Promise<ForgedFighter | undefined> } | null = null;
   /** Seconds left in the round (the store shows it rounded up). */
   private clock = ROUND;
+  /** Host: the match's rounds (best of three; one in Training), and when (performance.now) the last round ended. */
+  private readonly rounds = new Rounds();
+  private breakAt = 0;
   private hostSession: HostSession | null = null;
   private client: ClientSession | null = null;
   /** A screen that only watches a hosted room (spectate). */
@@ -296,6 +303,14 @@ export class Game {
         this.nextAt = null;
         useGameStore.setState({ votes: NO_VOTES, nextAt: null });
       }
+      // A round's over, not the match: the slam and the crowd, one line from the commentator, the breather (ui/RoundBreak).
+      if (s.phase === 'break' && prev.phase !== 'break') {
+        void this.recorder.stop({ winner: s.winner, ending: s.ending });
+        this.announceFinish(s.winner, s.ending);
+        if (!this.mirroring) this.callRound(s.winner);
+      }
+      // The next round's call (ROUND 2, FINAL ROUND): both fighters are back on their marks.
+      if (s.phase === 'countdown' && prev.phase === 'break') this.freshRound(false);
       if (s.phase === 'ko' && prev.phase !== 'ko') {
         if (!this.mirroring) this.startVotes(s.ending);
         void this.recorder.stop({ winner: s.winner, ending: s.ending });
@@ -313,22 +328,9 @@ export class Game {
         this.announcer.bark('fight', true);
         this.announcer.crowd('cheer', 0.4);
       }
-      // A new round: forget the last one's combos and first hit.
       if (s.countdown === 0 && !this.mirroring && recordingEnabled()) this.startRecording();
-      if (s.countdown === COUNTDOWN_FROM) {
-        this.commentary.hush();
-        this.firstCalled = false;
-        this.dangerCalled = {};
-        this.blockStreak = { defender: null, n: 0, called: false };
-        this.guardBroken = false;
-        this.bigLead = null;
-        this.clockCalled = false;
-        if (!this.mirroring) this.callIntro();
-        this.stopReplay();
-        this.firstHitDone = false;
-        this.combo.player = null;
-        useGameStore.setState({ combo: null, callout: null });
-      }
+      // A new match.
+      if (s.countdown === COUNTDOWN_FROM) this.freshRound(true);
     });
     for (const id of PLAYER_IDS) this.views[id].onLand = (at) => this.effects.burst(at, 'dust');
     // Ping: how the link between the two laptops is doing, every couple of seconds.
@@ -389,7 +391,7 @@ export class Game {
       left: () => {
         if (!mine()) return;
         const { phase, players } = useGameStore.getState();
-        const live = phase === 'countdown' || phase === 'fighting';
+        const live = phase === 'countdown' || phase === 'fighting' || phase === 'break';
         const name = players.p2.name;
         this.releaseRemote();
         this.stopWaiting();
@@ -574,7 +576,7 @@ export class Game {
     this.nextAt = null;
     useGameStore.setState({
       phase: 'lobby', countdown: null, winner: null, ending: null, timeLeft: null, combo: null, callout: null, replay: false,
-      link: null, votes: NO_VOTES, nextAt: null, lastMove: null,
+      link: null, votes: NO_VOTES, nextAt: null, lastMove: null, round: 1, wins: NO_WINS,
     });
   }
 
@@ -731,7 +733,7 @@ export class Game {
    */
   private watchPeer() {
     const { phase, players } = useGameStore.getState();
-    if ((phase !== 'countdown' && phase !== 'fighting') || !this.liveMatch()) return;
+    if ((phase !== 'countdown' && phase !== 'fighting' && phase !== 'break') || !this.liveMatch()) return;
     const now = performance.now();
     const blocked = now - this.lastWatch > 2000;
     this.lastWatch = now;
@@ -763,16 +765,16 @@ export class Game {
   /** The other player left mid-match (said so, or the link went). */
   private opponentLeft() {
     const { phase } = useGameStore.getState();
-    if (phase === 'countdown' || phase === 'fighting') this.notify('Your opponent left');
+    if (phase === 'countdown' || phase === 'fighting' || phase === 'break') this.notify('Your opponent left');
   }
 
   /**
-   * A match with someone on another laptop is on (walkout, countdown or the round). Not the CPU or Training, and not
-   * a screen that only watches.
+   * A match with someone on another laptop is on (walkout, countdown, a round or between rounds). Not the CPU or
+   * Training, and not a screen that only watches.
    */
   private liveMatch() {
     const { phase, role, connection } = useGameStore.getState();
-    if (phase !== 'countdown' && phase !== 'fighting') return false;
+    if (phase !== 'countdown' && phase !== 'fighting' && phase !== 'break') return false;
     if (role === 'client') return !!this.client && connection === 'open';
     if (role !== 'host' || !this.hostSession?.connected || this.cpu.p2) return false;
     return this.input.source('p2') === this.hostSession.remote;
@@ -865,7 +867,7 @@ export class Game {
   private abandonMatch(who: PlayerId) {
     const { phase, players } = useGameStore.getState();
     this.away.add(who);
-    if (phase === 'countdown' || phase === 'fighting') {
+    if (phase === 'countdown' || phase === 'fighting' || phase === 'break') {
       this.recorder.discard();
       this.stopReplay();
       this.commentary.hush();
@@ -1318,7 +1320,9 @@ export class Game {
   /** Host, matchmade fight on the K.O. screen: start the "next opponent" countdown, and go when it runs out. */
   private checkNext() {
     const { phase, quick } = useGameStore.getState();
-    if (!quick || !this.quick || this.mirroring || phase !== 'ko' || !this.hostSession?.connected || this.cpu.p2) return;
+    // A person here, or a bot standing in for one: either way the player moves on by themselves (or rematches).
+    const matched = this.hostSession?.connected || !!this.cpu.p2;
+    if (!quick || !this.quick || this.mirroring || phase !== 'ko' || !matched) return;
     const now = performance.now();
     if (this.nextAt === null) {
       const shown = this.replayEndedAt ?? this.koAt + NEXT_REPLAY_BACKSTOP_MS;
@@ -1331,21 +1335,26 @@ export class Game {
     }
   }
 
-  /** Both voted: same two fighters again. */
+  /** Both voted: same two fighters again, a fresh best of three. */
   private rematch() {
     if (this.mirroring) return;
     this.votes = NO_VOTES;
     this.nextAt = null;
     this.stopReplay();
+    this.resetFighters();
+    useGameStore.setState({ winner: null, ending: null });
+    this.startCountdown();
+  }
+
+  /** Both fighters fresh on their marks: full health, meter and guard, the CPU's memory wiped. */
+  private resetFighters() {
     this.fight.reset();
     this.fightTicks = 0;
     for (const id of PLAYER_IDS) {
       this.cpu[id]?.reset();
       this.views[id].reset();
+      updatePlayer(id, { hp: MAX_HP });
     }
-    for (const id of PLAYER_IDS) updatePlayer(id, { hp: MAX_HP });
-    useGameStore.setState({ winner: null, ending: null });
-    this.startCountdown();
   }
 
   dispose() {
@@ -1376,11 +1385,59 @@ export class Game {
     this.renderer.dispose();
   }
 
+  /** A match starts: the walkout, ROUND 1, FIGHT. Training is one endless round; everything else best of three. */
   private startCountdown() {
     this.phaseTimer = 0;
     this.clock = ROUND;
     this.fair.reset();
-    useGameStore.setState({ phase: 'countdown', countdown: COUNTDOWN_FROM, timeLeft: ROUND, ending: null });
+    this.rounds.reset(useGameStore.getState().training ? 1 : 3);
+    useGameStore.setState({ phase: 'countdown', countdown: COUNTDOWN_FROM, timeLeft: ROUND, ending: null, round: 1, wins: NO_WINS });
+  }
+
+  /**
+   * Host: a round ended (`ko`: its winner by K.O.; time: more HP left takes it). Short of the match being decided it's
+   * the break between rounds (no replay, no votes, no result); otherwise the K.O. screen, for the match's winner.
+   */
+  private endRound(ending: 'ko' | 'time', ko: PlayerId | null) {
+    const hp = { p1: this.fight.state('p1').hp, p2: this.fight.state('p2').hp };
+    if (ending === 'ko' && ko) hp[opponentOf(ko)] = 0; // the store's count got there (a dev key's fake hit)
+    const winner = roundWinner(hp, ko);
+    const over = this.rounds.end(winner);
+    const { round, wins } = this.rounds;
+    if (over) return useGameStore.setState({ phase: 'ko', ending, winner: this.rounds.winner, countdown: null, round, wins });
+    this.breakAt = performance.now();
+    useGameStore.setState({ phase: 'break', ending, winner, countdown: null, round, wins });
+  }
+
+  /** Host, between rounds (in real time: the K.O.'s slow motion doesn't stretch it): then the next round's call. */
+  private stepBreak() {
+    if (performance.now() - this.breakAt < BREAK.totalMs) return;
+    this.rounds.next();
+    this.resetFighters();
+    this.phaseTimer = 0;
+    this.clock = ROUND;
+    this.fair.reset();
+    useGameStore.setState({ phase: 'countdown', countdown: COUNTDOWN_FROM - 1, timeLeft: ROUND, winner: null, ending: null, round: this.rounds.round });
+  }
+
+  /**
+   * A round starts (both laptops): forget the last one's combos, first hit, commentary cues and replay. `match`: the
+   * first round of a match, which gets the commentator's intro; later rounds put the fighters back on their marks.
+   */
+  private freshRound(match: boolean) {
+    if (match) this.commentary.hush();
+    this.firstCalled = false;
+    this.dangerCalled = {};
+    this.blockStreak = { defender: null, n: 0, called: false };
+    this.guardBroken = false;
+    this.bigLead = null;
+    this.clockCalled = false;
+    if (match && !this.mirroring) this.callIntro();
+    this.stopReplay();
+    if (!match) for (const id of PLAYER_IDS) this.views[id].reset();
+    this.firstHitDone = false;
+    this.combo.player = null;
+    useGameStore.setState({ combo: null, callout: null });
   }
 
   private update = (dt: number, frozen: boolean) => {
@@ -1413,8 +1470,10 @@ export class Game {
     const { phase, countdown } = useGameStore.getState();
     this.phaseTimer += SIM_DT;
 
-    // The first beat is the walkout, then ROUND 1, then FIGHT.
-    if (phase === 'countdown' && this.phaseTimer >= (countdown === COUNTDOWN_FROM ? this.walkout.length : ROUND_CALL_SECONDS)) {
+    if (phase === 'break') this.stepBreak();
+    // The first beat is the walkout (round 1 only), then ROUND N, then FIGHT.
+    const call = this.rounds.final ? FINAL_CALL_SECONDS : ROUND_CALL_SECONDS;
+    if (phase === 'countdown' && this.phaseTimer >= (countdown === COUNTDOWN_FROM ? this.walkout.length : call)) {
       this.phaseTimer = 0;
       const next = (countdown ?? 1) - 1;
       useGameStore.setState(next <= 0 ? { phase: 'fighting', countdown: 0 } : { countdown: next });
@@ -1661,7 +1720,7 @@ export class Game {
     if (text) useGameStore.setState({ lastMove: { text, at: performance.now() } });
   }
 
-  /** Round clock: when it runs out, more HP left wins (equal is a draw). Training has no clock. */
+  /** Round clock: when it runs out, more HP left takes the round (equal: both do). Training has no clock. */
   private tickClock() {
     const { phase, training } = useGameStore.getState();
     if (phase !== 'fighting') return;
@@ -1673,8 +1732,7 @@ export class Game {
       this.clockTick(shown);
     }
     if (this.clock > 0) return;
-    const [a, b] = [this.fight.state('p1').hp, this.fight.state('p2').hp];
-    useGameStore.setState({ phase: 'ko', ending: 'time', winner: a === b ? null : a > b ? 'p1' : 'p2', countdown: null });
+    this.endRound('time', null);
   }
 
   /** Engine event -> HP in the store, hit-stop, effects, popups. */
@@ -1695,10 +1753,11 @@ export class Game {
     updatePlayer(defender, { hp });
     const by = this.fight.state(event.attacker);
     const ko = hp <= 0;
+    // The round's over first, so the K.O.'s look knows whether it ends the match (only that one gets the replay).
+    if (ko) this.endRound('ko', event.attacker);
     this.showHit(event, by, ko);
     this.outbox.push({ kind: 'fight', event, by, ko });
     this.tickEvents.push({ kind: 'fight', event, by, ko });
-    if (ko) useGameStore.setState({ phase: 'ko', ending: 'ko', winner: event.attacker, countdown: null });
   }
 
   /** The look of a hit (both laptops): the reaction, sparks, impact frames, camera punch, popup, K.O. drama. */
@@ -1764,8 +1823,9 @@ export class Game {
       if (!replaying) {
         this.renderer.freeze(KO_FREEZE);
         this.renderer.slowMotion(KO_FREEZE + 1.4, 0.3);
-        // Then the replay of how it happened, once the slow-motion fall has played out.
-        this.replayIn = REPLAY_DELAY;
+        // Then the replay of how it happened, once the slow-motion fall has played out: only for the K.O. that ends
+        // the match (the client laptop hears of the phase before the hit). Between rounds the pace stays up.
+        if (useGameStore.getState().phase === 'ko') this.replayIn = REPLAY_DELAY;
       }
       if (config.impactFrames) this.renderer.impact(point, 0.14, '#ffffff');
       this.renderer.punch(point, 0.4, 0.7);
@@ -2023,16 +2083,22 @@ export class Game {
       });
   }
 
-  /** The finish: an instant call, then the LLM's roast (over the replay). */
+  /** A round's over but the match isn't: one instant line (the breather is short; the LLM's for the finish). */
+  private callRound(winner: PlayerId | null) {
+    this.call([winner ? this.momentLine('round', winner) : fill(TEMPLATES.roundDraw, {})], true);
+  }
+
+  /** The match's finish: an instant call, then the LLM's roast (over the replay). */
   private callFinish(winner: PlayerId | null, ending: string | null) {
-    const { players } = useGameStore.getState();
+    const { players, wins } = useGameStore.getState();
     const w = winner ? spoken(players[winner].name) : '';
     const l = winner ? spoken(players[opponentOf(winner)].name) : '';
     if (!winner) this.call([fill(TEMPLATES.draw, {})], true);
     else this.call([this.momentLine(ending === 'time' ? 'time' : 'ko', winner)], true);
+    const series = winner && wins.p1 + wins.p2 > 1 ? ` ${wins[winner]} rounds to ${wins[opponentOf(winner)]}` : '';
     const moment = !winner
-      ? 'Time ran out and it is a draw.'
-      : `${ending === 'time' ? 'Time ran out' : 'K.O.'}: ${w} beat ${l} with ${Math.round(players[winner].hp)} HP left. Call the finish and what won it.`;
+      ? 'Time ran out and the match is a draw.'
+      : `${ending === 'time' ? 'Time ran out' : 'K.O.'}: ${w} beat ${l}${series}, finishing with ${Math.round(players[winner].hp)} HP left. Call the finish and what won it.`;
     void this.commentary.write(moment, this.cast()).then(async (lines) => {
       await Promise.race([this.commentary.prefetch(lines), wait(4000)]);
       if (lines.length) this.call(lines, true);

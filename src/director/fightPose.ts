@@ -210,12 +210,18 @@ export function applyAction(pose: Pose, input: ActionInput, motion: Motion): Pos
   return pose;
 }
 
+/** Startups this short have no wind-up of their own (see strikeCurve). */
+const QUICK_STARTUP = 3;
+
 /** Ext: -1 full wind-up, 0 guard, 1 full extension. Weight: how much the strike overrides the base pose. */
 function strikeCurve(move: StrikeMove, st: Readonly<FighterState>) {
   const L = Math.max(1, st.length ?? 1);
   const p = clamp01(st.frame / L);
   // A heavy spends more of its (longer) startup coiled up: the opponent should see it coming.
   const wind = st.heavy ? Math.min(0.8, STRIKES[move].wind * 1.6) : STRIKES[move].wind;
+  // A punch the reader confirmed is active a tick or two later (FIGHT.readStartup): the player's own arm already showed
+  // the wind-up, so its one startup frame heads straight out instead of coiling back.
+  if (st.phase === 'startup' && (st.length ?? Infinity) <= QUICK_STARTUP) return { ext: smooth(p), weight: 1 };
   if (st.phase === 'startup') {
     const ext = p < wind ? -smooth(p / wind) : -1 + 2 * easeIn((p - wind) / (1 - wind));
     return { ext, weight: smooth(p / 0.15) };

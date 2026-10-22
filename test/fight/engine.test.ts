@@ -241,7 +241,7 @@ describe('combos: fast punches all come out', () => {
   });
 });
 
-describe('head start: the wind-up already on screen counts toward startup', () => {
+describe('read punches land at the confirm; the wind-up already on screen counts for the rest', () => {
   const activeAt = (cmd: Command) => {
     const e = engineAt(0.7);
     for (let i = 0; i < 40; i++) {
@@ -251,14 +251,48 @@ describe('head start: the wind-up already on screen counts toward startup', () =
     return -1;
   };
 
-  test('a cross the reader saw start 100 ms ago lands 6 frames sooner, a jab no sooner than the floor', () => {
-    expect(activeAt(attack('p1', 'cross', { headStart: 6 }))).toBe(activeAt(attack('p1', 'cross')) - 6);
-    expect(activeAt(attack('p1', 'jab', { hand: 'L', headStart: 6 }))).toBe(FIGHT.minStartup - 1);
+  test('a punch the reader confirmed is active FIGHT.readStartup frames on, whatever the move; a heavy still waits', () => {
+    for (const move of ['jab', 'cross', 'hook', 'uppercut'] as const) expect(activeAt(attack('p1', move, { headStart: 1 }))).toBe(FIGHT.readStartup - 1);
+    expect(activeAt(attack('p1', 'cross', { headStart: 1, heavy: true, windup: 1.3 }))).toBe(FIGHT.readStartup - 1 + FIGHT.heavyStartup);
+    // Without a head start (the CPU) it plays its whole startup.
+    expect(activeAt(attack('p1', 'cross'))).toBe(MOVES.cross.startup - 1);
   });
 
-  test('the head start is capped, and junk values are ignored', () => {
+  test('legs keep their startup less the head start, capped, and junk values are ignored', () => {
     expect(activeAt(attack('p1', 'kick', { headStart: 60 }))).toBe(activeAt(attack('p1', 'kick')) - FIGHT.maxHeadStart);
     expect(activeAt(attack('p1', 'cross', { headStart: Number.NaN }))).toBe(activeAt(attack('p1', 'cross')));
+  });
+
+  test('a restyle before a read punch is active keeps its startup; after, it is too late', () => {
+    const restyle: Command = { kind: 'restyle', player: 'p1', t: 0, hand: 'L', move: 'hook' };
+    const jab = attack('p1', 'jab', { hand: 'L', headStart: 1 });
+    expect(activeAt(jab)).toBe(FIGHT.readStartup - 1);
+    const early = run(engineAt(0.6), 40, { 0: [jab, restyle] });
+    expect(early.find((ev) => ev.type === 'hit')?.move).toBe('hook');
+    const late = run(engineAt(0.6), 40, { 0: [jab], [FIGHT.readStartup]: [restyle] });
+    expect(late.find((ev) => ev.type === 'hit')?.move).toBe('jab');
+  });
+});
+
+describe('wind-up tells', () => {
+  test('a tell shows in the state while the fighter is free, and goes once the swing starts', () => {
+    const e = engineAt(0.7);
+    run(e, 1, { 0: [{ kind: 'anticipate', player: 'p1', t: 0, hand: 'R' }] });
+    expect(e.state('p1').tell).toBe(0);
+    run(e, 3);
+    expect(e.state('p1').tell).toBe(3);
+    run(e, 1, { 0: [attack('p1', 'cross', { headStart: 1 })] });
+    expect(e.state('p1').tell).toBeUndefined();
+    const idle = engineAt(0.7);
+    run(idle, FIGHT.tellFrames + 2, { 0: [{ kind: 'anticipate', player: 'p1', t: 0, hand: 'R' }] });
+    expect(idle.state('p1').tell).toBeUndefined();
+  });
+
+  test('a tell never changes the fight', () => {
+    const a = engineAt(0.7), b = engineAt(0.7);
+    const told = run(a, 60, { 0: [{ kind: 'anticipate', player: 'p1', t: 0, hand: 'R' }], 5: [attack('p1', 'cross', { headStart: 1 })] });
+    const plain = run(b, 60, { 5: [attack('p1', 'cross', { headStart: 1 })] });
+    expect(told).toEqual(plain);
   });
 });
 
@@ -465,6 +499,18 @@ describe('the guard wears out', () => {
     const out: FightEvent[] = [];
     for (let i = 0; i < 40; i++) out.push(...fromGuard.step(i === 5 ? [attack('p1', 'cross')] : [], { p1: stance('p1', { guard: i < 8 }), p2: stance('p2') }));
     expect(out.some((ev) => ev.type === 'hit')).toBe(true);
+  });
+
+  test('a read punch that whiffed is called off by a guard raised just after it started; one that landed is not', () => {
+    const far = engineAt(1.5);
+    for (let i = 0; i < 6; i++) far.step(i === 0 ? [attack('p1', 'cross', { headStart: 1 })] : [], { p1: stance('p1', { guard: i >= 6 }), p2: stance('p2') });
+    expect(far.state('p1').phase).toBe('recovery');
+    far.step([], { p1: stance('p1', { guard: true }), p2: stance('p2') });
+    expect(far.state('p1').phase).toBe('idle');
+    const near = engineAt(0.7);
+    const events: FightEvent[] = [];
+    for (let i = 0; i < 40; i++) events.push(...near.step(i === 0 ? [attack('p1', 'cross', { headStart: 1 })] : [], { p1: stance('p1', { guard: i >= 4 }), p2: stance('p2') }));
+    expect(events.some((ev) => ev.type === 'hit')).toBe(true);
   });
 
   test('blocked punches chip the guard; dropping it lets it refill', () => {

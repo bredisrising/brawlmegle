@@ -14,6 +14,7 @@ const READY_HEADLINE: Record<Phase, string> = {
   lobby: "You're in!",
   countdown: 'Get ready!',
   fighting: 'FIGHT!',
+  break: 'Next round!',
   ko: 'K.O.!',
 };
 

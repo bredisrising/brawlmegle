@@ -8,6 +8,7 @@ import { Countdown } from './ui/Countdown';
 import { HitPopups } from './ui/HitPopups';
 import { ScreenFlash } from './ui/ScreenFlash';
 import { KOOverlay } from './ui/KOOverlay';
+import { RoundBreak } from './ui/RoundBreak';
 import { DebugHint } from './ui/DebugHint';
 import { DebugEffects } from './ui/DebugEffects';
 import { TitleScreen } from './ui/screens/TitleScreen';
@@ -60,6 +61,7 @@ export default function App() {
                 <Callout />
                 <ScreenFlash />
                 <Countdown />
+                <RoundBreak />
                 <KOOverlay />
                 <HUD />
                 {role !== 'spectator' && <MoveGuide />}

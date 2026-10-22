@@ -31,6 +31,12 @@ tells the other when its tab is hidden or visible (`presence`; the client also o
 a round when both tabs are visible: a hidden tab's game loop doesn't run, so a countdown there would leave the other
 player on the walkout's VS. Matched while hidden: the tab's title says "⚔ Opponent found!"; a stranger waits 8 s.
 
+Every fight but Training is best of three (game/rounds.ts): 40 s rounds, first to two round wins, an even round (time
+with equal HP) a win for both. Between rounds (phase `break`, ui/RoundBreak.tsx, 7 s): the round's K.O. / TIME slam with
+who took it, then a breather (the score, a rest line), then ROUND 2 / FINAL ROUND and FIGHT, fighters reset; no walkout
+and no replay. The HUD has round pips under the health bars and the round under the clock. The host sends `round` and
+`wins` with every `phase` message (optional: an older host plays one round). Everything below hangs off the match's end.
+
 After a K.O. a rematch needs both players' votes (the host counts them; a CPU votes yes at once). Matchmade fights
 show "Next opponent in 4…" once the replay has played; without both votes, both go find someone new.
 
@@ -99,7 +105,7 @@ Mirror: the host sends the client `match` (who's fighting as what), a `frame` of
 (lossy channel) and `events` (hits, wind-ups, moves read). Game.mirrorTick draws it; the client runs no fight.
 
 Screens: title (Host / Connect) -> pick fighter -> lobby (host) or waiting (client)
-Game phases: lobby -> countdown -> fighting -> ko -> rematch
+Game phases: lobby -> countdown -> fighting -> break -> countdown -> fighting ... -> ko (the match is decided) -> rematch
 
 
 ## Picking a fighter
