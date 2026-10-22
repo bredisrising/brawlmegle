@@ -37,6 +37,7 @@ import { HostSession } from './HostSession';
 import { MatchRecorder, recordingEnabled } from './MatchRecorder';
 import { readPoses } from './readPoses';
 import { HighlightRecorder } from './HighlightRecorder';
+import { pickBot } from './bots';
 import { Commentary, TEMPLATES, fill, spoken, type Line } from './Commentary';
 import { NO_VOTES, localPlayerId, pushPopup, updatePlayer, useGameStore, type DrillView } from './store';
 
@@ -72,8 +73,8 @@ const NEXT_MS = 4000;
 /** ...measured from here when there's no replay to wait for (a time-out), or the replay never came. */
 const NEXT_AFTER_TIME_MS = 2000;
 const NEXT_REPLAY_BACKSTOP_MS = 12_000;
-/** "Find a fight" with nobody else looking: after this long, a labeled CPU (easy) fights them instead. */
-const BOT_AFTER_MS = 10_000;
+/** "Find a fight" with nobody else looking: after this long, a bot (labeled, easy) fights them instead. */
+const BOT_AFTER_MS = 5_000;
 /** A tab hidden this long mid-match (switched away, minimized) has left it: the match is called off for both. */
 const AWAY_MS = 2000;
 /**
@@ -245,8 +246,10 @@ export class Game {
   private lastWatch = 0;
   private benchNote = 'You left the match';
   private giveUp = 0;
-  /** Matchmaking: the CPU stepping in if nobody turns up (botFill). */
+  /** Matchmaking: the bot stepping in if nobody turns up (botFill), which one it'll be, and the last one fought. */
   private botTimer = 0;
+  private nextBot: ForgedFighter | null = null;
+  private lastBot: string | null = null;
   private titleBefore: string | null = null;
   /** Room code client: it called the round off because the host went quiet; it says "back" once the host is heard. */
   private hostWentQuiet = false;
@@ -429,23 +432,28 @@ export class Game {
     const session = this.openHost(q.player);
     await session.open();
     if (gen !== q.gen) return;
-    // Nobody else looking yet: don't leave them staring at a radar. A labeled CPU steps in after a while.
+    // Nobody else looking yet: don't leave them staring at a radar. A bot steps in after a moment (its model loads now).
     clearTimeout(this.botTimer);
+    this.nextBot = pickBot(this.lastBot);
+    preloadModel(this.nextBot.glbUrl)?.catch(() => {});
     useGameStore.setState({ botAt: performance.now() + BOT_AFTER_MS });
     this.botTimer = window.setTimeout(() => this.botFill(gen), BOT_AFTER_MS);
   }
 
   /**
-   * Matchmaking: nobody turned up. A labeled CPU fights them meanwhile, and the room stays open: whoever looks next is
-   * sent here and takes the CPU's place (challengerArrives). The K.O. screen's "Next opponent" looks afresh.
+   * Matchmaking: nobody turned up. A bot (one of three made-up characters, labeled) fights them meanwhile, and the room
+   * stays open: whoever looks next is sent here and takes the bot's place (challengerArrives). The K.O. screen's "Next
+   * opponent" looks afresh.
    */
   private botFill(gen: number) {
     const { connection, players, phase } = useGameStore.getState();
     if (!this.quick || gen !== this.quick.gen || this.client || this.benched || connection === 'open') return;
     if (phase !== 'lobby' || players.p1.status !== 'ready' || players.p2.status !== 'waiting') return;
+    const bot = this.nextBot ?? pickBot(this.lastBot);
+    this.lastBot = bot.id;
     useGameStore.setState({ searching: false, botAt: null });
-    this.notify("Nobody's online yet: warm up against the CPU till someone shows up");
-    void this.addCpuPlayer('p2', 'easy');
+    this.notify("Nobody's online yet: fight a bot till someone shows up");
+    void this.addCpuPlayer('p2', 'easy', bot);
   }
 
   /** Matchmaking: a person joined while this player fought the stand-in CPU. Arcade rules: the challenger takes over. */
@@ -984,16 +992,20 @@ export class Game {
 
   /**
    * Fill a slot with a CPU opponent. It borrows a forged fighter from the server (not the one it's fighting), or
-   * the house model without one. A client joining from another laptop takes the slot back (setupPlayer).
+   * the house model without one; `bot`: a matchmaking bot instead, in its own fighter. A client joining from another
+   * laptop takes the slot back (setupPlayer).
    */
-  async addCpuPlayer(id: PlayerId, level: CpuLevel | 'dummy' = 'normal') {
-    updatePlayer(id, { name: 'CPU', status: 'forging', statusDetail: 'Picking a fighter' });
-    const opponent = useGameStore.getState().players[opponentOf(id)].name;
-    this.prepareCpu(opponent);
-    const pick = await this.cpuPick!.fighter;
-    // The next CPU gets a fresh list and pick.
-    this.cpuRoster = null;
-    this.cpuPick = null;
+  async addCpuPlayer(id: PlayerId, level: CpuLevel | 'dummy' = 'normal', bot?: ForgedFighter) {
+    updatePlayer(id, { name: bot ? 'Bot' : 'CPU', status: 'forging', statusDetail: 'Picking a fighter' });
+    let pick = bot;
+    if (!pick) {
+      const opponent = useGameStore.getState().players[opponentOf(id)].name;
+      this.prepareCpu(opponent);
+      pick = await this.cpuPick!.fighter;
+      // The next CPU gets a fresh list and pick.
+      this.cpuRoster = null;
+      this.cpuPick = null;
+    }
     const fighter: ForgedFighter = pick ?? { id: 'cpu', name: 'Sparring Bot', status: 'ready', glbUrl: `${import.meta.env.BASE_URL}models/default.glb` };
     this.input.unassign(id);
     this.cpu[id] = level === 'dummy' ? new Dummy(id) : new Cpu(id, level, Math.floor(Math.random() * 1e6));
@@ -1004,7 +1016,7 @@ export class Game {
       await this.views[id].setFighter({ id: 'cpu', name: 'Sparring Bot', status: 'ready' });
     }
     this.spawn(id);
-    const label = level === 'normal' ? 'CPU' : `CPU ${level}`;
+    const label = bot ? 'BOT' : level === 'normal' ? 'CPU' : `CPU ${level}`;
     const shown = level === 'dummy' ? 'Training dummy' : `${fighter.name} (${label})`;
     updatePlayer(id, { name: shown, status: 'ready', statusDetail: '', portraitUrl: fighter.cardUrl ?? null });
     this.fighters[id] = fighter;
