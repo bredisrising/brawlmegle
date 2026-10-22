@@ -330,11 +330,15 @@ function joinHosted(client, code, player) {
   send(client, { type: "joined", code: hostClient.hostCode, iceServers: iceServers(client.id) });
 }
 
-/** "Find a fight": pair with a waiting quick host, or wait as one. */
-function quick(client, player) {
+/**
+ * "Find a fight": pair with a waiting quick host, or wait as one. `pool`: a separate queue ('' is everyone; the test
+ * build at /next/ uses its own, so a player trying new rules never lands with someone on the live game).
+ */
+function quick(client, player, pool = "") {
   reset(client);
   unlistQuick(client);
   client.player = player;
+  client.pool = pool;
   const partner = quickPartner(client);
   if (partner) return matchQuick(partner, client);
   // Nobody new is waiting: wait as a host (an ordinary room; the game never shows its code). The sweep pairs this
@@ -355,7 +359,7 @@ function quickFree(c, now = Date.now()) {
 /** The oldest waiting quick host for `client` that it didn't just fight. */
 function quickPartner(client) {
   for (const w of quickWaiting) {
-    if (w === client || w.player === client.player || !quickFree(w)) continue;
+    if (w === client || w.player === client.player || w.pool !== client.pool || !quickFree(w)) continue;
     if (!rematched(w, client)) return w;
   }
   return null;
@@ -395,7 +399,7 @@ function sweepQuick() {
     if (!quickWaiting.has(b) || !quickFree(b, now)) continue;
     const a = free
       .slice(0, j)
-      .find((w) => quickWaiting.has(w) && quickFree(w, now) && w.player !== b.player && (!rematched(w, b) || now - b.quickSince >= QUICK_REPAIR_MS));
+      .find((w) => quickWaiting.has(w) && quickFree(w, now) && w.player !== b.player && w.pool === b.pool && (!rematched(w, b) || now - b.quickSince >= QUICK_REPAIR_MS));
     if (a) matchQuick(a, b);
   }
 }
@@ -443,8 +447,9 @@ function onMessage(client, raw) {
       else sendError(client, "bad room");
       break;
     case "quick":
-      if (typeof msg.player === "string" && PLAYER_RE.test(msg.player)) quick(client, msg.player);
-      else sendError(client, "bad player");
+      if (typeof msg.player !== "string" || !PLAYER_RE.test(msg.player)) sendError(client, "bad player");
+      else if (msg.pool !== undefined && (typeof msg.pool !== "string" || !/^[a-z0-9-]{0,16}$/.test(msg.pool))) sendError(client, "bad pool");
+      else quick(client, msg.player, msg.pool ?? "");
       break;
     case "signal":
       if (client.peer) send(client.peer, { type: "signal", data: msg.data });

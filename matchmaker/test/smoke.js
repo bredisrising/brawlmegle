@@ -224,6 +224,20 @@ async function quickTests() {
   assert.equal((await qb.next("quick-join")).code, roomA);
   console.log("ok  quick: the second player is sent to the waiting one");
 
+  // Separate queues never meet: a /next/ test player waits on their own, and the next one in that queue joins them.
+  const n1 = await client();
+  n1.send({ type: "quick", player: id(), pool: "next" });
+  const roomN = (await n1.next("room")).code;
+  const d1 = await client();
+  d1.send({ type: "quick", player: id() });
+  assert.notEqual((await d1.next("room")).code, roomN, "a live player isn't sent to a /next/ one");
+  const n2 = await client();
+  n2.send({ type: "quick", player: id(), pool: "next" });
+  assert.equal((await n2.next("quick-join")).code, roomN);
+  for (const c of [n1, d1, n2]) c.close();
+  await new Promise((r) => setTimeout(r, 200));
+  console.log("ok  quick: a separate queue pairs only within itself");
+
   // While B is on its way, A's room is held for B: a third quick player waits instead of taking it, and a join
   // by code from anyone else is refused.
   const qc = await client();
