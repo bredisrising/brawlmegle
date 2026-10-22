@@ -22,7 +22,7 @@ import { captureScan, forgeBusy, forgeFighter, type ForgeOwner, type ScanFrames 
 import { forgePreview, forgeStatus, onChange, samePreview, scanStatus } from '../forge/status';
 import { fetchServerFighters, maskedFighter, saveFighter, saveOwner } from '../forge/roster';
 import { preloadModel } from '../forge/models';
-import { recordMatch, type RatingChange } from '../forge/leaderboard';
+import { fighterRecord, isRanked, ratingOf, recordMatch, type RatingChange } from '../forge/leaderboard';
 import { config } from '../config';
 import {
   PLAYER_IDS, opponentOf,
@@ -37,7 +37,7 @@ import { HostSession } from './HostSession';
 import { MatchRecorder, recordingEnabled } from './MatchRecorder';
 import { readPoses } from './readPoses';
 import { HighlightRecorder } from './HighlightRecorder';
-import { pickBot } from './bots';
+import { pickBot, type Bot } from './bots';
 import { Commentary, TEMPLATES, fill, spoken, type Line } from './Commentary';
 import { NO_VOTES, localPlayerId, pushPopup, updatePlayer, useGameStore, type DrillView } from './store';
 
@@ -255,7 +255,7 @@ export class Game {
   private giveUp = 0;
   /** Matchmaking: the bot stepping in if nobody turns up (botFill), which one it'll be, and the last one fought. */
   private botTimer = 0;
-  private nextBot: ForgedFighter | null = null;
+  private nextBot: Bot | null = null;
   private lastBot: string | null = null;
   private titleBefore: string | null = null;
   /** Room code client: it called the round off because the host went quiet; it says "back" once the host is heard. */
@@ -443,8 +443,8 @@ export class Game {
     if (gen !== q.gen) return;
     // Nobody else looking yet: don't leave them staring at a radar. A bot steps in after a moment (its model loads now).
     clearTimeout(this.botTimer);
-    this.nextBot = pickBot(this.lastBot);
-    preloadModel(this.nextBot.glbUrl)?.catch(() => {});
+    this.nextBot = pickBot(this.myRating(), this.lastBot);
+    preloadModel(this.nextBot.fighter.glbUrl)?.catch(() => {});
     useGameStore.setState({ botAt: performance.now() + BOT_AFTER_MS });
     this.botTimer = window.setTimeout(() => this.botFill(gen), BOT_AFTER_MS);
   }
@@ -458,11 +458,18 @@ export class Game {
     const { connection, players, phase } = useGameStore.getState();
     if (!this.quick || gen !== this.quick.gen || this.client || this.benched || connection === 'open') return;
     if (phase !== 'lobby' || players.p1.status !== 'ready' || players.p2.status !== 'waiting') return;
-    const bot = this.nextBot ?? pickBot(this.lastBot);
-    this.lastBot = bot.id;
+    const bot = this.nextBot ?? pickBot(this.myRating(), this.lastBot);
+    this.lastBot = bot.fighter.id;
     useGameStore.setState({ searching: false, botAt: null });
     this.notify("Nobody's online yet: fight a bot till someone shows up");
-    void this.addCpuPlayer('p2', 'easy', bot);
+    void this.addCpuPlayer('p2', bot.level, bot);
+  }
+
+  /** This laptop's player's rating, once they're placed (null before: they meet the gentler bots). */
+  private myRating() {
+    const fighter = this.fighters.p1;
+    const record = fighter && fighterRecord(fighter.id);
+    return record && isRanked(record) ? ratingOf(record) : null;
   }
 
   /** Matchmaking: a person joined while this player fought the stand-in CPU. Arcade rules: the challenger takes over. */
@@ -1004,9 +1011,9 @@ export class Game {
    * the house model without one; `bot`: a matchmaking bot instead, in its own fighter. A client joining from another
    * laptop takes the slot back (setupPlayer).
    */
-  async addCpuPlayer(id: PlayerId, level: CpuLevel | 'dummy' = 'normal', bot?: ForgedFighter) {
+  async addCpuPlayer(id: PlayerId, level: CpuLevel | 'dummy' = 'normal', bot?: Bot) {
     updatePlayer(id, { name: bot ? 'Bot' : 'CPU', status: 'forging', statusDetail: 'Picking a fighter' });
-    let pick = bot;
+    let pick = bot?.fighter;
     if (!pick) {
       const opponent = useGameStore.getState().players[opponentOf(id)].name;
       this.prepareCpu(opponent);
@@ -1025,7 +1032,7 @@ export class Game {
       await this.views[id].setFighter({ id: 'cpu', name: 'Sparring Bot', status: 'ready' });
     }
     this.spawn(id);
-    const label = bot ? 'BOT' : level === 'normal' ? 'CPU' : `CPU ${level}`;
+    const label = bot ? `BOT ${bot.rating.toLocaleString('en-US')}` : level === 'normal' ? 'CPU' : `CPU ${level}`;
     const shown = level === 'dummy' ? 'Training dummy' : `${fighter.name} (${label})`;
     updatePlayer(id, { name: shown, status: 'ready', statusDetail: '', portraitUrl: fighter.cardUrl ?? null });
     this.fighters[id] = fighter;
