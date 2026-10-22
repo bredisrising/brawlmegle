@@ -1320,7 +1320,9 @@ export class Game {
   /** Host, matchmade fight on the K.O. screen: start the "next opponent" countdown, and go when it runs out. */
   private checkNext() {
     const { phase, quick } = useGameStore.getState();
-    if (!quick || !this.quick || this.mirroring || phase !== 'ko' || !this.hostSession?.connected || this.cpu.p2) return;
+    // A person here, or a bot standing in for one: either way the player moves on by themselves (or rematches).
+    const matched = this.hostSession?.connected || !!this.cpu.p2;
+    if (!quick || !this.quick || this.mirroring || phase !== 'ko' || !matched) return;
     const now = performance.now();
     if (this.nextAt === null) {
       const shown = this.replayEndedAt ?? this.koAt + NEXT_REPLAY_BACKSTOP_MS;
