@@ -260,7 +260,7 @@ function NameStep({ player }: { player: PlayerId }) {
             {checking ? 'Checking memory card…' : 'Memory card'}
           </span>
           <p className="mt-4 font-display text-3xl uppercase leading-[0.95] tracking-tight">Save fighter to memory card?</p>
-          <p className="mt-3 text-paper/65">Your photos go to our AI services to build your fighter and are deleted after the event.</p>
+          <p className="mt-3 text-paper/65">Your photos go to OpenAI to design your fighter, then stay private on our server. Other players see your fighter, never the photos. The delete code we show you erases both.</p>
         </div>
         <div className="flex flex-wrap items-center gap-x-8 gap-y-4">
           <ArcadeButton type="submit" disabled={!trimmed || checking}>
