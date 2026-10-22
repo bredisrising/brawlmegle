@@ -20,6 +20,11 @@ export const config = {
   input: (params.get('input') ?? import.meta.env.VITE_INPUT ?? (import.meta.env.DEV ? 'mock' : 'camera')) as InputKind,
   /** AWS signaling server (WebSocket) that brokers the P2P handshake. */
   signalUrl: (import.meta.env.VITE_SIGNAL_URL as string | undefined) ?? `wss://${SERVER}/ws`,
+  /**
+   * "Find a fight" queue: '' is the live game's; a build served from a subfolder (the /next/ test build) gets its own,
+   * so someone trying new rules is never matched with a player on the live game.
+   */
+  matchPool: import.meta.env.BASE_URL.replace(/\//g, ''),
   /** STUN + optional TURN (coturn on the signaling box) for venue Wi-Fi that blocks direct P2P. */
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },

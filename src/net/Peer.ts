@@ -88,7 +88,7 @@ export class Peer {
   async host(opts: { quick?: string } = {}): Promise<string> {
     // "Find a fight": the server may answer with someone to join instead of a room (onQuickJoin; this resolves '').
     if (opts.quick) {
-      this.hostRequest = { type: 'quick', player: opts.quick };
+      this.hostRequest = { type: 'quick', player: opts.quick, ...(config.matchPool ? { pool: config.matchPool } : {}) };
       this.relayOnly = true;
     }
     this.signaling.onMessage((msg) => this.queueSignal(msg));
