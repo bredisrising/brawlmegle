@@ -1,0 +1,38 @@
+# The game site follows main: every push is tested and built here, and a green build is published to the `site`
+# branch, which the server puts live within a minute (matchmaker/deploy/site-sync.sh). A red build never ships.
+# The forge and matchmaker servers still deploy by hand.
+name: site
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer push replaces a build still running: only the latest main goes live.
+concurrency:
+  group: site
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx vitest run
+      - run: npm run build
+      - name: Publish the build to the site branch
+        run: |
+          cd dist
+          git init -q -b site
+          git add -A
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "site build ${GITHUB_SHA::7}"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" site
