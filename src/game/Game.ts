@@ -261,7 +261,7 @@ export class Game {
   private lastWatch = 0;
   private benchNote = 'You left the match';
   private giveUp = 0;
-  /** Who's playing someone else's fighter (a guest): their rounds count for nobody, and make no highlights. */
+  /** Who's playing someone else's fighter (a guest): their rounds count for nobody (their K.O.s still make highlights). */
   private guest: Record<PlayerId, boolean> = { p1: false, p2: false };
   /** Matchmaking: the bot stepping in if nobody turns up (botFill), which one it'll be, and the last one fought. */
   private botTimer = 0;
@@ -1906,12 +1906,12 @@ export class Game {
 
   /**
    * The host of a fight between two people (not against the CPU, not the client laptop): record the replay for the
-   * title screen's reel.
+   * title screen's reel. Guests count: the reel is the newest people-vs-people K.O.s, under the fighters' names.
    */
   private startHighlight(finish: FightEvent) {
     const { training, players } = useGameStore.getState();
-    if (this.mirroring || training || this.cpu.p1 || this.cpu.p2 || this.guest.p1 || this.guest.p2 || !HighlightRecorder.supported()) return;
-    const side = (id: PlayerId) => ({ id: this.fighters[id]?.id, name: players[id].name.replace(/\s*\(CPU[^)]*\)$/, ''), cpu: !!this.cpu[id] });
+    if (this.mirroring || training || this.cpu.p1 || this.cpu.p2 || !HighlightRecorder.supported()) return;
+    const side = (id: PlayerId) => ({ id: this.fighters[id]?.id, name: players[id].name.replace(/\s*\((?:CPU[^)]*|guest)\)$/, ''), cpu: !!this.cpu[id] });
     const winner = finish.attacker;
     this.highlight.start(this.renderer.renderer.domElement, {
       p1: side('p1'), p2: side('p2'), winner, move: finish.move,
