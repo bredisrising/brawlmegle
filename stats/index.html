@@ -1,0 +1,970 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Brawlmegle Stats</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Archivo:wdth,wght@62..125,400..800&display=swap" rel="stylesheet" />
+    <!--
+      The owners' stats page (https://brawlmegle.com/stats/): what players do in the game (src/analytics.ts) and what
+      the servers know, from the forge's GET /api/stats (forge/stats.js). It needs the stats key (FORGE_STATS_KEY on the
+      server): open it once as /stats/#key=..., and this browser keeps it. Opening it also marks this browser as ours, so
+      our own play doesn't count (the switch at the bottom undoes that). No names or IP addresses are collected.
+    -->
+    <style>
+      :root {
+        color-scheme: dark;
+        --page: #0b0b0d;
+        --surface: #16161a;
+        --surface-2: #1d1d22;
+        --grid: #2a2a30;
+        --axis: #3a3a42;
+        --ink: #f3f0e8;
+        --ink-2: #c3c2b7;
+        --muted: #8d8b85;
+        --accent: #ff2d95;
+        --yellow: #ffd400;
+        /* Chart series (validated together on --surface: dataviz palette, dark steps). */
+        --s1: #3987e5;
+        --s2: #d95926;
+        --s3: #199e70;
+        --good: #0ca30c;
+        --critical: #e66767;
+        --font: "Archivo", system-ui, -apple-system, "Segoe UI", sans-serif;
+        --display: "Archivo Black", "Arial Black", system-ui, sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--page);
+        color: var(--ink);
+        font: 14px/1.45 var(--font);
+      }
+      main {
+        max-width: 1240px;
+        margin: 0 auto;
+        padding: 20px 16px 48px;
+      }
+      header {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px 20px;
+        margin-bottom: 18px;
+      }
+      h1 {
+        margin: 0;
+        font: 26px/1 var(--display);
+        letter-spacing: -0.01em;
+        text-transform: uppercase;
+      }
+      h1 span {
+        color: var(--accent);
+      }
+      .live {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 10px;
+        border: 1px solid var(--axis);
+        color: var(--ink-2);
+        font-weight: 600;
+      }
+      .live i {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--muted);
+      }
+      .live.on i {
+        background: var(--good);
+        box-shadow: 0 0 0 3px rgba(12, 163, 12, 0.25);
+      }
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px 16px;
+        margin-left: auto;
+      }
+      .seg {
+        display: inline-flex;
+        border: 1px solid var(--axis);
+      }
+      .seg button {
+        all: unset;
+        cursor: pointer;
+        padding: 6px 12px;
+        color: var(--ink-2);
+        font-weight: 600;
+      }
+      .seg button[aria-pressed="true"] {
+        background: var(--ink);
+        color: var(--page);
+      }
+      .seg button:focus-visible,
+      button:focus-visible,
+      input:focus-visible,
+      summary:focus-visible {
+        outline: 2px solid var(--yellow);
+        outline-offset: 2px;
+      }
+      label.check {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--ink-2);
+        cursor: pointer;
+      }
+      .updated {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 14px;
+      }
+      @media (min-width: 760px) {
+        .grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+      .kpis {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
+        gap: 14px;
+        margin-bottom: 14px;
+      }
+      .card {
+        background: var(--surface);
+        border: 1px solid rgba(255, 255, 255, 0.07);
+        padding: 16px;
+        min-width: 0;
+      }
+      .card.wide {
+        grid-column: 1 / -1;
+      }
+      .card h2 {
+        margin: 0 0 2px;
+        font-size: 15px;
+        font-weight: 700;
+      }
+      .card .sub {
+        margin: 0 0 12px;
+        color: var(--muted);
+        font-size: 12.5px;
+      }
+      .tile .label {
+        color: var(--ink-2);
+        font-weight: 600;
+      }
+      .tile .value {
+        margin-top: 4px;
+        font: 600 32px/1.1 var(--font);
+      }
+      .tile .note {
+        color: var(--muted);
+        font-size: 12.5px;
+      }
+      .tile svg {
+        display: block;
+        margin-top: 8px;
+      }
+      .facts {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+        gap: 12px;
+        margin-top: 4px;
+      }
+      .fact .v {
+        font-size: 22px;
+        font-weight: 600;
+      }
+      .fact .k {
+        color: var(--muted);
+        font-size: 12.5px;
+      }
+      .bars {
+        display: grid;
+        gap: 6px;
+      }
+      .bar {
+        display: grid;
+        grid-template-columns: minmax(90px, 38%) 1fr auto;
+        align-items: center;
+        gap: 10px;
+      }
+      .bar .name {
+        overflow: hidden;
+        color: var(--ink-2);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .bar .track {
+        height: 14px;
+      }
+      .bar .fill {
+        height: 100%;
+        min-width: 2px;
+        border-radius: 0 4px 4px 0;
+        background: var(--s1);
+      }
+      .bar .num {
+        min-width: 70px;
+        color: var(--ink);
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+      }
+      .bar .num small {
+        color: var(--muted);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-variant-numeric: tabular-nums;
+      }
+      th,
+      td {
+        padding: 6px 8px;
+        border-bottom: 1px solid var(--grid);
+        text-align: right;
+        white-space: nowrap;
+      }
+      th:first-child,
+      td:first-child {
+        text-align: left;
+      }
+      th {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 600;
+      }
+      td.text {
+        white-space: normal;
+        text-align: left;
+        word-break: break-word;
+      }
+      .scroll {
+        overflow-x: auto;
+      }
+      .chart {
+        position: relative;
+      }
+      .chart svg {
+        display: block;
+        width: 100%;
+        overflow: visible;
+      }
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 14px;
+        margin: 0 0 8px;
+        color: var(--ink-2);
+        font-size: 12.5px;
+      }
+      .legend span::before {
+        content: "";
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        margin-right: 6px;
+        border-radius: 2px;
+        background: var(--c);
+        vertical-align: -1px;
+      }
+      .tip {
+        position: absolute;
+        z-index: 5;
+        min-width: 130px;
+        padding: 8px 10px;
+        border: 1px solid var(--axis);
+        background: #0f0f12;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+        font-size: 12.5px;
+        pointer-events: none;
+      }
+      .tip .when {
+        margin-bottom: 4px;
+        color: var(--muted);
+      }
+      .tip .row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .tip .row b {
+        min-width: 28px;
+        font-variant-numeric: tabular-nums;
+      }
+      .tip .row i {
+        width: 12px;
+        height: 2px;
+        background: var(--c);
+      }
+      .tip .row span {
+        color: var(--ink-2);
+      }
+      .empty {
+        color: var(--muted);
+      }
+      details {
+        margin-top: 10px;
+      }
+      summary {
+        cursor: pointer;
+        color: var(--ink-2);
+      }
+      .gate {
+        max-width: 420px;
+        margin: 12vh auto 0;
+      }
+      .gate form {
+        display: flex;
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .gate input[type="password"] {
+        flex: 1;
+        min-width: 0;
+        padding: 9px 10px;
+        border: 1px solid var(--axis);
+        background: var(--surface-2);
+        color: var(--ink);
+        font: inherit;
+      }
+      .btn {
+        padding: 9px 14px;
+        border: 0;
+        background: var(--ink);
+        color: var(--page);
+        font: 700 14px var(--font);
+        cursor: pointer;
+      }
+      .error {
+        color: var(--critical);
+      }
+      footer {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 24px;
+        margin-top: 22px;
+        color: var(--muted);
+        font-size: 12.5px;
+      }
+      footer a {
+        color: var(--ink-2);
+      }
+      .loading {
+        opacity: 0.55;
+        transition: opacity 0.2s;
+      }
+      @media (max-width: 560px) {
+        h1 {
+          font-size: 21px;
+        }
+        .controls {
+          margin-left: 0;
+        }
+        .tile .value {
+          font-size: 26px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main id="app"></main>
+    <script>
+      "use strict";
+      const KEY = "brawlmegle.statsKey";
+      const OWNER = "brawlmegle.owner";
+      const PREFS = "brawlmegle.statsPrefs";
+      const RANGES = [
+        [1, "Today"],
+        [7, "7 days"],
+        [30, "30 days"],
+        [90, "90 days"],
+      ];
+      const OPP = { stranger: "Strangers", friend: "Friends' rooms", bot: "Bots", cpu: "VS CPU", training: "Training" };
+      const BOTS = { tony: "Tin Can Tony (easy)", gary: "Gym Rat Gary (normal)", nana: "Nana Knuckles (hard)" };
+      const app = document.getElementById("app");
+      const store = {
+        get(k) {
+          try {
+            return localStorage.getItem(k);
+          } catch {
+            return null;
+          }
+        },
+        set(k, v) {
+          try {
+            v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v);
+          } catch {}
+        },
+      };
+      let prefs = { days: 7, owners: false };
+      try {
+        prefs = { ...prefs, ...JSON.parse(store.get(PREFS) || "{}") };
+      } catch {}
+      let report = null;
+      let failure = "";
+      let timer = 0;
+
+      // The key arrives once in the link (#key=...): keep it, mark this browser as ours, and take it out of the address bar.
+      const fromLink = new URLSearchParams(location.hash.slice(1)).get("key");
+      if (fromLink) {
+        store.set(KEY, fromLink);
+        store.set(OWNER, "1");
+        history.replaceState(null, "", location.pathname);
+      }
+
+      /** Builds an element. Children are nodes or text (always as text, never HTML: names and errors come from players). */
+      function h(tag, attrs, ...kids) {
+        const el = document.createElement(tag);
+        for (const [k, v] of Object.entries(attrs || {})) {
+          if (v === null || v === undefined || v === false) continue;
+          if (k === "class") el.className = v;
+          else if (k === "style") el.style.cssText = v;
+          else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+          else el.setAttribute(k, v === true ? "" : v);
+        }
+        for (const kid of kids.flat()) if (kid !== null && kid !== undefined && kid !== false) el.append(kid instanceof Node ? kid : String(kid));
+        return el;
+      }
+      const SVG = "http://www.w3.org/2000/svg";
+      function s(tag, attrs, ...kids) {
+        const el = document.createElementNS(SVG, tag);
+        for (const [k, v] of Object.entries(attrs || {})) if (v !== null && v !== undefined) el.setAttribute(k, v);
+        for (const kid of kids.flat()) if (kid) el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+        return el;
+      }
+
+      const fmt = (n) => (n === null || n === undefined ? "–" : n >= 10000 ? `${(n / 1000).toFixed(n >= 100000 ? 0 : 1)}K` : Math.round(n).toLocaleString("en-US"));
+      const pct = (a, b) => (b ? `${Math.round((100 * a) / b)}%` : "–");
+      function dur(secs) {
+        if (secs === null || secs === undefined) return "–";
+        if (secs < 60) return `${Math.round(secs)}s`;
+        const m = Math.floor(secs / 60);
+        if (m < 60) return `${m}m ${String(Math.round(secs % 60)).padStart(2, "0")}s`;
+        return `${Math.floor(m / 60)}h ${m % 60}m`;
+      }
+      const dayLabel = (d) => new Date(`${d}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+      const timeLabel = (ms) => new Date(ms).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+      function niceMax(v) {
+        if (v <= 4) return 4;
+        const p = 10 ** Math.floor(Math.log10(v));
+        for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p;
+        return 10 * p;
+      }
+
+      // ---------------------------------------------------------------- charts
+
+      /** The one tooltip for a chart: rows of [value, label, color]. */
+      function tooltip(box) {
+        const tip = h("div", { class: "tip", hidden: true, role: "status" });
+        box.append(tip);
+        return {
+          show(x, y, when, rows) {
+            tip.replaceChildren(h("div", { class: "when" }, when), ...rows.map(([v, label, c]) => h("div", { class: "row" }, c ? h("i", { style: `--c:${c}` }) : null, h("b", {}, v), h("span", {}, label))));
+            tip.hidden = false;
+            const w = tip.offsetWidth;
+            const left = Math.min(Math.max(x - w / 2, 0), box.clientWidth - w);
+            tip.style.left = `${left}px`;
+            tip.style.top = `${Math.max(y - tip.offsetHeight - 10, -tip.offsetHeight)}px`;
+          },
+          hide() {
+            tip.hidden = true;
+          },
+        };
+      }
+
+      /** Columns per day, stacked by series ({ name, color, values }). The column is the hit target. */
+      function columns(days, series, height = 190) {
+        const box = h("div", { class: "chart" });
+        if (series.length > 1) box.append(h("div", { class: "legend" }, series.map((se) => h("span", { style: `--c:${se.color}` }, se.name))));
+        const width = Math.max(280, chartWidth);
+        const pad = { l: 34, r: 6, t: 10, b: 22 };
+        const totals = days.map((_, i) => series.reduce((sum, se) => sum + (se.values[i] || 0), 0));
+        const max = niceMax(Math.max(...totals, 1));
+        const y = (v) => pad.t + (height - pad.t - pad.b) * (1 - v / max);
+        const band = (width - pad.l - pad.r) / days.length;
+        const bw = Math.max(3, Math.min(24, band * 0.7));
+        const svg = s("svg", { viewBox: `0 0 ${width} ${height}`, height, role: "img", "aria-label": series.map((se) => se.name).join(", ") + " per day" });
+        for (const t of [0, max / 2, max]) {
+          svg.append(s("line", { x1: pad.l, x2: width - pad.r, y1: y(t), y2: y(t), stroke: t ? "var(--grid)" : "var(--axis)", "stroke-width": 1 }));
+          svg.append(s("text", { x: pad.l - 6, y: y(t) + 4, "text-anchor": "end", fill: "var(--muted)", "font-size": 11 }, fmt(t)));
+        }
+        const every = Math.ceil(days.length / Math.max(2, Math.floor((width - pad.l) / 64)));
+        const tip = tooltip(box);
+        days.forEach((d, i) => {
+          const cx = pad.l + band * i + band / 2;
+          let base = 0;
+          const drawn = series.map((se) => ({ se, v: se.values[i] || 0 })).filter((x) => x.v > 0);
+          drawn.forEach(({ se, v }, j) => {
+            const top = y(base + v);
+            const bottom = y(base) - (j > 0 ? 2 : 0); // the 2px surface gap between stacked segments
+            const hgt = Math.max(0, bottom - top);
+            const last = j === drawn.length - 1;
+            const r = last ? Math.min(4, hgt, bw / 2) : 0;
+            const x0 = cx - bw / 2;
+            const x1 = cx + bw / 2;
+            svg.append(s("path", { d: `M${x0},${bottom}V${top + r}Q${x0},${top} ${x0 + r},${top}H${x1 - r}Q${x1},${top} ${x1},${top + r}V${bottom}Z`, fill: se.color }));
+            base += v;
+          });
+          if (i % every === 0 || i === days.length - 1) svg.append(s("text", { x: cx, y: height - 6, "text-anchor": "middle", fill: "var(--muted)", "font-size": 11 }, dayLabel(d)));
+          const hit = s("rect", { x: cx - band / 2, y: pad.t, width: band, height: height - pad.t - pad.b, fill: "transparent", tabindex: 0 });
+          const show = () => {
+            const rows = series.map((se) => [fmt(se.values[i] || 0), se.name, se.color]);
+            if (series.length > 1) rows.push([fmt(totals[i]), "total", null]);
+            const r = svg.getBoundingClientRect();
+            const b = box.getBoundingClientRect();
+            tip.show((cx / width) * r.width + r.left - b.left, (y(totals[i]) / height) * r.height + r.top - b.top, dayLabel(d), rows);
+          };
+          hit.addEventListener("pointerenter", show);
+          hit.addEventListener("focus", show);
+          hit.addEventListener("pointerleave", tip.hide);
+          hit.addEventListener("blur", tip.hide);
+          svg.append(hit);
+        });
+        box.append(svg);
+        return box;
+      }
+
+      /** A line over time ({ at, v }) with a crosshair that snaps to the nearest point. */
+      function line(points, label, color = "var(--s1)", height = 170) {
+        const box = h("div", { class: "chart" });
+        if (!points.length) return h("p", { class: "empty" }, "No readings yet: the server records who's online once a minute.");
+        const width = Math.max(280, chartWidth);
+        const pad = { l: 34, r: 34, t: 10, b: 22 };
+        const t0 = points[0].at;
+        const t1 = Math.max(points.at(-1).at, t0 + 1);
+        const max = niceMax(Math.max(...points.map((p) => p.v), 1));
+        const x = (t) => pad.l + ((width - pad.l - pad.r) * (t - t0)) / (t1 - t0);
+        const y = (v) => pad.t + (height - pad.t - pad.b) * (1 - v / max);
+        const svg = s("svg", { viewBox: `0 0 ${width} ${height}`, height, role: "img", "aria-label": label });
+        for (const t of [0, max / 2, max]) {
+          svg.append(s("line", { x1: pad.l, x2: width - pad.r, y1: y(t), y2: y(t), stroke: t ? "var(--grid)" : "var(--axis)", "stroke-width": 1 }));
+          svg.append(s("text", { x: pad.l - 6, y: y(t) + 4, "text-anchor": "end", fill: "var(--muted)", "font-size": 11 }, fmt(t)));
+        }
+        const path = points.map((p, i) => `${i ? "L" : "M"}${x(p.at)},${y(p.v)}`).join("");
+        svg.append(s("path", { d: `${path}L${x(points.at(-1).at)},${y(0)}L${x(t0)},${y(0)}Z`, fill: color, "fill-opacity": 0.1 }));
+        svg.append(s("path", { d: path, fill: "none", stroke: color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+        const last = points.at(-1);
+        svg.append(s("circle", { cx: x(last.at), cy: y(last.v), r: 4, fill: color, stroke: "var(--surface)", "stroke-width": 2 }));
+        svg.append(s("text", { x: x(last.at) + 8, y: y(last.v) + 4, fill: "var(--ink)", "font-size": 12, "font-weight": 600 }, fmt(last.v)));
+        for (const t of [t0, (t0 + t1) / 2, t1]) svg.append(s("text", { x: x(t), y: height - 6, "text-anchor": "middle", fill: "var(--muted)", "font-size": 11 }, timeLabel(t)));
+        const cross = s("line", { y1: pad.t, y2: height - pad.b, stroke: "var(--ink-2)", "stroke-width": 1, visibility: "hidden" });
+        const dot = s("circle", { r: 4, fill: color, stroke: "var(--surface)", "stroke-width": 2, visibility: "hidden" });
+        svg.append(cross, dot);
+        const tip = tooltip(box);
+        const hit = s("rect", { x: pad.l, y: pad.t, width: width - pad.l - pad.r, height: height - pad.t - pad.b, fill: "transparent" });
+        hit.addEventListener("pointermove", (e) => {
+          const r = svg.getBoundingClientRect();
+          const t = t0 + ((((e.clientX - r.left) / r.width) * width - pad.l) / (width - pad.l - pad.r)) * (t1 - t0);
+          const p = points.reduce((a, b) => (Math.abs(b.at - t) < Math.abs(a.at - t) ? b : a));
+          for (const el of [cross, dot]) el.setAttribute("visibility", "visible");
+          cross.setAttribute("x1", x(p.at));
+          cross.setAttribute("x2", x(p.at));
+          dot.setAttribute("cx", x(p.at));
+          dot.setAttribute("cy", y(p.v));
+          tip.show((x(p.at) / width) * r.width, (y(p.v) / height) * r.height, timeLabel(p.at), [[fmt(p.v), label, color]]);
+        });
+        hit.addEventListener("pointerleave", () => {
+          for (const el of [cross, dot]) el.setAttribute("visibility", "hidden");
+          tip.hide();
+        });
+        svg.append(hit);
+        box.append(svg);
+        return box;
+      }
+
+      /** A tiny trend for a stat tile: the days in the range, the last one marked. */
+      function spark(values) {
+        if (values.length < 2) return null;
+        const w = 150;
+        const hgt = 30;
+        const max = Math.max(...values, 1);
+        const x = (i) => 2 + ((w - 4) * i) / (values.length - 1);
+        const y = (v) => hgt - 3 - ((hgt - 6) * v) / max;
+        const d = values.map((v, i) => `${i ? "L" : "M"}${x(i)},${y(v)}`).join("");
+        return s(
+          "svg",
+          { width: w, height: hgt, viewBox: `0 0 ${w} ${hgt}`, "aria-hidden": "true" },
+          s("path", { d, fill: "none", stroke: "var(--muted)", "stroke-width": 1.5, "stroke-linejoin": "round" }),
+          s("circle", { cx: x(values.length - 1), cy: y(values.at(-1)), r: 3, fill: "var(--s1)" }),
+        );
+      }
+
+      /** Horizontal bars for a breakdown ([{ key, n }]): name, bar, count and share. */
+      function barList(items, { names = {}, total = null, color = "var(--s1)", empty = "Nothing yet." } = {}) {
+        if (!items.length) return h("p", { class: "empty" }, empty);
+        const max = Math.max(...items.map((i) => i.n), 1);
+        const sum = total ?? items.reduce((a, i) => a + i.n, 0);
+        return h(
+          "div",
+          { class: "bars" },
+          items.map((i) =>
+            h(
+              "div",
+              { class: "bar", title: `${names[i.key] ?? i.key}: ${i.n}` },
+              h("span", { class: "name" }, names[i.key] ?? i.key),
+              h("span", { class: "track" }, h("span", { class: "fill", style: `display:block;width:${(100 * i.n) / max}%;background:${color}${i.n ? "" : ";min-width:0"}` })),
+              h("span", { class: "num" }, fmt(i.n), " ", h("small", {}, pct(i.n, sum))),
+            ),
+          ),
+        );
+      }
+
+      function table(head, rows, empty = "Nothing yet.") {
+        if (!rows.length) return h("p", { class: "empty" }, empty);
+        const cell = (c, i) => (c instanceof Node ? h("td", {}, c) : h("td", { class: i === 0 && typeof c === "string" && c.length > 40 ? "text" : null }, c ?? "–"));
+        const thead = h("thead", {}, h("tr", {}, head.map((c) => h("th", {}, c))));
+        const tbody = h("tbody", {}, rows.map((r) => h("tr", {}, r.map(cell))));
+        return h("div", { class: "scroll" }, h("table", {}, thead, tbody));
+      }
+
+      const card = (title, sub, ...body) => h("section", { class: "card" }, h("h2", {}, title), sub ? h("p", { class: "sub" }, sub) : null, ...body);
+      const wide = (title, sub, ...body) => {
+        const c = card(title, sub, ...body);
+        c.classList.add("wide");
+        return c;
+      };
+      const facts = (list) => h("div", { class: "facts" }, list.map(([v, k]) => h("div", { class: "fact" }, h("div", { class: "v" }, v), h("div", { class: "k" }, k))));
+      function tile(label, value, note, trend) {
+        return h("section", { class: "card tile" }, h("div", { class: "label" }, label), h("div", { class: "value" }, value), note ? h("div", { class: "note" }, note) : null, trend ? spark(trend) : null);
+      }
+
+      // ---------------------------------------------------------------- the page
+
+      let chartWidth = 600;
+
+      function header() {
+        const live = report?.live;
+        const now = live ? h("span", { class: `live${live.clients ? " on" : ""}`, title: "Connected to matchmaking right now (Find a fight, rooms)" }, h("i"), `${live.clients} in matchmaking now`) : h("span", { class: "live", title: "The matchmaker didn't answer" }, h("i"), "matchmaker: no reading");
+        return h(
+          "header",
+          {},
+          h("h1", {}, "Brawlmegle ", h("span", {}, "stats")),
+          now,
+          h(
+            "div",
+            { class: "controls" },
+            h(
+              "div",
+              { class: "seg", role: "group", "aria-label": "Range" },
+              RANGES.map(([d, name]) => h("button", { type: "button", "aria-pressed": String(prefs.days === d), onclick: () => setPrefs({ days: d }) }, name)),
+            ),
+            h("label", { class: "check" }, h("input", { type: "checkbox", checked: prefs.owners, onchange: (e) => setPrefs({ owners: e.target.checked }) }), "Include our own play"),
+            h("span", { class: "updated" }, report ? `Updated ${timeLabel(report.generatedAt)}` : ""),
+          ),
+        );
+      }
+
+      function render() {
+        if (!store.get(KEY)) return gate();
+        // The charts draw at their card's width (two cards a row from 760px; 16px page and card padding, 14px gaps).
+        const cols = window.innerWidth >= 760 ? 2 : 1;
+        chartWidth = (app.clientWidth - 32 - 14 * (cols - 1)) / cols - 34;
+        if (!report) {
+          app.replaceChildren(header(), h("p", { class: failure ? "error" : "empty" }, failure || "Loading…"));
+          return;
+        }
+        const r = report;
+        const days = r.days;
+        const d = (k) => r.daily.map((x) => x[k] ?? 0);
+        const sum = (k) => d(k).reduce((a, b) => a + b, 0);
+        const f = r.funnel;
+        const people = sum("human");
+        const forges = r.server ? r.server.forges.reduce((a, x) => a + x.ready, 0) : r.scans.ok;
+        const range = prefs.days === 1 ? "today" : `the last ${prefs.days} days`;
+        const others = d("matches").map((m, i) => Math.max(0, m - d("human")[i] - d("bot")[i]));
+
+        const kpis = h(
+          "div",
+          { class: "kpis" },
+          tile("Visitors", fmt(f.visited), `${fmt(sum("new"))} new`, d("visits")),
+          tile("Played a match", fmt(f.fight), `${pct(f.fight, f.visited)} of visitors`, d("players")),
+          tile("Matches finished", fmt(sum("matches")), `${fmt(people)} against people`, d("matches")),
+          tile("Fighters forged", fmt(forges), r.server ? `${fmt(r.server.fighters)} on the roster` : "", r.server ? r.server.forges.map((x) => x.ready) : d("forged")),
+          tile("Time on site", dur(r.sessions.median), `median visit · top quarter ${dur(r.sessions.p75)}+`),
+        );
+
+        const steps = [
+          ["Visited", f.visited],
+          ["Camera on", f.camOn],
+          ["Picked or scanned a fighter", f.fighter],
+          ["Started a fight", f.fight],
+          ["Finished a match", f.finished],
+          ["Played 2+ matches", f.again],
+          ["Fought a person", f.human],
+        ];
+        const funnel = wide(
+          "Where visitors drop off",
+          `Each step counts visits that got that far, ${range}. A visit is one browser tab ("Title" keeps the same visit).`,
+          barList(steps.map(([key, n]) => ({ key, n })), { total: f.visited }),
+        );
+
+        const visitsChart = card("Visitors per day", "Visits (browser tabs) that opened the game.", columns(days, [{ name: "Visitors", color: "var(--s1)", values: d("visits") }]));
+        const matchesChart = card(
+          "Matches per day",
+          "Best-of-three matches that reached the K.O. screen, by opponent.",
+          columns(days, [
+            { name: "People", color: "var(--s1)", values: d("human") },
+            { name: "Bots", color: "var(--s2)", values: d("bot") },
+            { name: "CPU & training", color: "var(--s3)", values: others },
+          ]),
+        );
+        const online = card(
+          "In matchmaking, last 24 hours",
+          `Connected to the matchmaker (Find a fight or a room), checked every minute; the highest in each 15 minutes. Peak ${range}: ${fmt(Math.max(0, ...r.daily.map((x) => x.peakOnline ?? 0)))}.`,
+          line(r.onlineDay.map((p) => ({ at: p.at, v: p.c })), "in matchmaking"),
+        );
+
+        const mm = r.matchmaking;
+        const matchmaking = card(
+          "Matchmaking",
+          "Find a fight: how often a person turns up, and how long it takes.",
+          facts([
+            [fmt(mm.visitsSearching), "visits that searched"],
+            [fmt(mm.searches), "searches"],
+            [fmt(mm.matched), "found a person"],
+            [fmt(mm.botIns), "a bot stepped in"],
+            [fmt(mm.overBot), "challenger took a bot's place"],
+            [dur(mm.medianWaitHuman), "median wait for a person"],
+          ]),
+        );
+
+        const opponents = card(
+          "Results by opponent",
+          "From the player's side. Left: walked away or the opponent left before the K.O.",
+          table(
+            ["Opponent", "Matches", "Won", "Lost", "Draw", "Left", "Median length"],
+            r.opponents.map((o) => [OPP[o.opp] ?? o.opp, fmt(o.matches), pct(o.win, o.matches), pct(o.loss, o.matches), fmt(o.draw), fmt(o.quit), dur(o.medianSecs)]),
+          ),
+        );
+        const bots = card(
+          "Bot balance",
+          "How players do against each bot. Around half is fair; much higher and the bot is a pushover.",
+          table(
+            ["Bot", "Matches", "Players won", "Bot won"],
+            r.bots.map((b) => [BOTS[b.bot] ?? b.bot, fmt(b.matches), pct(b.playerWins, b.matches), pct(b.botWins, b.matches)]),
+            "No bot matches yet.",
+          ),
+        );
+
+        const sc = r.scans;
+        const scans = card(
+          "Scans",
+          "From the scanning laptop: turned for the camera, photos sent, fighter forged.",
+          barList(
+            [
+              { key: "Started a scan", n: sc.started },
+              { key: "Photos sent", n: sc.sent },
+              { key: "Forged", n: sc.ok },
+              { key: "Forge failed", n: sc.failed },
+              { key: "Fought before it finished", n: sc.skipped },
+            ],
+            { total: sc.started, empty: "No scans yet." },
+          ),
+          facts([
+            [dur(sc.medianScanSecs), "median scan"],
+            [dur(sc.medianForgeSecs), "median forge"],
+            [dur(sc.p90ForgeSecs), "slowest 10% forge"],
+          ]),
+        );
+        const forgeDays = r.server
+          ? card(
+              "Forge server",
+              "Every forge the server ran (any laptop), by day: the GPU box's real numbers.",
+              table(
+                ["Day", "Forges", "Ready", "Failed", "Median time"],
+                r.server.forges.filter((x) => x.forges).reverse().map((x) => [dayLabel(x.day), fmt(x.forges), fmt(x.ready), fmt(x.failed), dur(x.medianSecs)]),
+                "No forges in this range.",
+              ),
+            )
+          : null;
+
+        const cam = r.camera;
+        const camera = card(
+          "Camera",
+          "The first-visit popup and the browser's permission box.",
+          facts([
+            [fmt(cam.asked), "saw the popup"],
+            [fmt(cam.onAsked), "turned it on from the popup"],
+            [fmt(cam.on - cam.onAsked), "already allowed"],
+            [fmt(cam.later), "said Not now"],
+            [fmt(cam.blocked), "browser blocking it"],
+          ]),
+          cam.fails.length ? h("div", { style: "margin-top:12px" }, h("p", { class: "sub" }, "Why the camera failed"), barList(cam.fails)) : null,
+        );
+
+        const chosen = card(
+          "What they played",
+          "Title screen choices (visits), and the fighter they went with.",
+          barList(r.modes, { names: { find_fight: "Find a fight", cpu: "VS CPU", training: "Training", room: "Create a room", join: "Join a room", watch: "Watch" }, total: f.visited, empty: "No choices yet." }),
+          h("div", { style: "margin-top:14px" }, barList(r.fighters, { names: { scan: "Scanned a new one", saved: "Their saved fighter", guest: "Someone else's (guest)", house: "A house fighter", masked: "Masked" }, empty: "" })),
+        );
+
+        const t = r.tech;
+        const tech = card(
+          "Laptops and links",
+          "Pose tracking speed and quality level at the end of each match (level 0 is full quality; higher means the laptop struggled). Round trip: matches against people.",
+          facts([
+            [t.medianPoseFps === null ? "–" : `${t.medianPoseFps} fps`, "median pose tracking"],
+            [t.lowPoseFps === null ? "–" : `${t.lowPoseFps} fps`, "slowest 10% of matches"],
+            [t.medianRtt === null ? "–" : `${t.medianRtt} ms`, "median round trip"],
+          ]),
+          h("div", { style: "margin-top:12px" }, barList(t.quality.map((q) => ({ ...q, key: `Quality level ${q.key}` })), { empty: "" })),
+          t.paths.length ? h("div", { style: "margin-top:12px" }, barList(t.paths, { names: { relay: "TURN relay", internet: "Direct, internet", lan: "Same network", cable: "Cable" } })) : null,
+        );
+        const devices = card(
+          "Browsers and devices",
+          "From each visit's first page load.",
+          barList(t.browsers),
+          h("div", { style: "margin-top:14px" }, barList(t.os)),
+          h("div", { style: "margin-top:14px" }, barList(t.devices, { names: { computer: "Computer", phone: "Phone", tablet: "Tablet" } })),
+        );
+        const sources = card(
+          "Where visitors came from",
+          "The site that linked here (LinkedIn, Discord...), and ?utm_source= or ?ref= on the link. Countries are in Google Analytics.",
+          barList(r.sources.referrers, { total: f.visited }),
+          r.sources.utm.length ? h("div", { style: "margin-top:14px" }, h("p", { class: "sub" }, "Tagged links"), barList(r.sources.utm, { total: f.visited })) : null,
+        );
+
+        const errors = wide(
+          "Errors",
+          "Script errors players hit (a few per visit at most), and why setting up a fighter failed.",
+          table(["Error", "Times", "Visits", "Last"], r.errors.map((e) => [e.error, fmt(e.n), fmt(e.visits), new Date(e.last).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })]), "No errors. Nice."),
+          r.setupFails.length ? h("div", { style: "margin-top:14px" }, h("p", { class: "sub" }, "Setting up a fighter failed"), barList(r.setupFails)) : null,
+        );
+
+        const sv = r.server;
+        const players = sv
+          ? card(
+              "Players and ratings",
+              "From the forge: the roster and the ranked ladder (all time).",
+              facts([
+                [fmt(sv.fighters), "fighters on the roster"],
+                [fmt(sv.usernames), "usernames"],
+                [fmt(sv.ratedPlayers), "rated players"],
+                [fmt(sv.rankedPlayers), "ranked (5+ fights)"],
+                [fmt(sv.ratedFights), "rated fights"],
+                [fmt(sv.highlights), "K.O. highlights"],
+              ]),
+              h("div", { style: "margin-top:12px" }, table(["Top ratings", "Rating", "Fights"], sv.topRatings.map((p) => [p.player, fmt(p.rating), fmt(p.rated)]), "Nobody rated yet.")),
+            )
+          : null;
+
+        const daily = wide(
+          "Day by day",
+          "The numbers behind the charts.",
+          h(
+            "details",
+            {},
+            h("summary", {}, "Show the table"),
+            table(
+              ["Day", "Visitors", "New", "Camera on", "Played", "Scans", "Forged", "Matches", "vs people", "vs bots", "Errors", "Median visit", "Peak online"],
+              r.daily.slice().reverse().map((x) => [dayLabel(x.day), fmt(x.visits), fmt(x.new), fmt(x.camOn), fmt(x.players), fmt(x.scans), fmt(x.forged), fmt(x.matches), fmt(x.human), fmt(x.bot), fmt(x.errors), dur(x.medianSecs), x.peakOnline === null ? "–" : fmt(x.peakOnline)]),
+            ),
+          ),
+        );
+
+        const ours = store.get(OWNER) === "1";
+        const footer = h(
+          "footer",
+          {},
+          h("span", {}, "No names or IP addresses are collected: each visit is a random id."),
+          h("a", { href: "https://analytics.google.com/", target: "_blank", rel: "noopener" }, "Google Analytics (countries, real-time)"),
+          h(
+            "label",
+            { class: "check" },
+            h("input", { type: "checkbox", checked: ours, onchange: (e) => (store.set(OWNER, e.target.checked ? "1" : null), render()) }),
+            "This browser is ours (its play isn't counted)",
+          ),
+          h("button", { type: "button", class: "btn", style: "padding:4px 10px;font-size:12px", onclick: () => (store.set(KEY, null), (report = null), render()) }, "Forget the key"),
+        );
+
+        app.replaceChildren(
+          header(),
+          kpis,
+          h("div", { class: "grid" }, funnel, visitsChart, matchesChart, online, matchmaking, opponents, bots, chosen, scans, forgeDays, camera, sources, tech, devices, players, errors, daily),
+          footer,
+        );
+      }
+
+      function gate(message = "") {
+        const input = h("input", { type: "password", placeholder: "Stats key", autocomplete: "current-password", "aria-label": "Stats key" });
+        app.replaceChildren(
+          h(
+            "div",
+            { class: "gate card" },
+            h("h1", {}, "Brawlmegle ", h("span", {}, "stats")),
+            h("p", { class: "sub", style: "margin-top:10px" }, "For the four of us. Paste the stats key (it's FORGE_STATS_KEY on the server); this browser keeps it and stops counting its own play."),
+            h(
+              "form",
+              {
+                onsubmit: (e) => {
+                  e.preventDefault();
+                  if (!input.value.trim()) return;
+                  store.set(KEY, input.value.trim());
+                  store.set(OWNER, "1");
+                  load();
+                },
+              },
+              input,
+              h("button", { class: "btn", type: "submit" }, "Open"),
+            ),
+            message ? h("p", { class: "error" }, message) : null,
+          ),
+        );
+        input.focus();
+      }
+
+      async function load() {
+        clearTimeout(timer);
+        const key = store.get(KEY);
+        if (!key) return gate();
+        app.classList.add("loading");
+        try {
+          const res = await fetch(`/api/stats?days=${prefs.days}&owners=${prefs.owners ? 1 : 0}`, { headers: { "x-stats-key": key }, cache: "no-store" });
+          if (res.status === 403) {
+            store.set(KEY, null);
+            report = null;
+            app.classList.remove("loading");
+            return gate("That key didn't work.");
+          }
+          if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `the server said ${res.status}`);
+          report = await res.json();
+          failure = "";
+        } catch (err) {
+          failure = `Couldn't load the stats: ${err.message}`;
+        }
+        app.classList.remove("loading");
+        render();
+        if (failure && report) app.prepend(h("p", { class: "error" }, failure));
+        // Fresh numbers every minute while the page is on screen.
+        timer = setTimeout(() => document.visibilityState === "visible" && load(), 60_000);
+      }
+
+      function setPrefs(change) {
+        prefs = { ...prefs, ...change };
+        store.set(PREFS, JSON.stringify(prefs));
+        load();
+      }
+
+      document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && store.get(KEY) && load());
+      let resizing = 0;
+      window.addEventListener("resize", () => {
+        clearTimeout(resizing);
+        resizing = setTimeout(() => report && render(), 150);
+      });
+      load();
+    </script>
+  </body>
+</html>
