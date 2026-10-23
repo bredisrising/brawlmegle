@@ -45,9 +45,9 @@ export function CameraPip() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const scanning = status === 'scanning';
-  if (source?.video && scanning) {
-    return <ScanOverlay source={source} id={localId} view={scan?.view ?? null} thumbs={scan?.thumbs ?? {}} detail={detail} onSkip={skipScan} />;
+  // Only a real scan: a saved or masked fighter is 'scanning' too while the camera starts, and gets the corner picture.
+  if (source?.video && status === 'scanning' && scan) {
+    return <ScanOverlay source={source} id={localId} view={scan.view} thumbs={scan.thumbs} detail={detail} onSkip={skipScan} />;
   }
   if (!source?.video) return null;
   const place = lobby

@@ -140,6 +140,7 @@ export class ClientSession {
       }
     }
     try {
+      useGameStore.setState({ scan: choice.kind === 'scan' ? { view: null, thumbs: {} } : null });
       updatePlayer(PLAYER, { name, status: 'scanning', statusDetail: this.source ? 'Joining the fight' : 'Starting camera' });
       if (!this.source) {
         const source = createLocalSource();
@@ -185,6 +186,7 @@ export class ClientSession {
         this.source?.stop();
         this.source = null;
       }
+      useGameStore.setState({ scan: null });
       updatePlayer(PLAYER, { status: 'waiting', statusDetail: 'Something went wrong — try again' });
       useGameStore.setState({ screen: 'avatar' });
     }

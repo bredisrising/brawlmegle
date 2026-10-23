@@ -1179,6 +1179,9 @@ export class Game {
     if (choice.kind === 'existing') preloadModel(choice.fighter.glbUrl, 'high')?.catch(() => {});
     if (this.practiceLevel && id === 'p1') this.prepareCpu(name);
     try {
+      // The scan screen is up from here only for a scan on this laptop (it used to flash up while a saved fighter loaded).
+      const local = id === localPlayerId(useGameStore.getState().role);
+      if (local) useGameStore.setState({ scan: choice.kind === 'scan' && !scan ? { view: null, thumbs: {} } : null });
       updatePlayer(id, { name: this.guest[id] ? `${name} (guest)` : name, status: 'scanning', statusDetail: 'Starting camera' });
       await source.start();
       this.lifetime.signal.throwIfAborted();
@@ -1276,6 +1279,7 @@ export class Game {
       if (PLAYER_IDS.every((p) => players[p].status === 'ready')) this.tryStart();
     } catch (err) {
       if (gen !== this.setupGen[id]) return; // superseded: the slot belongs to someone (or no one) else now
+      if (id === localPlayerId(useGameStore.getState().role)) useGameStore.setState({ scan: null });
       this.input.unassign(id);
       source.stop();
       if (this.lifetime.signal.aborted) return; // disposed mid-setup: nothing left to show

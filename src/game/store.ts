@@ -95,8 +95,11 @@ export interface GameState {
   callout: { text: string; key: number } | null;
   /** The last move the camera read for this laptop's player (shown on the camera picture-in-picture). */
   lastMove: { text: string; at: number } | null;
-  /** This laptop's player's body scan while it runs (ui/ScanOverlay.tsx): the guide's state and the photos so far. */
-  scan: { view: ScanView; thumbs: Partial<Record<Bucket, string>> } | null;
+  /**
+   * This laptop's player's body scan (ui/ScanOverlay.tsx): the guide's state (null while the camera starts) and the
+   * photos so far. Null when they're not scanning: a saved or masked fighter never shows the scan screen.
+   */
+  scan: { view: ScanView | null; thumbs: Partial<Record<Bucket, string>> } | null;
   /** "Find a fight" (matchmaking): this laptop plays strangers, and keeps its fighter from one to the next. */
   quick: boolean;
   /** Matchmaking: looking for an opponent right now. */
